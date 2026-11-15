@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { createStats, instrument, pollBackend, createOverlay } from "./overlay.js";
 import { runBench, runSoak, runZoomBench, setBenchSpeed } from "./bench.js";
 import { snapshot } from "./snapshot.js";
+import { runStress, stressRegion, stressScript } from "./stress.js";
 
 const PIER = [-118.4912, 34.0105];
 
@@ -92,6 +93,15 @@ export function startDevtools({ map, flags, renderer, bounds, rows, describe = (
     if (flags.zoomBench) {
       const result = await exclusive(() => runZoomBench(map, stats, PIER, `zoombench-${renderer}`));
       return invoke("bench_done", { result: { zoom_bench: true, renderer, ...result } });
+    }
+    if (flags.stress) {
+      const canvas = map.getCanvas();
+      const region = stressRegion(bounds, canvas.clientWidth, canvas.clientHeight);
+      const seed = flags.stressSeed ?? 1;
+      const script = stressScript(seed, flags.stress, region);
+      say(`stress: ${script.length} operations, seed ${seed} (${renderer})`);
+      const result = await exclusive(() => runStress(map, stats, script, { name: `stress-${renderer}`, pixelCheck: flags.pixelCheck }));
+      return invoke("bench_done", { result: { stress: true, renderer, seed, region, pixel_check: !!flags.pixelCheck, ...result } });
     }
     if (flags.snapshot) {
       const view = flags.snapshotZoom != null || flags.snapshotBearing != null

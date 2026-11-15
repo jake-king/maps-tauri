@@ -8,7 +8,8 @@ import { invoke } from "@tauri-apps/api/core";
 // (A frontend hang once left an empty log; this is how its cause became visible.)
 let reported = 0;
 const report = (kind, e) => {
-  if (reported++ < 20) invoke("report", { msg: `${kind}: ${e?.stack ?? e?.message ?? e}` }).catch(() => {});
+  window.__uncaughtErrors = (window.__uncaughtErrors ?? 0) + 1; // the stress benchmark counts these
+  if (reported++ < 20) invoke("report", { msg: `${kind}: ${e?.message ?? e}${e?.stack ? `\n${e.stack}` : ""}` }).catch(() => {});
 };
 window.addEventListener("error", (e) => report("uncaught error", e.error ?? e.message));
 window.addEventListener("unhandledrejection", (e) => report("unhandled rejection", e.reason));

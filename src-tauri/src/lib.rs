@@ -86,6 +86,9 @@ fn dev_flags() -> serde_json::Value {
         }),
         // MAPS_ZOOM_BENCH=1 (with MAPS_PIXEL_CHECK=1): the zoom out/in benchmark, worst frame saved
         "zoomBench": std::env::var("MAPS_ZOOM_BENCH").is_ok_and(|v| v == "1"),
+        // MAPS_STRESS=<ops>: the stress benchmark, that many seeded camera operations (MAPS_STRESS_SEED, default 1)
+        "stress": num("MAPS_STRESS"),
+        "stressSeed": num("MAPS_STRESS_SEED"),
         // MAPS_SEARCH=<query>: run the native search box end to end and snapshot the result
         "search": std::env::var("MAPS_SEARCH").ok(),
         // MAPS_EMPTY_STYLE=1: a background layer only, no source, tiles or fonts (a memory control)

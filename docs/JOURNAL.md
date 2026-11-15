@@ -795,3 +795,76 @@ At 30 degrees the native map matches MapLibre's geometry. Pan benchmark, render 
 2.4 ms cold and 2.9 warm against 3.2 and 3.0 before: the stencil costs nothing measurable. The zoom
 benchmark shows one or two frames with up to 3% background zooming out from 15 to 10; the
 pre-rotation build does the same, so it is older than this work, and left for the stress benchmark.
+
+## Test coverage, and seven bugs it found
+
+Coverage had never been measured. Rust has no coverage tool installed here, but the nightly toolchain
+ships `llvm-cov` and `llvm-profdata`, so `tools/coverage.sh` builds the tests with
+`-C instrument-coverage` into a separate target directory and reports per file, with the uncovered
+lines of any file named. Rust unit tests covered 49% of lines (the gate's decoder diff, whole-archive
+mesh and search parity cover more, outside that figure): the PMTiles reader 40%, the MVT decoder 46%,
+native search 0%.
+
+Two test-writer agents took the reader and decoder, and search and the coordinate parser, editing
+only test code, each test group proven by planting a defect and watching it fail. The HTTP source is
+tested end to end against a local listener with canned responses: a 200, a 206 one byte short or
+long, a body cut off by a closed connection. Search runs against a 12-row in-memory database with the
+production schema, with FTS5 operator characters chosen so a swallowed SQL error cannot pass as an
+empty result. 172 Rust tests now (was 37); those four files 99-100%; 72 planted defects, 69 caught,
+and the 3 survivors are equivalent (one of three read-only guards removed, the other two still hold)
+or unreachable code.
+
+Seven tests failed on the code as it was, and I fixed each:
+
+- A corrupt PMTiles directory whose tile-id deltas or chained offsets sum past 2^64 panicked in a
+  debug build and wrapped silently in release. Now an error.
+- An MVT bytes field declaring a huge length overflowed the bounds arithmetic instead of reporting
+  truncation.
+- Geometry deltas past the i32 range overflowed; they now wrap (a wrong point from corrupt input,
+  never a panic).
+- `search::open` put the database path into a `file:` URI unescaped, so a directory named with `#`,
+  `?` or `%` could not be opened. No real path has one today.
+
+## The stress benchmark
+
+`tools/stress.sh` (src/devtools/stress.js) plays a seeded script of 150 camera operations in about
+52 seconds: pans, zooms, turns and all three at once, most interrupted by the next before they end;
+bursts of wheel notches, drags and right-drags sent as real DOM events so the input handlers run;
+and teleports to views nothing has loaded. The script is a pure function of the seed (unit-tested:
+deterministic, every kind present, every value inside the region), so both renderers get exactly the
+same input. Each renderer runs twice: for timing, then with the pixel check, which reads every frame
+back and would distort the timing. The region is the archive inset by a quarter, with a lowest zoom
+at which the turned viewport stays inside the data, so the empty space beyond a cutout's edge is
+never counted as a missing tile. The first version rounded that zoom to the nearest hundredth, which
+can round down; a test caught it.
+
+The harness was wrong twice before its numbers meant anything:
+
+- MapLibre threw on every frame after the third operation. I made each operation catch its own
+  error, then recorded the first operation after which the camera stopped being finite: a pan that
+  passed `bearing: undefined`. MapLibre tests `'bearing' in options`, so an explicit undefined
+  becomes a NaN bearing. Now only the keys an operation sets are passed. (WebKit's error `stack`
+  carries no message, so the stdout reporter now prints both.)
+- MapLibre ignored most synthetic drags, so it was getting an easier test. Mouse moves sent to
+  `window` never reach a listener on `document`, which is where MapLibre listens; sent to the
+  document they bubble to both. The run now counts input events that did not move the map; it is
+  zero for the native renderer and one drag of 15 for MapLibre.
+
+A control: with stand-ins switched off, the pixel check sees background in 15 frames of a short
+run, worst 100% of the frame. So a zero is a measurement, not a blind spot.
+
+West LA extract, seed 1, the same 150 operations:
+
+| | native | MapLibre |
+|---|---|---|
+| frames with background showing | 0 of 2380 | 325 of 3066 (10.6%) |
+| worst frame | 0% | 100% (after a teleport) |
+| render p50 / p99 / worst | 2 / 7 / 14 ms | 5 / 13 / 23 ms |
+| missed refreshes | 0.8% | 0.7% |
+| memory start / peak / 10 s after | 435 / 619 / 558 MB | 494 / 1501 / 1106 MB |
+| errors, settled at the end | 0, yes, 0% background | 0, yes, 0% background |
+
+Native over the LAN, reading the planet: background in 44 frames (1.8%), render p99 8 ms, peak
+700 MB. The worst frame is all background, after a teleport to a view with no coarser tile in
+memory to stand in. The obvious fix is to keep the low zooms around the current region resident;
+not done in this pass.
