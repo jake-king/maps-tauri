@@ -1,0 +1,19 @@
+[package]
+name = "coords"
+version = "0.1.0"
+edition = "2021"
+description = "Coordinate parsing, name folding and FTS5 query building for the maps search box (a port of serve.py)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+wasm = ["dep:wasm-bindgen"]
+
+[dependencies]
+regex = { version = "1", default-features = false, features = ["std", "unicode-case"] }
+unicode-normalization = "0.1"
+wasm-bindgen = { version = "0.2", optional = true }
+
+[dev-dependencies]
+serde_json = "1"

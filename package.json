@@ -4,9 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "tauri": "tauri"
+    "wasm": "wasm-pack build crates/coords --release --target web --out-dir ../../src/wasm --no-pack -- --features wasm",
+    "dev": "npm run wasm && vite",
+    "build": "npm run wasm && vite build",
+    "tauri": "tauri",
+    "diff": "python3 tools/diff.py"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.4",

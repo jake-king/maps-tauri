@@ -1,1 +1,0 @@
-{"default":{"identifier":"default","description":"The main window may call core APIs and this app's own commands.","local":true,"windows":["main"],"permissions":["core:default"]}}

@@ -1,6 +1,7 @@
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { invoke } from "@tauri-apps/api/core";
+import initCoords, { parseCoords } from "./wasm/coords.js";
 
 const status = document.getElementById("status");
 const say = (msg) => {
@@ -33,4 +34,11 @@ map.once("idle", () => {
   const renderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
   const version = gl.getParameter(gl.VERSION);
   say(`map idle · ${version} · ${renderer}`);
+});
+
+// M2: the coordinate parser, compiled from crates/coords to WebAssembly. A startup self-check
+// proves the module loaded and answers like the Rust tests say it should.
+initCoords().then(() => {
+  const probe = (q) => `${JSON.stringify(q)} → [${Array.from(parseCoords(q)).join(", ")}]`;
+  invoke("report", { msg: `wasm ${probe("51.5074N 0.1278W")} · ${probe("-0.1278, 51.5074")} · ${probe("110 00")}` });
 });

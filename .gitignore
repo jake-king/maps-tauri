@@ -4,3 +4,4 @@
 /data
 /src/wasm
 /logs
+/src-tauri/gen/schemas
