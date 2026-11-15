@@ -128,12 +128,34 @@ export class LabelLayer {
     const k = `${font}|${text}`;
     let w = this.widths.get(k);
     if (w === undefined) {
-      this.ctx.font = font;
+      this.misses = (this.misses ?? 0) + 1;
+      // setting ctx.font makes the browser parse and resolve the font: only when it changes
+      if (this.measureFont !== font) {
+        this.ctx.font = font;
+        this.measureFont = font;
+      }
       w = this.ctx.measureText(text).width;
       if (this.widths.size > 20000) this.widths.clear();
       this.widths.set(k, w);
     }
     return w;
+  }
+
+  /**
+   * Measure a newly loaded tile's label texts now, when the tile arrives, rather than in the frame
+   * that first shows them: a burst of new measurements was the cause of the slow label frames.
+   * Fonts that depend on zoom are measured for the zoom levels around `zoom`.
+   */
+  prepare(labels, zoom) {
+    const before = this.misses ?? 0;
+    for (const l of labels) {
+      const st = STYLE[l.kind];
+      if (!st) continue;
+      const text = st.upper ? l.text.toUpperCase() : l.text;
+      for (const z of [Math.floor(zoom), Math.floor(zoom) + 1]) this.width(st.font(z), text);
+    }
+    this.misses = before; // measured here, not in a frame
+    this.measureFont = null; // drawing sets fonts too: do not trust the cached font across frames
   }
 
   /**
@@ -194,6 +216,8 @@ export class LabelLayer {
         }
       }
     }
+    this.frameMisses = this.misses ?? 0;
+    this.misses = 0;
     const kept = placeLabels(cands);
     this.placedLast = new Set(kept.map((c) => c.key));
     this.count = kept.length;
@@ -201,8 +225,18 @@ export class LabelLayer {
     ctx.textBaseline = "middle";
     ctx.lineJoin = "round";
     const sprite = this.sprites.img;
+    this.firstSpriteFrame = false;
+    if (sprite && !this.spriteDrawn && kept.some((c) => c.icon)) {
+      this.spriteDrawn = true;
+      this.firstSpriteFrame = true;
+    }
+    this.measureFont = null; // drawing changes the font
+    let font = null;
     for (const c of kept) {
-      ctx.font = c.font;
+      if (c.font !== font) {
+        ctx.font = c.font;
+        font = c.font;
+      }
       if (c.kind === KIND.Shield) {
         const i = c.icon;
         ctx.drawImage(sprite, i.x, i.y, i.width, i.height, c.x - c.iw / 2, c.y - c.ih / 2, c.iw, c.ih);

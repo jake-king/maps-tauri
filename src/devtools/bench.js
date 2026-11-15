@@ -50,6 +50,7 @@ async function pass(map, stats, path) {
         if (map.lastDrawn?.labelMs !== undefined) {
           rec.labelMs.push(map.lastDrawn.labelMs);
           rec.labels.push(map.lastDrawn.labels);
+          (rec.labelFrames ??= []).push({ ms: map.lastDrawn.labelMs, misses: map.lastDrawn.labelMisses, firstSprite: map.lastDrawn.firstSprite, labels: map.lastDrawn.labels });
         }
         if (v.missing) rec.missing += 1;
         if (v.gray > 0) rec.grayFrames += 1;
@@ -123,7 +124,8 @@ async function pass(map, stats, path) {
     // the native renderer: how long each tile was on screen before it could be drawn (0 = ready in time)
     visible_wait: rec.visible.length ? { ...summary(rec.visible), not_ready: rec.visible.filter((v) => v > 0).length } : null,
     mesh_cache: backend.mesh_cache ?? null,
-    label_draw: rec.labelMs.length ? { ...summary(rec.labelMs), labels_avg: r1(avg(rec.labels)) } : null,
+    label_draw: rec.labelMs.length ? { ...summary(rec.labelMs), labels_avg: r1(avg(rec.labels)),
+      slowest: [...(rec.labelFrames ?? [])].sort((a, b) => b.ms - a.ms).slice(0, 5).map((f) => ({ ...f, ms: r1(f.ms) })) } : null,
     tiles_loaded: rec.load.length,
     unique_tiles: rec.tiles.size,
     cache_max: map.style?.tileManagers?.protomaps?._outOfViewCache?.max ?? null,

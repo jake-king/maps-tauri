@@ -335,6 +335,7 @@ export class RustMap {
     t.buffers.push(mk(gl.ELEMENT_ARRAY_BUFFER, h.lineWide ? new Uint32Array(buf, h.lineIdx, h.lineI) : new Uint16Array(buf, h.lineIdx, h.lineI)));
     gl.bindVertexArray(null);
     t.labels = parseLabels(buf, h);
+    this.labelLayer.prepare(t.labels, this.cam.zoom); // text widths measured now, not in a frame
     t.fillCount = h.fillI;
     t.lineCount = h.lineI;
     t.fillType = h.fillWide ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
@@ -522,6 +523,8 @@ export class RustMap {
     this.labelLayer.draw(labelTiles, zoom, this.dpr, this.cam.w, this.cam.h);
     drawn.labels = this.labelLayer.count;
     drawn.labelMs = performance.now() - lt0;
+    drawn.labelMisses = this.labelLayer.frameMisses;
+    drawn.firstSprite = this.labelLayer.firstSpriteFrame;
     this.fire("render");
 
     if (this.anim) this.triggerRepaint();

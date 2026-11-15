@@ -1,0 +1,273 @@
+{
+ "blocks": [
+  {
+   "bytes": 26373996,
+   "label": "GPU buffers",
+   "note": "416"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU textures",
+   "note": "0"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU renderbuffers",
+   "note": "0"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU shader programs",
+   "note": "2 linked (driver memory, not counted)"
+  },
+  {
+   "bytes": 0,
+   "label": "tiles, CPU arrays",
+   "note": "0+0"
+  },
+  {
+   "bytes": 24998416,
+   "label": "mesh cache (GPU copies)",
+   "note": "98 tiles"
+  }
+ ],
+ "cache_tiles": 240,
+ "cold": {
+  "cache_max": null,
+  "dropped": 0,
+  "fetch": {
+   "avg": 14,
+   "n": 77,
+   "p95": 29,
+   "worst": 31
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 486,
+   "p95": 18,
+   "worst": 21
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 72,
+  "label_draw": {
+   "avg": 1.3,
+   "labels_avg": 24.8,
+   "n": 485,
+   "p95": 2,
+   "slowest": [
+    {
+     "firstSprite": false,
+     "labels": 1,
+     "misses": 27,
+     "ms": 8
+    },
+    {
+     "firstSprite": false,
+     "labels": 12,
+     "misses": 9,
+     "ms": 8
+    },
+    {
+     "firstSprite": false,
+     "labels": 23,
+     "misses": 4,
+     "ms": 7
+    },
+    {
+     "firstSprite": false,
+     "labels": 21,
+     "misses": 2,
+     "ms": 7
+    },
+    {
+     "firstSprite": false,
+     "labels": 19,
+     "misses": 4,
+     "ms": 7
+    }
+   ],
+   "worst": 8
+  },
+  "listener_errors": 0,
+  "load": {
+   "avg": 14.4,
+   "n": 77,
+   "p95": 29,
+   "worst": 31
+  },
+  "memory_mb": 417,
+  "mesh_cache": {
+   "bytes": 0,
+   "entries": 0,
+   "hits": 0,
+   "misses": 77
+  },
+  "missing_frames": 0,
+  "missing_pct": 0,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 485,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 2,
+   "n": 485,
+   "p95": 4,
+   "worst": 9
+  },
+  "rendered": 485,
+  "rendered_ratio": 1,
+  "serve": {
+   "avg": 8.8,
+   "bytes": 20322836,
+   "n": 77,
+   "worst": 21.9
+  },
+  "settle_ms": 0,
+  "stages": {
+   "copy": 0.05,
+   "decode": 1,
+   "inflight_avg": 2.06,
+   "inflight_max": 5,
+   "mesh": 6.03,
+   "n": 77,
+   "read": 1.31,
+   "serialize": 0.27,
+   "wait": 0.04
+  },
+  "tiles_loaded": 77,
+  "unique_tiles": 77,
+  "visible_wait": {
+   "avg": 0,
+   "n": 40,
+   "not_ready": 0,
+   "p95": 0,
+   "worst": 0
+  }
+ },
+ "cores": 8,
+ "pixel_check": false,
+ "pixel_selftest_outside_pct": null,
+ "prefetch_ring": 1,
+ "renderer": "rust",
+ "speed_px_s": 4000,
+ "warm": {
+  "cache_max": null,
+  "dropped": 0,
+  "fetch": {
+   "avg": 0,
+   "n": 0,
+   "p95": 0,
+   "worst": 0
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 486,
+   "p95": 18,
+   "worst": 20
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 64,
+  "label_draw": {
+   "avg": 0.9,
+   "labels_avg": 24.8,
+   "n": 484,
+   "p95": 2,
+   "slowest": [
+    {
+     "firstSprite": false,
+     "labels": 56,
+     "misses": 0,
+     "ms": 3
+    },
+    {
+     "firstSprite": false,
+     "labels": 22,
+     "misses": 0,
+     "ms": 2
+    },
+    {
+     "firstSprite": false,
+     "labels": 20,
+     "misses": 0,
+     "ms": 2
+    },
+    {
+     "firstSprite": false,
+     "labels": 49,
+     "misses": 0,
+     "ms": 2
+    },
+    {
+     "firstSprite": false,
+     "labels": 53,
+     "misses": 0,
+     "ms": 2
+    }
+   ],
+   "worst": 3
+  },
+  "listener_errors": 0,
+  "load": {
+   "avg": 0,
+   "n": 0,
+   "p95": 0,
+   "worst": 0
+  },
+  "memory_mb": 406,
+  "mesh_cache": {
+   "bytes": 0,
+   "entries": 0,
+   "hits": 0,
+   "misses": 0
+  },
+  "missing_frames": 0,
+  "missing_pct": 0,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 484,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 1.5,
+   "n": 484,
+   "p95": 2,
+   "worst": 4
+  },
+  "rendered": 484,
+  "rendered_ratio": 1,
+  "serve": {
+   "avg": 0,
+   "bytes": 0,
+   "n": 0,
+   "worst": 0
+  },
+  "settle_ms": 0,
+  "stages": null,
+  "tiles_loaded": 0,
+  "unique_tiles": 0,
+  "visible_wait": null
+ },
+ "zoom": 15,
+ "label": "hitch2 (release)"
+}
