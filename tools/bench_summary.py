@@ -21,7 +21,8 @@ def main():
         v = d[k]
         print(f"  {k}: missing {v['missing_pct']:5}% of frames | tiles loaded {v['load']['n']:3}"
               f" (avg {v['load']['avg']} ms) | unique {v['unique_tiles']} | cache max {v['cache_max']}"
-              f" | over budget {v['over_budget']} | mem {v['memory_mb']} MB")
+              f" | dropped frames {v['dropped']}/{v['frames']['n']} (+{v['jitter_only']} within timer rounding)"
+              f" | mem {v['memory_mb']} MB")
 
 
 if __name__ == "__main__":

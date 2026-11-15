@@ -39,12 +39,14 @@ export function bar(value, budget, width) {
 
 /**
  * The graph's columns: one per sample, height scaled so the top of the graph is `scale` ms
- * (two budgets by default, so the budget line sits halfway), clamped to the graph.
+ * (two budgets by default, so the budget line sits halfway), clamped to the graph. A column is
+ * `over` past `overAt`: for frame intervals pass 1.5 budgets, because WebKit rounds
+ * performance.now() to whole ms and a perfect 16.7 ms frame can measure 18.
  */
-export function columns(values, budget, height, scale = 2 * budget) {
+export function columns(values, budget, height, scale = 2 * budget, overAt = budget) {
   return values.map((v) => ({
     h: Math.min(height, Math.max(0, Math.round((v / scale) * height))),
-    over: v > budget,
+    over: v > overAt,
   }));
 }
 

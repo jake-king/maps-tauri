@@ -66,7 +66,10 @@ async function pass(map, stats, path) {
     moving_s: r1(movingMs / 1000),
     settle_ms: Math.round(settleMs),
     frames: summary(rec.frame),
-    over_budget: rec.frame.filter((f) => f > 1000 / 60 + 1).length,
+    // A missed vsync, not jitter: WebKit rounds performance.now() to whole ms, so a perfect
+    // 16.7 ms frame can measure 18. Over 1.5 budgets is a frame that really missed a refresh.
+    dropped: rec.frame.filter((f) => f > 1.5 * (1000 / 60)).length,
+    jitter_only: rec.frame.filter((f) => f > 1000 / 60 + 1 && f <= 1.5 * (1000 / 60)).length,
     render: summary(rec.render),
     rendered: rec.rendered,
     missing_frames: rec.missing,

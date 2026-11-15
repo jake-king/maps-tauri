@@ -1,4 +1,5 @@
 import * as maplibregl from "maplibre-gl";
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Protocol, PMTiles, FetchSource } from "pmtiles";
 import { layers, namedFlavor } from "@protomaps/basemaps";
@@ -21,6 +22,12 @@ const say = (msg) => {
 // http://tiles.localhost on Windows (WebView2 only routes http(s) schemes).
 const TILES = navigator.userAgent.includes("Windows") ? "http://tiles.localhost" : "tiles://localhost";
 const ARCHIVE = `${TILES}/basemap.pmtiles`;
+
+// MapLibre 6 derives its worker's URL from import.meta.url, but only for http(s) pages: served from
+// tauri://localhost in a release build it gets "" and starts no workers, so the map never loads.
+// It worked in dev only because Vite serves over http. Vite bundles the worker (with its shared
+// chunk) through this import, and setWorkerUrl points MapLibre at it in both modes.
+maplibregl.setWorkerUrl(maplibreWorkerUrl);
 
 const protocol = new Protocol();
 maplibregl.addProtocol("pmtiles", protocol.tile);

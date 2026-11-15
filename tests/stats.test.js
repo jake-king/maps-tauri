@@ -32,6 +32,9 @@ test("columns: budget at half height by default, clamped, over flagged", () => {
   ]);
   assert.equal(budgetY(16, 40), 20);
   assert.deepEqual(columns([16], 16, 40, 64), [{ h: 10, over: false }]);
+  // frame intervals: 18 ms is timer rounding, not a missed refresh; 25+ is
+  assert.deepEqual(columns([18, 25], 16.7, 40, 33.4, 1.5 * 16.7).map((c) => c.over), [false, false]);
+  assert.deepEqual(columns([26], 16.7, 40, 33.4, 1.5 * 16.7).map((c) => c.over), [true]);
 });
 
 test("frameBudget snaps the median interval to a display rate", () => {

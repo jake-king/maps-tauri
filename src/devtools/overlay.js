@@ -157,6 +157,8 @@ export function createOverlay(stats) {
     canvas.style.top = `${pos.y}px`;
   };
 
+  const frames0 = () => stats.frame.values();
+
   function draw() {
     if (!visible) return;
     const { w, h } = size();
@@ -195,9 +197,10 @@ export function createOverlay(stats) {
       text(extra, 292, "#a3be8c");
       y += ROW;
     };
+    const dropped = frames0().filter((f) => f > 1.5 * budget).length;
     text(`ms          avg  worst   vs ${budget.toFixed(1)} ms frame`, 8, "#81a1c1");
     y += ROW;
-    row("frame", stats.frame.summary(), `${stats.fps.toFixed(0)} fps`);
+    row("frame", stats.frame.summary(), `${stats.fps.toFixed(0)} fps, ${dropped} dropped`);
     const renderRendered = new Ring(FRAMES);
     for (const v of stats.render.values()) if (v > 0) renderRendered.push(v);
     row("render", stats.renderHooked ? renderRendered.summary() : { avg: 0, worst: 0 }, stats.renderHooked ? "" : "n/a");
@@ -228,7 +231,7 @@ export function createOverlay(stats) {
     const renders = stats.render.values();
     const miss = stats.missing.values();
     const cw = (w - 16) / FRAMES;
-    const cols = columns(frames, budget, GRAPH_H);
+    const cols = columns(frames, budget, GRAPH_H, 2 * budget, 1.5 * budget);
     const rcols = columns(renders, budget, GRAPH_H);
     cols.forEach((c, i) => {
       const x = 8 + i * cw;
