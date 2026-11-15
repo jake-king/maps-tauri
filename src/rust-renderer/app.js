@@ -18,7 +18,6 @@ await memprobeBlank(flags, "rust");
 
 // Everything awaited at startup is awaited BEFORE the map exists: an await between creating the map
 // and listening for its first "idle" let that event fire unheard (the WASM load below did, ~1 run in 5).
-await initCoords();
 const info = await invoke("archive_info");
 const bounds = { minLon: info.minLon, minLat: info.minLat, maxLon: info.maxLon, maxLat: info.maxLat };
 const TILES = navigator.userAgent.includes("Windows") ? "http://tiles.localhost" : "tiles://localhost";
@@ -38,7 +37,15 @@ const map = new RustMap({
   prefetchRing: flags.prefetchRing ?? 1,
   labels: !flags.noLabels,
 });
-const search = createSearchBox(map, { invoke, coordFeatures, container: document.getElementById("map") });
+// The coordinate parser (WASM) loads on the first search, not at startup: compiled, it holds about
+// 17 MB of the web process (measured 2026-11-15), which a map nobody searches should not pay for.
+let coordsReady = null;
+const coordFeaturesLazy = async (text, limit) => {
+  coordsReady ??= initCoords();
+  await coordsReady;
+  return coordFeatures(text, limit);
+};
+const search = createSearchBox(map, { invoke, coordFeatures: coordFeaturesLazy, container: document.getElementById("map") });
 // pixel check: a magenta background, so any uncovered screen area is countable
 if (flags.pixelCheck) map.setBackground([1, 0, 1, 1]);
 map.on("error", (e) => say(`map error: ${e.error?.message ?? e}`));

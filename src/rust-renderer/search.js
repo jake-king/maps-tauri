@@ -55,7 +55,7 @@ export function createSearchBox(map, { invoke, coordFeatures, container }) {
     let feats = [];
     if (text.trim().length >= 2) {
       try {
-        feats = JSON.parse(coordFeatures(text, 8));
+        feats = JSON.parse(await coordFeatures(text, 8)); // loads the parser on first use
         if (!feats.length) feats = await invoke("search", { query: text, limit: 8 });
       } catch (e) {
         feats = [];

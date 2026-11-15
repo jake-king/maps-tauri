@@ -868,3 +868,18 @@ Native over the LAN, reading the planet: background in 44 frames (1.8%), render 
 700 MB. The worst frame is all background, after a teleport to a view with no coarser tile in
 memory to stand in. The obvious fix is to keep the low zooms around the current region resident;
 not done in this pass.
+
+## Native memory at rest: where 296 MB became 375
+
+Idle memory had drifted from 296 MB (the first native renderer) to 375. I built eight commits in a
+scratch worktree and probed each twice on the reference cutout. The first native commit measures
+322 MB today, so 26 MB of the drift is the platform (the blank-window floor moved), not this code.
+The other 53 MB came in three steps: zoom prefetch +8 MB (app process), the native search box +22 MB
+(web process), curved street names +18 MB (both processes, about half each). Labels themselves cost
+nothing measurable at rest (374 MB with them off).
+
+Of the search box's 22 MB, 17 MB is the coordinate parser's WASM module, compiled at startup
+(skipping the load is the experiment that showed it). It now loads on the first search keystroke.
+Startup awaits nothing before the map exists, so the earlier idle race cannot come back. At rest:
+355 MB. Coordinate and place searches checked end to end afterwards. The curved-name 18 MB is not
+yet broken down.
