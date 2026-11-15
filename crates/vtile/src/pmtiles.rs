@@ -103,7 +103,10 @@ pub fn parse_directory(b: &[u8]) -> io::Result<Vec<Entry>> {
     ];
     let mut last = 0u64;
     for x in e.iter_mut() {
-        last += varint(b, &mut p)?;
+        // checked: a corrupt delta must be an error, not a debug-build panic or a wrapped id
+        last = last
+            .checked_add(varint(b, &mut p)?)
+            .ok_or_else(|| bad("directory tile id overflows"))?;
         x.tile_id = last;
     }
     for x in e.iter_mut() {
@@ -115,7 +118,10 @@ pub fn parse_directory(b: &[u8]) -> io::Result<Vec<Entry>> {
     for i in 0..n {
         let v = varint(b, &mut p)?;
         e[i].offset = if v == 0 && i > 0 {
-            e[i - 1].offset + u64::from(e[i - 1].length)
+            e[i - 1]
+                .offset
+                .checked_add(u64::from(e[i - 1].length))
+                .ok_or_else(|| bad("directory offset overflows"))?
         } else {
             v.saturating_sub(1)
         };
@@ -453,5 +459,596 @@ mod tests {
                 run_length: 1
             }
         );
+    }
+
+    // ---- builders: hand-made archives, so these tests need no data file ----
+
+    fn enc_varint(mut v: u64, out: &mut Vec<u8>) {
+        while v >= 0x80 {
+            out.push((v as u8) | 0x80);
+            v >>= 7;
+        }
+        out.push(v as u8);
+    }
+
+    /// A directory as the spec lays it out. `offsets` are written as given (the stored +1 form).
+    fn dir_raw(ids: &[u64], runs: &[u64], lens: &[u64], stored_offsets: &[u64]) -> Vec<u8> {
+        let mut b = Vec::new();
+        enc_varint(ids.len() as u64, &mut b);
+        let mut last = 0;
+        for &id in ids {
+            enc_varint(id - last, &mut b);
+            last = id;
+        }
+        for &v in runs.iter().chain(lens).chain(stored_offsets) {
+            enc_varint(v, &mut b);
+        }
+        b
+    }
+
+    /// A gzip-compressed directory with explicit offsets for every entry.
+    fn dir_gz(entries: &[Entry]) -> Vec<u8> {
+        let ids: Vec<u64> = entries.iter().map(|e| e.tile_id).collect();
+        let runs: Vec<u64> = entries.iter().map(|e| e.run_length.into()).collect();
+        let lens: Vec<u64> = entries.iter().map(|e| e.length.into()).collect();
+        let offs: Vec<u64> = entries.iter().map(|e| e.offset + 1).collect();
+        gz(&dir_raw(&ids, &runs, &lens, &offs))
+    }
+
+    fn gz(b: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(b).unwrap();
+        e.finish().unwrap()
+    }
+
+    fn header_bytes() -> Vec<u8> {
+        let mut h = vec![0u8; 127];
+        h[0..7].copy_from_slice(b"PMTiles");
+        h[7] = 3;
+        h
+    }
+
+    fn put_u64(h: &mut [u8], at: usize, v: u64) {
+        h[at..at + 8].copy_from_slice(&v.to_le_bytes());
+    }
+
+    fn ent(tile_id: u64, offset: u64, length: u32, run_length: u32) -> Entry {
+        Entry {
+            tile_id,
+            offset,
+            length,
+            run_length,
+        }
+    }
+
+    /// Tile contents of the hand-built archive, by tile id.
+    const T0: &[u8] = b"tile zero";
+    const T12: &[u8] = b"tiles one and two";
+    const T4: &[u8] = b"tile four (in the leaf)";
+    const T5: &[u8] = b"tile five (in the leaf)";
+
+    /// An archive: root = [id 0 run 1] [id 1 run 2] [id 3 run 0 -> leaf]; leaf = [id 4] [id 5].
+    /// Id 3 (z1 1/1) is covered by the leaf entry but absent from the leaf. Every section starts
+    /// at a different offset so a field read from the wrong place shows.
+    fn archive_bytes() -> Vec<u8> {
+        let tiles: Vec<Vec<u8>> = [T0, T12, T4, T5].iter().map(|t| gz(t)).collect();
+        let mut data = Vec::new();
+        let mut at = Vec::new();
+        for t in &tiles {
+            at.push((data.len() as u64, t.len() as u32));
+            data.extend_from_slice(t);
+        }
+        let leaf = dir_gz(&[ent(4, at[2].0, at[2].1, 1), ent(5, at[3].0, at[3].1, 1)]);
+        let root = dir_gz(&[
+            ent(0, at[0].0, at[0].1, 1),
+            ent(1, at[1].0, at[1].1, 2),
+            ent(3, 0, leaf.len() as u32, 0),
+        ]);
+        let root_off = 127u64;
+        let leaf_off = root_off + root.len() as u64 + 3; // 3 bytes of padding
+        let data_off = leaf_off + leaf.len() as u64 + 5;
+        let mut h = header_bytes();
+        put_u64(&mut h, 8, root_off);
+        put_u64(&mut h, 16, root.len() as u64);
+        put_u64(&mut h, 40, leaf_off);
+        put_u64(&mut h, 56, data_off);
+        h[97] = 2;
+        h[98] = 2;
+        h[99] = 1;
+        let mut out = h;
+        out.extend_from_slice(&root);
+        out.extend_from_slice(&[0xee; 3]);
+        out.extend_from_slice(&leaf);
+        out.extend_from_slice(&[0xee; 5]);
+        out.extend_from_slice(&data);
+        out
+    }
+
+    /// A scratch file under the workspace's logs/ (never /tmp), removed on drop.
+    struct Scratch(std::path::PathBuf);
+    impl Scratch {
+        fn new(name: &str, bytes: &[u8]) -> Self {
+            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../logs");
+            std::fs::create_dir_all(&dir).unwrap();
+            let p = dir.join(format!("vtile-test-{}-{name}.pmtiles", std::process::id()));
+            std::fs::write(&p, bytes).unwrap();
+            Scratch(p)
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn err_text<T>(r: io::Result<T>) -> String {
+        let e = r.err().expect("expected an error");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+        e.to_string()
+    }
+
+    // ---- parse_header ----
+
+    #[test]
+    fn header_fields_are_read_from_their_spec_offsets() {
+        let mut h = header_bytes();
+        for (i, b) in h.iter_mut().enumerate().skip(8) {
+            *b = i as u8; // every byte distinct, so a wrong offset reads a wrong value
+        }
+        put_u64(&mut h, 8, 0x1111);
+        put_u64(&mut h, 16, 0x2222);
+        put_u64(&mut h, 24, 0xdead); // metadata offset: not read
+        put_u64(&mut h, 40, 0x4444);
+        put_u64(&mut h, 48, 0xbeef); // leaf length: not read
+        put_u64(&mut h, 56, 0x5555);
+        h[102..106].copy_from_slice(&(-1_185_000_000i32).to_le_bytes());
+        h[106..110].copy_from_slice(&(339_000_000i32).to_le_bytes());
+        h[110..114].copy_from_slice(&(-1_180_000_000i32).to_le_bytes());
+        h[114..118].copy_from_slice(&(342_500_000i32).to_le_bytes());
+        let hd = parse_header(&h).unwrap();
+        assert_eq!(hd.root_offset, 0x1111);
+        assert_eq!(hd.root_length, 0x2222);
+        assert_eq!(hd.leaf_offset, 0x4444);
+        assert_eq!(hd.tile_data_offset, 0x5555);
+        assert_eq!(
+            (
+                hd.internal_compression,
+                hd.tile_compression,
+                hd.tile_type,
+                hd.min_zoom,
+                hd.max_zoom
+            ),
+            (97, 98, 99, 100, 101)
+        );
+        assert_eq!(hd.bounds, [-118.5, 33.9, -118.0, 34.25]);
+    }
+
+    #[test]
+    fn header_shorter_than_127_bytes_is_refused() {
+        let h = header_bytes();
+        assert_eq!(err_text(parse_header(&h[..126])), "not a PMTiles archive");
+        assert!(parse_header(&h).is_ok()); // exactly 127 is enough
+    }
+
+    #[test]
+    fn header_with_wrong_magic_is_refused() {
+        let mut h = header_bytes();
+        h[6] = b't'; // "PMTilet"
+        assert_eq!(err_text(parse_header(&h)), "not a PMTiles archive");
+    }
+
+    #[test]
+    fn header_of_spec_version_2_is_refused() {
+        let mut h = header_bytes();
+        h[7] = 2;
+        assert_eq!(
+            err_text(parse_header(&h)),
+            "only PMTiles spec version 3 is supported"
+        );
+    }
+
+    // ---- varint ----
+
+    #[test]
+    fn varint_of_ten_bytes_decodes_u64_max() {
+        let b = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01];
+        let mut p = 0;
+        assert_eq!(varint(&b, &mut p).unwrap(), u64::MAX);
+        assert_eq!(p, 10);
+    }
+
+    #[test]
+    fn varint_longer_than_ten_bytes_is_an_error() {
+        let b = [0x80u8; 11];
+        assert_eq!(err_text(varint(&b, &mut 0)), "varint longer than 10 bytes");
+    }
+
+    #[test]
+    fn varint_cut_short_is_an_error() {
+        assert_eq!(err_text(varint(&[0x96], &mut 0)), "truncated varint");
+        assert_eq!(err_text(varint(&[], &mut 0)), "truncated varint");
+    }
+
+    // ---- parse_directory ----
+
+    #[test]
+    fn directory_entry_count_larger_than_the_buffer_is_refused() {
+        assert_eq!(
+            err_text(parse_directory(&[4, 0, 0])),
+            "directory entry count exceeds its size"
+        );
+    }
+
+    #[test]
+    fn directory_entry_count_equal_to_the_buffer_passes_the_size_check() {
+        // 3 entries in 3 bytes cannot hold, but the count check is `>`: the failure is the read
+        assert_eq!(err_text(parse_directory(&[3, 0, 0])), "truncated varint");
+    }
+
+    #[test]
+    fn directory_cut_short_in_the_offsets_is_an_error() {
+        // 2 entries, the second offset missing
+        assert_eq!(
+            err_text(parse_directory(&[2, 1, 1, 1, 1, 9, 9, 1])),
+            "truncated varint"
+        );
+    }
+
+    #[test]
+    fn directory_ids_are_delta_coded_and_explicit_offsets_drop_the_plus_one() {
+        // ids 3, 3+4=7, 7+300=307; offsets stored 1 (=0, at i=0), 51 (=50), 1 (=0, explicit at i>0)
+        let d = dir_raw(&[3, 7, 307], &[1, 0, 5], &[10, 20, 30], &[1, 51, 1]);
+        assert_eq!(
+            parse_directory(&d).unwrap(),
+            vec![ent(3, 0, 10, 1), ent(7, 50, 20, 0), ent(307, 0, 30, 5)]
+        );
+    }
+
+    #[test]
+    fn directory_first_offset_stored_as_zero_is_offset_zero() {
+        // offset 0 on the FIRST entry has no previous entry to follow
+        let d = dir_raw(&[9], &[1], &[4], &[0]);
+        assert_eq!(parse_directory(&d).unwrap(), vec![ent(9, 0, 4, 1)]);
+    }
+
+    #[test]
+    fn empty_directory_is_no_entries() {
+        assert_eq!(parse_directory(&[0]).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn directory_tile_id_overflow_is_an_error_not_a_panic() {
+        // ids: delta u64::MAX, then delta 1
+        let mut d = vec![2];
+        enc_varint(u64::MAX, &mut d);
+        d.extend_from_slice(&[1, 1, 1, 1, 1, 1, 1]);
+        assert!(parse_directory(&d).is_err());
+    }
+
+    #[test]
+    fn directory_offset_chain_overflow_is_an_error_not_a_panic() {
+        // entry 0 offset u64::MAX-1 (stored u64::MAX), length 10; entry 1 offset 0 = follows it
+        let mut d = vec![2, 1, 1, 1, 1, 10, 10];
+        enc_varint(u64::MAX, &mut d);
+        d.push(0);
+        assert!(parse_directory(&d).is_err());
+    }
+
+    // ---- find ----
+
+    #[test]
+    fn find_on_an_empty_directory_is_none() {
+        assert_eq!(find(&[], 0), None);
+    }
+
+    #[test]
+    fn find_before_the_first_entry_is_none() {
+        assert_eq!(find(&[ent(5, 0, 1, 1)], 4), None);
+    }
+
+    #[test]
+    fn find_matches_an_exact_id() {
+        let d = [ent(2, 0, 1, 1), ent(5, 1, 1, 1), ent(9, 2, 1, 1)];
+        assert_eq!(find(&d, 5), Some(d[1]));
+    }
+
+    #[test]
+    fn find_covers_a_run_up_to_but_not_including_its_end() {
+        let d = [ent(10, 0, 1, 3), ent(20, 1, 1, 1)];
+        assert_eq!(find(&d, 11), Some(d[0]));
+        assert_eq!(find(&d, 12), Some(d[0])); // last id of the run 10..13
+        assert_eq!(find(&d, 13), None); // one past the run
+        assert_eq!(find(&d, 19), None);
+    }
+
+    #[test]
+    fn find_returns_a_leaf_entry_for_any_id_after_it() {
+        // run_length 0 = a leaf directory: it may hold any id up to the next entry
+        let d = [ent(10, 0, 1, 0), ent(1000, 1, 1, 1)];
+        assert_eq!(find(&d, 10), Some(d[0]));
+        assert_eq!(find(&d, 999), Some(d[0]));
+        assert_eq!(find(&d, 1000), Some(d[1]));
+        assert_eq!(find(&d, 1001), None);
+    }
+
+    // ---- Archive over a hand-built file ----
+
+    #[test]
+    fn archive_reads_tiles_from_root_runs_and_a_leaf() {
+        let f = Scratch::new("tiles", &archive_bytes());
+        let a = Archive::open(&f.0).unwrap();
+        assert_eq!(a.header.tile_type, 1);
+        assert_eq!(a.tile(0, 0, 0).unwrap().as_deref(), Some(T0)); // id 0
+        assert_eq!(a.tile(1, 0, 0).unwrap().as_deref(), Some(T12)); // id 1, run start
+        assert_eq!(a.tile(1, 0, 1).unwrap().as_deref(), Some(T12)); // id 2, inside the run
+        assert_eq!(a.tile(1, 1, 1).unwrap(), None); // id 3: under the leaf entry, not in the leaf
+        assert_eq!(a.tile(1, 1, 0).unwrap().as_deref(), Some(T4)); // id 4, in the leaf
+        assert_eq!(a.tile(2, 0, 0).unwrap().as_deref(), Some(T5)); // id 5, in the leaf
+        assert_eq!(a.tile(2, 0, 1).unwrap(), None); // id 6: past the leaf's last run
+    }
+
+    #[test]
+    fn archive_fetches_a_leaf_once_and_counts_every_round_trip() {
+        let f = Scratch::new("reads", &archive_bytes());
+        let a = Archive::open(&f.0).unwrap();
+        let reads = || a.reads.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(reads(), 0);
+        a.tile(1, 1, 0).unwrap(); // leaf + tile
+        assert_eq!(reads(), 2);
+        a.tile(2, 0, 0).unwrap(); // tile only: the leaf is cached
+        assert_eq!(reads(), 3);
+        a.tile(0, 0, 0).unwrap(); // root tile
+        assert_eq!(reads(), 4);
+        assert_eq!(a.leaves.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn archive_lists_every_addressed_tile_in_id_order() {
+        let f = Scratch::new("all", &archive_bytes());
+        let a = Archive::open(&f.0).unwrap();
+        assert_eq!(
+            a.all_tiles().unwrap(),
+            vec![(0, 0, 0), (1, 0, 0), (1, 0, 1), (1, 1, 0), (2, 0, 0)]
+        );
+    }
+
+    #[test]
+    fn archive_with_uncompressed_directories_is_refused() {
+        let mut b = archive_bytes();
+        b[97] = 1; // internal compression: none
+        let f = Scratch::new("nocomp", &b);
+        assert_eq!(
+            err_text(Archive::open(&f.0)),
+            "this reader handles gzip-compressed archives only"
+        );
+        let mut b = archive_bytes();
+        b[98] = 3; // tile compression: brotli
+        let f = Scratch::new("brotli", &b);
+        assert_eq!(
+            err_text(Archive::open(&f.0)),
+            "this reader handles gzip-compressed archives only"
+        );
+    }
+
+    #[test]
+    fn archive_with_leaves_nested_five_deep_stops_at_four() {
+        // root -> leaf1 -> leaf2 -> leaf3 -> leaf4 (empty); laid out leaf4 first, each leaf entry
+        // pointing at the one before it in the section
+        let mut section = dir_gz(&[]);
+        let mut prev = (0u64, section.len() as u32);
+        for _ in 0..3 {
+            let l = dir_gz(&[ent(0, prev.0, prev.1, 0)]);
+            prev = (section.len() as u64, l.len() as u32);
+            section.extend_from_slice(&l);
+        }
+        let root = dir_gz(&[ent(0, prev.0, prev.1, 0)]);
+        let mut h = header_bytes();
+        put_u64(&mut h, 8, 127);
+        put_u64(&mut h, 16, root.len() as u64);
+        put_u64(&mut h, 40, 127 + root.len() as u64);
+        h[97] = 2;
+        h[98] = 2;
+        let mut b = h;
+        b.extend_from_slice(&root);
+        b.extend_from_slice(&section);
+        let f = Scratch::new("deep", &b);
+        let a = Archive::open(&f.0).unwrap();
+        assert_eq!(err_text(a.tile(0, 0, 0)), "directory nesting deeper than 4");
+    }
+
+    #[test]
+    fn archive_file_shorter_than_its_header_is_an_io_error() {
+        let f = Scratch::new("short", b"PMTiles\x03");
+        let e = Archive::open(&f.0)
+            .err()
+            .expect("a 8-byte file must not open");
+        assert_eq!(e.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn real_basemap_every_addressed_tile_reads_and_decodes() {
+        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/basemap.pmtiles");
+        if !p.exists() {
+            eprintln!("skipped: no data/basemap.pmtiles (tools/fetch-data.sh)");
+            return;
+        }
+        let a = Archive::open(&p).unwrap();
+        assert_eq!((a.header.tile_type, a.header.tile_compression), (1, 2));
+        let all = a.all_tiles().unwrap();
+        assert!(!all.is_empty());
+        for &(z, x, y) in &all {
+            assert!(
+                (a.header.min_zoom..=a.header.max_zoom).contains(&z),
+                "{z}/{x}/{y}"
+            );
+            let t = a
+                .tile(z, x, y)
+                .unwrap()
+                .unwrap_or_else(|| panic!("{z}/{x}/{y} listed but absent"));
+            crate::mvt::decode(&t).unwrap_or_else(|e| panic!("{z}/{x}/{y}: {e}"));
+        }
+    }
+
+    // ---- the HTTP source, against a loopback server with canned responses ----
+
+    #[cfg(feature = "http")]
+    mod http {
+        use super::*;
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        /// The inclusive (start, end) of a `Range: bytes=a-b` header.
+        fn range_of(head: &str) -> Option<(usize, usize)> {
+            let line = head
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("range:"))?;
+            let (a, b) = line.split_once('=')?.1.trim().split_once('-')?;
+            Some((a.parse().ok()?, b.parse().ok()?))
+        }
+
+        /// Serve on 127.0.0.1:0 forever, one request per connection; `respond` gets the request
+        /// head and returns (status line, body). Returns the URL and the Range headers seen.
+        fn serve(
+            respond: impl Fn(&str) -> (&'static str, Vec<u8>) + Send + 'static,
+        ) -> (String, Arc<Mutex<Vec<String>>>) {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/a.pmtiles", l.local_addr().unwrap());
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let log = seen.clone();
+            std::thread::spawn(move || {
+                for s in l.incoming() {
+                    let Ok(mut s) = s else { continue };
+                    let mut r = BufReader::new(s.try_clone().unwrap());
+                    let mut head = String::new();
+                    loop {
+                        let mut line = String::new();
+                        if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                        head.push_str(&line);
+                    }
+                    if let Some((a, b)) = range_of(&head) {
+                        log.lock().unwrap().push(format!("bytes={a}-{b}"));
+                    }
+                    let (status, body) = respond(&head);
+                    let _ = write!(
+                        s,
+                        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = s.write_all(&body);
+                }
+            });
+            (url, seen)
+        }
+
+        /// Answers each Range request with exactly the asked-for slice of `bytes`.
+        fn ranged(bytes: Vec<u8>) -> impl Fn(&str) -> (&'static str, Vec<u8>) {
+            move |head| match range_of(head) {
+                Some((a, b)) => ("206 Partial Content", bytes[a..=b].to_vec()),
+                None => ("200 OK", bytes.clone()),
+            }
+        }
+
+        #[test]
+        fn http_archive_reads_tiles_with_inclusive_range_requests() {
+            let bytes = archive_bytes();
+            let root_len = u64le(&bytes, 16) as usize;
+            let (url, seen) = serve(ranged(bytes));
+            let a = Archive::open_url(&url).unwrap();
+            assert_eq!(a.tile(1, 0, 1).unwrap().as_deref(), Some(T12));
+            assert_eq!(a.tile(2, 0, 0).unwrap().as_deref(), Some(T5));
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen[0], "bytes=0-126"); // the header: 127 bytes, end inclusive
+            assert_eq!(seen[1], format!("bytes=127-{}", 127 + root_len - 1));
+            assert_eq!(seen.len(), 5); // header, root, tile, leaf, tile
+        }
+
+        #[test]
+        fn http_refuses_a_200_with_the_whole_body() {
+            let bytes = archive_bytes();
+            let (url, _) = serve(move |_| ("200 OK", bytes.clone()));
+            assert_eq!(
+                err_text(Archive::open_url(&url)),
+                "expected 206 Partial Content for bytes=0-126, got 200 OK"
+            );
+        }
+
+        #[test]
+        fn http_refuses_a_206_one_byte_short() {
+            let bytes = archive_bytes();
+            let (url, _) = serve(move |_| ("206 Partial Content", bytes[..126].to_vec()));
+            assert_eq!(
+                err_text(Archive::open_url(&url)),
+                "asked for 127 bytes at 0, got 126"
+            );
+        }
+
+        #[test]
+        fn http_refuses_a_206_one_byte_long() {
+            let bytes = archive_bytes();
+            let (url, _) = serve(move |_| ("206 Partial Content", bytes[..128].to_vec()));
+            assert_eq!(
+                err_text(Archive::open_url(&url)),
+                "asked for 127 bytes at 0, got 128"
+            );
+        }
+
+        #[test]
+        fn http_refuses_a_short_tile_after_a_good_open() {
+            // header and directories served right; the tile range one byte short
+            let bytes = archive_bytes();
+            let data_off = u64le(&bytes, 56) as usize;
+            let (url, _) = serve(move |head| {
+                let (a, b) = range_of(head).unwrap();
+                let end = if a >= data_off { b } else { b + 1 };
+                ("206 Partial Content", bytes[a..end].to_vec())
+            });
+            let a = Archive::open_url(&url).unwrap();
+            let e = err_text(a.tile(0, 0, 0));
+            assert!(
+                e.starts_with(&format!(
+                    "asked for {} bytes at {data_off}, got ",
+                    gz(T0).len()
+                )),
+                "{e}"
+            );
+        }
+
+        #[test]
+        fn http_body_cut_off_by_a_closed_connection_is_an_error() {
+            // Content-Length says 127, the server sends 50 and hangs up: fail, never a short Ok
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/a.pmtiles", l.local_addr().unwrap());
+            let bytes = archive_bytes();
+            std::thread::spawn(move || {
+                for s in l.incoming() {
+                    let Ok(mut s) = s else { continue };
+                    let mut r = BufReader::new(s.try_clone().unwrap());
+                    let mut line = String::new();
+                    while r.read_line(&mut line).unwrap_or(0) > 0 && line != "\r\n" {
+                        line.clear();
+                    }
+                    let _ = write!(
+                        s,
+                        "HTTP/1.1 206 Partial Content\r\nContent-Length: 127\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = s.write_all(&bytes[..50]);
+                }
+            });
+            assert!(Archive::open_url(&url).is_err());
+        }
+
+        #[test]
+        fn http_unreachable_server_is_an_error() {
+            // bind then drop: nothing listens on the port
+            let port = TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            assert!(Archive::open_url(&format!("http://127.0.0.1:{port}/a.pmtiles")).is_err());
+        }
     }
 }
