@@ -205,3 +205,26 @@ pub fn fts_query(raw: &str) -> Option<String> {
 fn is_python_word_alnum(c: char) -> bool {
     c.is_alphanumeric()
 }
+
+/// A parsed coordinate as the same feature shape a place returns. The labels state the reading,
+/// so two readings of one input are told apart in the result list.
+pub fn coord_feature(lat: f64, lon: f64) -> serde_json::Value {
+    let label = format!(
+        "{:.5}° {}, {:.5}° {}",
+        lat.abs(),
+        if lat >= 0.0 { 'N' } else { 'S' },
+        lon.abs(),
+        if lon >= 0.0 { 'E' } else { 'W' }
+    );
+    serde_json::json!({
+        "type": "Feature",
+        "id": format!("coord.{lat:.5},{lon:.5}"),
+        "text": format!("{lat:.5}, {lon:.5}"),
+        "place_name": label,
+        "place_type": ["coordinate"],
+        "center": [lon, lat],
+        "geometry": {"type": "Point", "coordinates": [lon, lat]},
+        "properties": {"source": "coordinate", "lat": lat, "lon": lon},
+    })
+}
+

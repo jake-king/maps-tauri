@@ -3,7 +3,9 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { Protocol, PMTiles } from "pmtiles";
 import { layers, namedFlavor } from "@protomaps/basemaps";
 import { invoke } from "@tauri-apps/api/core";
-import initCoords, { parseCoords } from "./wasm/coords.js";
+import MaplibreGeocoder from "@maplibre/maplibre-gl-geocoder";
+import "@maplibre/maplibre-gl-geocoder/dist/maplibre-gl-geocoder.css";
+import initCoords, { parseCoords, coordFeatures } from "./wasm/coords.js";
 
 const status = document.getElementById("status");
 const say = (msg) => {
@@ -58,8 +60,45 @@ map.once("idle", () => {
       `${roads} road and ${places} place features decoded`);
 });
 
-// The coordinate parser, compiled from crates/coords to WebAssembly.
-initCoords().then(() => {
-  const probe = (q) => `${JSON.stringify(q)} → [${Array.from(parseCoords(q)).join(", ")}]`;
-  invoke("report", { msg: `wasm ${probe("51.5074N 0.1278W")} · ${probe("110 00")}` });
+// Search. A coordinate is answered in the frontend by the WASM build of crates/coords, with no
+// round trip; anything else goes to the backend's `search` command over the GeoNames index. Both
+// build their features with the same Rust coord_feature, so there is one definition of the answer.
+const wasmReady = initCoords();
+const geocoderApi = {
+  forwardGeocode: async (config) => {
+    const limit = config.limit ?? 8;
+    try {
+      await wasmReady;
+      const local = JSON.parse(coordFeatures(config.query, limit));
+      if (local.length) return { features: local };
+      return { features: await invoke("search", { query: config.query, limit }) };
+    } catch (e) {
+      // A dead gazetteer must not take the map down with it.
+      say(`search unavailable: ${e?.message ?? e} (the map still works)`);
+      return { features: [] };
+    }
+  },
+};
+map.addControl(new MaplibreGeocoder(geocoderApi, {
+  maplibregl,
+  placeholder: "Search places or type a coordinate",
+  showResultsWhileTyping: true,
+  minLength: 2,
+  limit: 8,
+  marker: true,
+  collapsed: false,
+}), "top-left");
+
+// Startup self-check through the same forwardGeocode the search box calls, timed.
+const probe = async (q) => {
+  const t0 = performance.now();
+  const { features } = await geocoderApi.forwardGeocode({ query: q, limit: 3 });
+  const ms = (performance.now() - t0).toFixed(1);
+  return `${JSON.stringify(q)} ${ms} ms → ${features.map((f) => f.place_name).join(" | ") || "(none)"}`;
+};
+wasmReady.then(async () => {
+  invoke("report", { msg: `wasm parseCoords("110 00") → [${Array.from(parseCoords("110 00"))}]` });
+  for (const q of ["santa mon", "51.5074N 0.1278W", "-0.1278, 51.5074", "110 00"]) {
+    invoke("report", { msg: `search ${await probe(q)}` });
+  }
 });
