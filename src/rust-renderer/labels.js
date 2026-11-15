@@ -55,6 +55,63 @@ class Sprites {
   }
 }
 
+/**
+ * Lay text along a path: `pts` in screen px, `advances` each character's width. The text is centred
+ * at the path's middle (by length); each character sits at its own distance along the path, turned
+ * to the direction there. Returns `{ glyphs: [{ x, y, angle }], straight }`, or null when the path
+ * is too short, when neighbouring characters would turn more than `maxAngle` (MapLibre's rule: text
+ * on a hairpin is unreadable), or when a character would stand upside down. `straight` is true when
+ * the whole text lies on one direction, so it can be drawn as one string (keeping its kerning).
+ */
+export function layoutOnPath(pts, advances, { maxAngle = Math.PI / 4, pad = 8, anchors = [0.5] } = {}) {
+  if (pts.length < 2) return null;
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  const total = cum[cum.length - 1];
+  const tw = advances.reduce((a, b) => a + b, 0);
+  if (total < tw + pad) return null;
+  let seg = 0;
+  const at = (s) => {
+    while (seg < pts.length - 2 && cum[seg + 1] < s) seg++;
+    const [a, b] = [pts[seg], pts[seg + 1]];
+    const len = cum[seg + 1] - cum[seg] || 1;
+    const t = (s - cum[seg]) / len;
+    return { x: a[0] + (b[0] - a[0]) * t, y: a[1] + (b[1] - a[1]) * t, angle: Math.atan2(b[1] - a[1], b[0] - a[0]) };
+  };
+  // try each anchor (a fraction of the path's length for the text's centre) until one reads well:
+  // the middle of a road may be a hairpin where a stretch further along is not (MapLibre likewise
+  // tries several anchors along a line)
+  for (const f of anchors) {
+    const start = Math.min(Math.max(f * total - tw / 2, pad / 2), total - tw - pad / 2);
+    const lay = layoutFrom(start);
+    if (lay) return lay;
+  }
+  return null;
+
+  function layoutFrom(start) {
+    seg = 0;
+    const glyphs = [];
+    let s = start;
+    let prev = null;
+    let min = Infinity, max = -Infinity;
+    for (const adv of advances) {
+      const g = at(s + adv / 2);
+      if (Math.abs(g.angle) > Math.PI / 2 + 0.35) return null; // would stand upside down
+      if (prev !== null) {
+        let d = Math.abs(g.angle - prev);
+        if (d > Math.PI) d = 2 * Math.PI - d;
+        if (d > maxAngle) return null;
+      }
+      prev = g.angle;
+      min = Math.min(min, g.angle);
+      max = Math.max(max, g.angle);
+      glyphs.push(g);
+      s += adv;
+    }
+    return { glyphs, straight: max - min < 0.03 };
+  }
+}
+
 /** The axis-aligned box of a w x h rectangle centred at (x, y) and turned by `angle`, padded. */
 export function rotatedBox(x, y, w, h, angle, pad = 2) {
   const c = Math.abs(Math.cos(angle));
@@ -82,7 +139,7 @@ export function placeLabels(cands, cell = 64) {
   const grid = new Map();
   const kept = [];
   const overlaps = (p, q) => p.x0 < q.x1 && q.x0 < p.x1 && p.y0 < q.y1 && q.y0 < p.y1;
-  const fits = (b) => {
+  const fitsOne = (b) => {
     const gx0 = Math.floor(b.x0 / cell), gx1 = Math.floor(b.x1 / cell);
     const gy0 = Math.floor(b.y0 / cell), gy1 = Math.floor(b.y1 / cell);
     for (let gy = gy0; gy <= gy1; gy++) {
@@ -92,18 +149,21 @@ export function placeLabels(cands, cell = 64) {
     }
     return true;
   };
+  // a label may claim several boxes (a curved name: one per character); all must fit
+  const boxesOf = (o) => o.boxes ?? [o.box];
   for (const c of order) {
-    const chosen = (c.options ?? [c]).find((o) => fits(o.box));
+    const chosen = (c.options ?? [c]).find((o) => boxesOf(o).every(fitsOne));
     if (!chosen) continue;
-    const b = chosen.box;
-    const gx0 = Math.floor(b.x0 / cell), gx1 = Math.floor(b.x1 / cell);
-    const gy0 = Math.floor(b.y0 / cell), gy1 = Math.floor(b.y1 / cell);
     kept.push(c.options ? { ...c, chosen } : c);
-    for (let gy = gy0; gy <= gy1; gy++) {
-      for (let gx = gx0; gx <= gx1; gx++) {
-        const k = `${gx},${gy}`;
-        if (!grid.has(k)) grid.set(k, []);
-        grid.get(k).push(b);
+    for (const b of boxesOf(chosen)) {
+      const gx0 = Math.floor(b.x0 / cell), gx1 = Math.floor(b.x1 / cell);
+      const gy0 = Math.floor(b.y0 / cell), gy1 = Math.floor(b.y1 / cell);
+      for (let gy = gy0; gy <= gy1; gy++) {
+        for (let gx = gx0; gx <= gx1; gx++) {
+          const k = `${gx},${gy}`;
+          if (!grid.has(k)) grid.set(k, []);
+          grid.get(k).push(b);
+        }
       }
     }
   }
@@ -152,7 +212,10 @@ export class LabelLayer {
       const st = STYLE[l.kind];
       if (!st) continue;
       const text = st.upper ? l.text.toUpperCase() : l.text;
-      for (const z of [Math.floor(zoom), Math.floor(zoom) + 1]) this.width(st.font(z), text);
+      for (const z of [Math.floor(zoom), Math.floor(zoom) + 1]) {
+        this.width(st.font(z), text);
+        if (l.path) for (const ch of text) this.width(st.font(z), ch); // a curved name is laid out by character
+      }
     }
     this.misses = before; // measured here, not in a frame
     this.measureFont = null; // drawing sets fonts too: do not trust the cached font across frames
@@ -187,8 +250,8 @@ export class LabelLayer {
         const font = st.font(zoom);
         const tw = this.width(font, text);
         const th = parseInt(font.match(/(\d+)px/)[1], 10) * 1.2;
-        // a street or stream name only where its straight run is long enough for the text
-        if (l.run && l.run * scale < tw + 8) continue;
+        // a straight-run label (no path) only where its run is long enough for the text
+        if (!l.path && l.run && l.run * scale < tw + 8) continue;
         const key = `${l.kind}|${text}|${tile.key}`;
         const onScreen = (b) => b.x0 >= 0 && b.y0 >= 0 && b.x1 <= w && b.y1 <= h; // whole labels only
         const base = { key, text, font, x, y, angle: l.angle, kind: l.kind, color: l.color,
@@ -210,6 +273,16 @@ export class LabelLayer {
             return { box, tx };
           }).filter((o) => onScreen(o.box));
           if (options.length) cands.push({ ...base, icon, iw, ih, options });
+        } else if (l.path) {
+          // along its path: one box per character, so a curve does not claim a whole rectangle
+          const pts = l.path.map(([px, py]) => [rect.x + px * scale, rect.y + py * scale]);
+          const chars = [...text];
+          const lay = layoutOnPath(pts, chars.map((ch) => this.width(font, ch)), { anchors: [0.5, 0.35, 0.65, 0.2, 0.8] });
+          if (!lay) continue;
+          const boxes = lay.straight
+            ? [rotatedBox(lay.glyphs.reduce((a, g) => a + g.x, 0) / lay.glyphs.length, lay.glyphs.reduce((a, g) => a + g.y, 0) / lay.glyphs.length, tw, th, lay.glyphs[0].angle)]
+            : lay.glyphs.map((g, i) => rotatedBox(g.x, g.y, this.width(font, chars[i]), th, g.angle, 1));
+          if (boxes.every(onScreen)) cands.push({ ...base, boxes, chars, lay });
         } else {
           const box = rotatedBox(x, y, tw, th, l.angle);
           if (onScreen(box)) cands.push({ ...base, box });
@@ -260,6 +333,30 @@ export class LabelLayer {
         continue;
       }
       const water = c.kind === KIND.Water;
+      if (c.lay && !c.lay.straight) {
+        // curved: character by character, each turned to the path
+        ctx.lineWidth = water ? 2 : 3;
+        ctx.strokeStyle = water ? WATER_HALO : COLORS[c.kind].halo;
+        ctx.fillStyle = water ? EXTRA[c.color] : COLORS[c.kind].fill;
+        for (const pass of ["stroke", "fill"]) {
+          c.lay.glyphs.forEach((g, i) => {
+            ctx.save();
+            ctx.translate(g.x, g.y);
+            ctx.rotate(g.angle);
+            if (pass === "stroke") ctx.strokeText(c.chars[i], 0, 0);
+            else ctx.fillText(c.chars[i], 0, 0);
+            ctx.restore();
+          });
+        }
+        continue;
+      }
+      if (c.lay) {
+        // straight along its path: one string at the middle of the laid-out characters
+        const n = c.lay.glyphs.length;
+        c.x = c.lay.glyphs.reduce((a, g) => a + g.x, 0) / n;
+        c.y = c.lay.glyphs.reduce((a, g) => a + g.y, 0) / n;
+        c.angle = c.lay.glyphs[0].angle;
+      }
       ctx.save();
       ctx.translate(c.x, c.y);
       if (c.angle) ctx.rotate(c.angle);

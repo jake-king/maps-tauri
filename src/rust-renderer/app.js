@@ -34,6 +34,9 @@ if (flags.memprobe === "blank") {
 }
 
 setBenchSpeed(flags.benchSpeed ?? 0);
+// Everything awaited at startup is awaited BEFORE the map exists: an await between creating the map
+// and listening for its first "idle" let that event fire unheard (the WASM load below did, ~1 run in 5).
+await initCoords();
 const info = await invoke("archive_info");
 const bounds = { minLon: info.minLon, minLat: info.minLat, maxLon: info.maxLon, maxLat: info.maxLat };
 const TILES = navigator.userAgent.includes("Windows") ? "http://tiles.localhost" : "tiles://localhost";
@@ -52,7 +55,6 @@ const map = new RustMap({
   labels: !flags.noLabels,
 });
 map.onVisibleWait = (ms) => stats.tap?.("visible", ms);
-await initCoords();
 const search = createSearchBox(map, { invoke, coordFeatures, container: document.getElementById("map") });
 // pixel check: a magenta background, so any uncovered screen area is countable
 if (flags.pixelCheck) map.setBackground([1, 0, 1, 1]);
@@ -89,6 +91,7 @@ setInterval(() => {
 
 map.on("error", (e) => say(`map error: ${e.error?.message ?? e}`));
 
+
 const bench = async () => {
   if (benching) return;
   benching = true;
@@ -109,7 +112,7 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-map.once("idle", async () => {
+map.whenIdle().then(async () => {
   say(`native renderer · ${map.cacheStats().loaded} tiles · z${map.getZoom().toFixed(1)}`);
   if (flags.search) {
     // MAPS_SEARCH=<query>: type it, take the first result, settle, snapshot the result
@@ -128,7 +131,8 @@ map.once("idle", async () => {
   }
   if (flags.snapshot) {
     // MAPS_SNAPSHOT_ZOOM picks the zoom; the center stays the pier
-    const view = flags.snapshotZoom != null ? { center: [-118.4912, 34.0105], zoom: flags.snapshotZoom } : undefined;
+    const center = flags.snapshotCenter ?? [-118.4912, 34.0105];
+    const view = flags.snapshotZoom != null ? { center, zoom: flags.snapshotZoom } : undefined;
     const path = await snapshot(map, flags.snapshot, view);
     return invoke("bench_done", { result: { snapshot: path, renderer: "rust" } });
   }

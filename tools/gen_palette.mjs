@@ -37,6 +37,7 @@ const withOpacity = (c, o) => [c[0], c[1], c[2], Math.round(c[3] * o)];
 // layer the style draws after the water layer (a pier must not be painted over by the ocean).
 const landuse = {};
 const aboveWater = new Set();
+const landuseRank = {}; // kind -> the style layer's position: overlapping landuse drawn in that order
 const waterIndex = ls.findIndex((l) => l.id === "water");
 for (const l of ls.filter((x) => x["source-layer"] === "landuse" && x.type === "fill")) {
   const f = l.filter;
@@ -45,6 +46,7 @@ for (const l of ls.filter((x) => x["source-layer"] === "landuse" && x.type === "
   else if (f[0] === "==" && f[1] === "kind") kinds = [f[2]];
   else if (f[0] === "any") for (const g of f.slice(1)) if (g[0] === "in" && g[1] === "kind") kinds.push(...g.slice(2));
   if (ls.indexOf(l) > waterIndex) for (const k of kinds) aboveWater.add(k);
+  for (const k of kinds) if (!(k in landuseRank)) landuseRank[k] = ls.indexOf(l);
   const fc = l.paint["fill-color"];
   if (Array.isArray(fc) && fc[0] === "case") {
     for (let i = 1; i + 1 < fc.length; i += 2) {
@@ -180,6 +182,14 @@ pub fn landuse(kind: &str) -> Option<u8> {
     match kind {
 ${Object.entries(landuseIndex).map(([k, i]) => `        ${JSON.stringify(k)} => Some(${i}),`).join("\n")}
         _ => None,
+    }
+}
+
+/// A landuse kind's draw order: the position of its style layer (parks before schools, ...).
+pub fn landuse_rank(kind: &str) -> u16 {
+    match kind {
+${Object.entries(landuseRank).map(([k, r]) => `        ${JSON.stringify(k)} => ${r},`).join("\n")}
+        _ => u16::MAX,
     }
 }
 

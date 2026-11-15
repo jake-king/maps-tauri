@@ -200,10 +200,19 @@ export class RustMap {
     this.idleFired = false;
     if (this.scheduled) return;
     this.scheduled = true;
+    this.scheduledAt = performance.now();
     requestAnimationFrame((now) => {
       this.scheduled = false;
       this._render(now);
     });
+  }
+
+  /** Resolves when the map is idle: at once if it already is, else at the next "idle". An "idle"
+   *  that fired before a listener was attached is gone (as MapLibre never replays "load"), and a
+   *  startup handler registered after an `await` once missed it about one run in five. */
+  whenIdle() {
+    const idle = this.idleFired && !this.scheduled && !this.anim && this.inflight === 0 && this.queue.length === 0;
+    return idle ? Promise.resolve() : new Promise((r) => this.once("idle", r));
   }
 
   // --- what the dev tools use ---

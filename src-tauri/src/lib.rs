@@ -80,6 +80,11 @@ fn dev_flags() -> serde_json::Value {
         // MAPS_SNAPSHOT=<name>: settle at a fixed view, save the frame as logs/snapshot-<name>.png, exit
         "snapshot": std::env::var("MAPS_SNAPSHOT").ok(),
         "snapshotZoom": std::env::var("MAPS_SNAPSHOT_ZOOM").ok().and_then(|v| v.parse::<f64>().ok()),
+        // MAPS_SNAPSHOT_CENTER=lng,lat
+        "snapshotCenter": std::env::var("MAPS_SNAPSHOT_CENTER").ok().and_then(|v| {
+            let mut it = v.split(',').map(|x| x.trim().parse::<f64>());
+            match (it.next(), it.next()) { (Some(Ok(a)), Some(Ok(b))) => Some(vec![a, b]), _ => None }
+        }),
         // MAPS_ZOOM_BENCH=1 (with MAPS_PIXEL_CHECK=1): the zoom out/in benchmark, worst frame saved
         "zoomBench": std::env::var("MAPS_ZOOM_BENCH").is_ok_and(|v| v == "1"),
         // MAPS_SEARCH=<query>: run the native search box end to end and snapshot the result

@@ -69,6 +69,45 @@ pub fn landuse(kind: &str) -> Option<u8> {
     }
 }
 
+/// A landuse kind's draw order: the position of its style layer (parks before schools, ...).
+pub fn landuse_rank(kind: &str) -> u16 {
+    match kind {
+        "national_park" => 3,
+        "park" => 3,
+        "cemetery" => 3,
+        "protected_area" => 3,
+        "nature_reserve" => 3,
+        "forest" => 3,
+        "golf_course" => 3,
+        "wood" => 3,
+        "scrub" => 3,
+        "grassland" => 3,
+        "grass" => 3,
+        "glacier" => 3,
+        "sand" => 3,
+        "military" => 3,
+        "naval_base" => 3,
+        "airfield" => 3,
+        "allotments" => 4,
+        "village_green" => 4,
+        "playground" => 4,
+        "hospital" => 5,
+        "industrial" => 6,
+        "school" => 7,
+        "university" => 7,
+        "college" => 7,
+        "beach" => 8,
+        "zoo" => 9,
+        "aerodrome" => 10,
+        "runway" => 13,
+        "taxiway" => 13,
+        "pedestrian" => 17,
+        "dam" => 17,
+        "pier" => 18,
+        _ => u16::MAX,
+    }
+}
+
 /// Landuse kinds the style draws above water (after the water layer), not below it.
 pub fn landuse_above_water(kind: &str) -> bool {
     matches!(kind, "pedestrian" | "dam" | "pier")

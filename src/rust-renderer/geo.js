@@ -117,7 +117,7 @@ export function interpolate(stops, base, z) {
 }
 
 /**
- * The mesh wire format's header (crates/vtile/src/mesh.rs, version 4): counts, index widths and the
+ * The mesh wire format's header (crates/vtile/src/mesh.rs, version 5): counts, index widths and the
  * byte offset of each block. Throws on a wrong magic or version, or a size that does not add up.
  */
 export function parseMeshHeader(buf) {
@@ -126,7 +126,7 @@ export function parseMeshHeader(buf) {
   const magic = String.fromCharCode(v.getUint8(0), v.getUint8(1), v.getUint8(2), v.getUint8(3));
   if (magic !== "MESH") throw new Error(`mesh: bad magic ${magic}`);
   const version = v.getUint32(4, true);
-  if (version !== 4) throw new Error(`mesh: version ${version}, expected 4`);
+  if (version !== 5) throw new Error(`mesh: version ${version}, expected 5`);
   const flags = v.getUint32(8, true);
   const [fillV, fillI, lineV, lineI, labelN, labelBytes] = [12, 16, 20, 24, 28, 32].map((o) => v.getUint32(o, true));
   const pad4 = (n) => (n + 3) & ~3;
@@ -144,8 +144,9 @@ export function parseMeshHeader(buf) {
 
 const utf8 = new TextDecoder();
 
-/** The label block: `[{ x, y, angle, run, kind, minZoom, icon, color, priority, text }]`, x/y/run in
- *  tile units; icon is a sprite index + 1 (0: none). */
+/** The label block: `[{ x, y, angle, run, kind, minZoom, icon, color, priority, text, path }]`, x/y/run
+ *  in tile units; icon is a sprite index + 1 (0: none); path, for a street or stream name, the line
+ *  the text follows ([[x, y], ...] in tile units), else null. */
 export function parseLabels(buf, h) {
   const v = new DataView(buf);
   const out = new Array(h.labelN);
@@ -163,8 +164,18 @@ export function parseLabels(buf, h) {
       color: v.getUint8(o + 11),
       priority: v.getInt32(o + 12, true),
       text: utf8.decode(new Uint8Array(buf, o + 17, len)),
+      path: null,
     };
-    o += 17 + len;
+    const np = v.getUint8(o + 17 + len);
+    if (np) {
+      const path = new Array(np);
+      for (let k = 0; k < np; k++) {
+        const q = o + 18 + len + 4 * k;
+        path[k] = [v.getInt16(q, true), v.getInt16(q + 2, true)];
+      }
+      out[i].path = path;
+    }
+    o += 18 + len + 4 * np;
   }
   return out;
 }

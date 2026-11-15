@@ -690,3 +690,40 @@ four planted bugs, one ("the pattern never repeats") made the dash loop run fore
 script hung with the bug still in the source file, and `pkill -f` on the test binary's name then
 killed the shell running it, because the pattern appeared in its own command line. The file was
 restored from the backup; mutation runs now carry a time limit, and a timeout counts as a catch.
+
+## Curved street names, and two bugs they exposed
+
+**Labels along their roads.** Mesh format v5 sends a street or stream name's path: the longest piece
+of the line inside the tile, simplified (Douglas-Peucker, at most 32 points), oriented to read left to
+right. The frontend lays the text out character by character along it (`layoutOnPath`, pure and
+tested): each character at its own distance along the path, turned to the direction there; refused
+where neighbouring characters would turn more than 45 degrees (MapLibre's rule) or stand upside
+down; tried at the middle of the path and then at 35, 65, 20 and 80% of its length, since the middle
+of a road may be a hairpin. A curved name claims one small box per character in collision. A nearly
+straight one is still drawn as one string, keeping its kerning. Snapshots in Pacific Palisades show
+West Sunset Boulevard, Las Lomas Avenue and Monument Street following their bends. Still missing:
+Temescal Canyon Road, too tight for five anchors where MapLibre searches more; and per-character
+drawing loses kerning on curves ("Whitfield" looks crowded).
+
+Also fixed on the way: landuse drawn in the style's layer order rather than the tile's feature order
+(a school under an overlapping park came out green).
+
+**Bug 1, an infinite loop in Rust.** A path with more than 32 points was re-simplified with a
+tolerance derived from its point count; a wiggly canyon road could leave the count unchanged, so the
+same tolerance came round again forever, in a tile-serving thread. The native app hung only where
+such a road was in view. Meshing all 772 West LA tiles offline reproduced it; a 40-point zigzag test
+hung first (exit 124 under a time limit) and passes after the fix: double the tolerance each pass,
+starting from the original line. The whole-archive mesh check should run on every mesher change; the
+small cutout had no canyon roads, which is why the earlier check passed.
+
+**Bug 2, a startup race I had met before.** Native runs hung at startup about one time in five, after
+exactly 21 tile requests, with an empty log. Steps that narrowed it: uncaught errors are now reported
+to stdout (the webview console is invisible to a terminal run) - none appeared; process CPU averages
+said the page was waiting, not spinning; a watchdog for withheld animation frames stayed silent; a
+heartbeat of the renderer's state showed the map idle at frame 5, `idle` fired, everything loaded.
+The startup handler had not been listening: the search box's `await initCoords()` sat between creating
+the map and registering for its first `idle`, and when tiles came back fast, `idle` fired during the
+await. This is the trap recorded from the homelab map viewer ("an inserted await re-orders what
+follows it; MapLibre never replays load"), reintroduced here. Fixed twice over: all startup awaits
+happen before the map exists, and `RustMap.whenIdle()` resolves at once when the map is already idle,
+so a late listener cannot miss it. 0 failures in 25 runs after the fix (about 1 in 5 before).

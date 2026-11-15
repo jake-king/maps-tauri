@@ -1,0 +1,273 @@
+{
+ "blocks": [
+  {
+   "bytes": 32983908,
+   "label": "GPU buffers",
+   "note": "416"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU textures",
+   "note": "0"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU renderbuffers",
+   "note": "0"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU shader programs",
+   "note": "2 linked (driver memory, not counted)"
+  },
+  {
+   "bytes": 0,
+   "label": "tiles, CPU arrays",
+   "note": "0+0"
+  },
+  {
+   "bytes": 33315232,
+   "label": "mesh cache (GPU copies)",
+   "note": "104 tiles"
+  }
+ ],
+ "cache_tiles": 240,
+ "cold": {
+  "cache_max": null,
+  "dropped": 0,
+  "fetch": {
+   "avg": 11.4,
+   "n": 77,
+   "p95": 26,
+   "worst": 34
+  },
+  "frames": {
+   "avg": 16.6,
+   "n": 485,
+   "p95": 18,
+   "worst": 20
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 67,
+  "label_draw": {
+   "avg": 2.6,
+   "labels_avg": 32.5,
+   "n": 484,
+   "p95": 5,
+   "slowest": [
+    {
+     "firstSprite": false,
+     "labels": 30,
+     "misses": 0,
+     "ms": 7
+    },
+    {
+     "firstSprite": false,
+     "labels": 46,
+     "misses": 0,
+     "ms": 7
+    },
+    {
+     "firstSprite": false,
+     "labels": 42,
+     "misses": 0,
+     "ms": 7
+    },
+    {
+     "firstSprite": false,
+     "labels": 23,
+     "misses": 0,
+     "ms": 6
+    },
+    {
+     "firstSprite": false,
+     "labels": 24,
+     "misses": 0,
+     "ms": 6
+    }
+   ],
+   "worst": 7
+  },
+  "listener_errors": 0,
+  "load": {
+   "avg": 12.3,
+   "n": 77,
+   "p95": 27,
+   "worst": 35
+  },
+  "memory_mb": 453,
+  "mesh_cache": {
+   "bytes": 0,
+   "entries": 0,
+   "hits": 0,
+   "misses": 77
+  },
+  "missing_frames": 0,
+  "missing_pct": 0,
+  "moving_s": 8,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 484,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 3.1,
+   "n": 484,
+   "p95": 5,
+   "worst": 9
+  },
+  "rendered": 484,
+  "rendered_ratio": 1,
+  "serve": {
+   "avg": 6.8,
+   "bytes": 23924828,
+   "n": 77,
+   "worst": 19.2
+  },
+  "settle_ms": 0,
+  "stages": {
+   "copy": 0.04,
+   "decode": 0.63,
+   "inflight_avg": 2.12,
+   "inflight_max": 5,
+   "mesh": 4.74,
+   "n": 77,
+   "read": 1.03,
+   "serialize": 0.22,
+   "wait": 0.03
+  },
+  "tiles_loaded": 77,
+  "unique_tiles": 77,
+  "visible_wait": {
+   "avg": 0,
+   "n": 40,
+   "not_ready": 0,
+   "p95": 0,
+   "worst": 0
+  }
+ },
+ "cores": 8,
+ "pixel_check": false,
+ "pixel_selftest_outside_pct": null,
+ "prefetch_ring": 1,
+ "renderer": "rust",
+ "speed_px_s": 4000,
+ "warm": {
+  "cache_max": null,
+  "dropped": 0,
+  "fetch": {
+   "avg": 0,
+   "n": 0,
+   "p95": 0,
+   "worst": 0
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 485,
+   "p95": 18,
+   "worst": 19
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 74,
+  "label_draw": {
+   "avg": 2.5,
+   "labels_avg": 32.4,
+   "n": 484,
+   "p95": 5,
+   "slowest": [
+    {
+     "firstSprite": false,
+     "labels": 24,
+     "misses": 0,
+     "ms": 8
+    },
+    {
+     "firstSprite": false,
+     "labels": 30,
+     "misses": 0,
+     "ms": 7
+    },
+    {
+     "firstSprite": false,
+     "labels": 47,
+     "misses": 0,
+     "ms": 7
+    },
+    {
+     "firstSprite": false,
+     "labels": 49,
+     "misses": 0,
+     "ms": 7
+    },
+    {
+     "firstSprite": false,
+     "labels": 37,
+     "misses": 0,
+     "ms": 6
+    }
+   ],
+   "worst": 8
+  },
+  "listener_errors": 0,
+  "load": {
+   "avg": 0,
+   "n": 0,
+   "p95": 0,
+   "worst": 0
+  },
+  "memory_mb": 440,
+  "mesh_cache": {
+   "bytes": 0,
+   "entries": 0,
+   "hits": 0,
+   "misses": 0
+  },
+  "missing_frames": 0,
+  "missing_pct": 0,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 484,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 3,
+   "n": 484,
+   "p95": 5,
+   "worst": 9
+  },
+  "rendered": 484,
+  "rendered_ratio": 1,
+  "serve": {
+   "avg": 0,
+   "bytes": 0,
+   "n": 0,
+   "worst": 0
+  },
+  "settle_ms": 0,
+  "stages": null,
+  "tiles_loaded": 0,
+  "unique_tiles": 0,
+  "visible_wait": null
+ },
+ "zoom": 15,
+ "label": "native-curved (release)"
+}

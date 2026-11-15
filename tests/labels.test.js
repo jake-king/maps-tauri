@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { placeLabels, rotatedBox } from "../src/rust-renderer/labels.js";
+import { placeLabels, rotatedBox, layoutOnPath } from "../src/rust-renderer/labels.js";
 
 const box = (x0, y0, x1, y1) => ({ x0, y0, x1, y1 });
 
@@ -47,6 +47,41 @@ test("a label with options takes the first that fits", () => {
   ]);
   assert.deepEqual(kept.map((c) => c.key), ["blocker", "poi"]);
   assert.equal(kept[1].chosen.side, "left");
+});
+
+test("a multi-box label is kept only if every one of its boxes fits", () => {
+  const kept = placeLabels([
+    { key: "blocker", rank: [0], box: box(100, 0, 110, 10) },
+    { key: "curve", rank: [1], boxes: [box(0, 0, 10, 10), box(50, 0, 60, 10), box(105, 0, 115, 10)] },
+    { key: "free", rank: [2], boxes: [box(0, 50, 10, 60), box(20, 50, 30, 60)] },
+  ]);
+  assert.deepEqual(kept.map((c) => c.key), ["blocker", "free"]);
+});
+
+test("layoutOnPath: centred, one glyph per character, along the path", () => {
+  const lay = layoutOnPath([[0, 0], [100, 0]], [10, 10, 10]);
+  assert.deepEqual(lay.glyphs.map((g) => g.x), [40, 50, 60]);
+  assert.ok(lay.glyphs.every((g) => g.y === 0 && g.angle === 0) && lay.straight);
+  // round a 30-degree bend: glyphs past the corner take the new direction; not straight
+  const bend = layoutOnPath([[0, 0], [50, 0], [50 + 50 * Math.cos(Math.PI / 6), 50 * Math.sin(Math.PI / 6)]], [10, 10, 10, 10, 10]);
+  assert.ok(bend && !bend.straight);
+  assert.equal(bend.glyphs[0].angle, 0);
+  assert.ok(Math.abs(bend.glyphs[4].angle - Math.PI / 6) < 1e-9);
+});
+
+test("layoutOnPath refuses: too short, a hairpin, upside down", () => {
+  assert.equal(layoutOnPath([[0, 0], [20, 0]], [10, 10]), null); // 20 < 20 + pad
+  assert.equal(layoutOnPath([[0, 0], [50, 0], [50, 50]], [10, 10, 10, 10, 10, 10, 10]), null); // a 90-degree turn
+  assert.equal(layoutOnPath([[100, 0], [0, 0]], [10, 10]), null); // running right to left
+  assert.ok(layoutOnPath([[0, 0], [50, 0], [50, 50]], [10, 10, 10, 10, 10, 10, 10], { maxAngle: Math.PI }) !== null);
+});
+
+test("layoutOnPath tries further anchors when the middle is a hairpin", () => {
+  // straight for 100, a hairpin at 100-110, straight again: the middle (55%) lands on the bend
+  const pts = [[0, 0], [100, 0], [105, 5], [100, 10], [0, 10]];
+  assert.equal(layoutOnPath(pts, [8, 8, 8], { anchors: [0.5] }), null);
+  const lay = layoutOnPath(pts, [8, 8, 8], { anchors: [0.5, 0.2] });
+  assert.ok(lay && lay.glyphs.every((g) => g.angle === 0) && lay.glyphs[0].x < 60);
 });
 
 test("a rotated box is the bounding box of the turned rectangle", () => {
