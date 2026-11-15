@@ -8,7 +8,7 @@
 // painter.context.gl, project/unproject, jumpTo/easeTo, areTilesLoaded), so F4, F6 and the pixel
 // check measure both renderers the same way.
 
-import { Camera, lngLatToWorld, worldToLngLat, visibleTiles, ringTiles, tileRect, ancestor, interpolate, parseMeshHeader, tileZoom } from "./geo.js";
+import { Camera, lngLatToWorld, worldToLngLat, visibleTiles, ringTiles, tileRect, ancestor, interpolate, parseMeshHeader, tileZoom, clampCamera } from "./geo.js";
 import palette from "./palette.json";
 
 const EXTENT = 4096;
@@ -394,6 +394,7 @@ export class RustMap {
         this.fire("moveend");
       }
     }
+    clampCamera(this.cam, 20); // never zoomed out past the whole world, never off its edge
     const zoom = this.cam.zoom;
     for (const l of palette.lines) {
       const w = zoom < l.minzoom ? 0 : interpolate(l.width.stops, l.width.base, zoom);
@@ -542,7 +543,7 @@ export class RustMap {
       const r = this.canvas.getBoundingClientRect();
       const px = e.clientX - r.left, py = e.clientY - r.top;
       const before = this.cam.screenToWorld(px, py);
-      this.cam.zoom = Math.max(this.minZ, Math.min(20, this.cam.zoom - e.deltaY * 0.002));
+      this.cam.zoom = Math.min(20, this.cam.zoom - e.deltaY * 0.002); // the floor is applied by clampCamera
       const after = this.cam.screenToWorld(px, py);
       this.cam.cx += before[0] - after[0];
       this.cam.cy += before[1] - after[1];

@@ -114,7 +114,7 @@ map.once("idle", async () => {
   }
   if (flags.snapshot) {
     // MAPS_SNAPSHOT_ZOOM picks the zoom; the center stays the pier
-    const view = flags.snapshotZoom ? { center: [-118.4912, 34.0105], zoom: flags.snapshotZoom } : undefined;
+    const view = flags.snapshotZoom != null ? { center: [-118.4912, 34.0105], zoom: flags.snapshotZoom } : undefined;
     const path = await snapshot(map, flags.snapshot, view);
     return invoke("bench_done", { result: { snapshot: path, renderer: "rust" } });
   }

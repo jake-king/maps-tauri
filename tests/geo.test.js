@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { lngLatToWorld, worldToLngLat, Camera, visibleTiles, ringTiles, tileRect, ancestor, interpolate, parseMeshHeader, tileZoom } from "../src/rust-renderer/geo.js";
+import { lngLatToWorld, worldToLngLat, Camera, visibleTiles, ringTiles, tileRect, ancestor, interpolate, parseMeshHeader, tileZoom, worldFitZoom, clampCamera } from "../src/rust-renderer/geo.js";
 
 const close = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} vs ${b}`);
 
@@ -66,6 +66,26 @@ test("a z14 tile is 512 px at zoom 14 and 1024 at zoom 15", () => {
   const r = tileRect(new Camera(0.5, 0.5, 14, 100, 100), 14, 0, 0);
   close(r.w, 512);
   close(tileRect(new Camera(0.5, 0.5, 15, 100, 100), 14, 0, 0).w, 1024);
+});
+
+test("zoom-out cap: the world fills the window and the view never leaves it", () => {
+  close(worldFitZoom(1024, 512), 1);
+  close(worldFitZoom(1200, 800), Math.log2(1200 / 512));
+  const c = clampCamera(new Camera(0.5, 0.5, -3, 1200, 800));
+  close(c.zoom, Math.log2(1200 / 512));
+  close(c.scale, 1200); // the world is exactly as wide as the window
+  // at that zoom the only allowed x center is the middle
+  close(c.cx, 0.5);
+  // dragged past the north-west corner at zoom 5: pulled back so the view's corner is the world's
+  const d = clampCamera(new Camera(0.0001, 0.0001, 5, 1200, 800));
+  const [x0, y0] = d.screenToWorld(0, 0);
+  close(x0, 0);
+  close(y0, 0);
+  // inside the world nothing moves
+  const e = clampCamera(new Camera(0.3, 0.4, 12, 1200, 800));
+  assert.deepEqual([e.cx, e.cy, e.zoom], [0.3, 0.4, 12]);
+  // and the cap from above
+  assert.equal(clampCamera(new Camera(0.3, 0.4, 30, 100, 100), 22).zoom, 22);
 });
 
 test("ancestors", () => {

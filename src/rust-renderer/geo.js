@@ -30,6 +30,22 @@ export class Camera {
   }
 }
 
+/** The lowest zoom at which the world (512 px at zoom 0) still fills a w x h viewport. */
+export const worldFitZoom = (w, h) => Math.max(0, Math.log2(Math.max(w, h) / TILE_PX));
+
+/**
+ * Keep a camera on the world: zoom no lower than worldFitZoom, and the center where no edge of the
+ * view passes the world's edge (no wrap-around). Returns the camera, adjusted in place.
+ */
+export function clampCamera(cam, maxZoom = 22) {
+  cam.zoom = Math.min(maxZoom, Math.max(worldFitZoom(cam.w, cam.h), cam.zoom));
+  const hw = cam.w / 2 / cam.scale;
+  const hh = cam.h / 2 / cam.scale;
+  cam.cx = Math.min(1 - hw, Math.max(hw, cam.cx));
+  cam.cy = Math.min(1 - hh, Math.max(hh, cam.cy));
+  return cam;
+}
+
 /** The zoom of the tiles a camera draws: floor(zoom), clamped to the archive's range. */
 export const tileZoom = (zoom, minZ, maxZ) => Math.max(minZ, Math.min(maxZ, Math.floor(zoom)));
 
