@@ -1,0 +1,130 @@
+{
+ "cache_zoom_levels": 20,
+ "cold": {
+  "cache_max": 240,
+  "dropped": 3,
+  "fetch": {
+   "avg": 3,
+   "n": 161,
+   "p95": 8,
+   "worst": 15
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 495,
+   "p95": 19,
+   "worst": 48
+  },
+  "gray_frames": 70,
+  "gray_pct": 14.1,
+  "jitter_only": 95,
+  "load": {
+   "avg": 35.9,
+   "n": 158,
+   "p95": 63,
+   "worst": 83
+  },
+  "memory_mb": 823,
+  "missing_frames": 162,
+  "missing_pct": 32.7,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 70,
+   "area_pct": {
+    "avg": 2.6,
+    "n": 495,
+    "p95": 14.7,
+    "worst": 34
+   },
+   "gray_frames": 151,
+   "gray_pct": 30.5,
+   "pixels_gray_tile_says_clean": 81,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 5.5,
+   "n": 495,
+   "p95": 9,
+   "worst": 17
+  },
+  "rendered": 495,
+  "serve": {
+   "avg": 0.1,
+   "bytes": 7064111,
+   "n": 158,
+   "worst": 0.3
+  },
+  "settle_ms": 133,
+  "tiles_loaded": 158,
+  "unique_tiles": 161
+ },
+ "cores": 8,
+ "labels": true,
+ "pixel_check": true,
+ "pixel_selftest_outside_pct": 100,
+ "prefetch_zoom_delta": 4,
+ "speed_px_s": 4000,
+ "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+ "warm": {
+  "cache_max": 240,
+  "dropped": 1,
+  "fetch": {
+   "avg": 1,
+   "n": 3,
+   "p95": 1,
+   "worst": 1
+  },
+  "frames": {
+   "avg": 16.6,
+   "n": 487,
+   "p95": 18,
+   "worst": 55
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 60,
+  "load": {
+   "avg": 9.3,
+   "n": 3,
+   "p95": 10,
+   "worst": 10
+  },
+  "memory_mb": 816,
+  "missing_frames": 0,
+  "missing_pct": 0,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 486,
+    "p95": 0,
+    "worst": 4
+   },
+   "gray_frames": 1,
+   "gray_pct": 0.2,
+   "pixels_gray_tile_says_clean": 1,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 6.5,
+   "n": 486,
+   "p95": 10,
+   "worst": 16
+  },
+  "rendered": 486,
+  "serve": {
+   "avg": 0.1,
+   "bytes": 19448,
+   "n": 3,
+   "worst": 0.1
+  },
+  "settle_ms": 0,
+  "tiles_loaded": 3,
+  "unique_tiles": 3
+ },
+ "warm_zoom": 0,
+ "workers": 3,
+ "zoom": 15,
+ "label": "pixelcheck (release)"
+}

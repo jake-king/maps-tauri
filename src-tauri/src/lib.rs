@@ -46,13 +46,22 @@ fn dev_stats(tiles: tauri::State<'_, Arc<devstats::TileTimes>>) -> serde_json::V
 
 /// Development switches from the environment, so a benchmark can compare settings without code
 /// edits. `MAPS_BENCH=1` runs the pan benchmark at startup; `MAPS_CACHE_ZOOMS=<n>` overrides
-/// MapLibre's maxTileCacheZoomLevels (the frontend's default when unset).
+/// MapLibre's maxTileCacheZoomLevels, `MAPS_WORKERS=<n>` its worker count, `MAPS_PREFETCH=<n>` its
+/// prefetchZoomDelta (the frontend's defaults when unset).
 #[tauri::command]
 fn dev_flags() -> serde_json::Value {
     let num = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u32>().ok());
     serde_json::json!({
         "bench": std::env::var("MAPS_BENCH").is_ok_and(|v| v == "1"),
         "cacheZoomLevels": num("MAPS_CACHE_ZOOMS"),
+        "workers": num("MAPS_WORKERS"),
+        "prefetch": num("MAPS_PREFETCH"),
+        "noLabels": std::env::var("MAPS_NO_LABELS").is_ok_and(|v| v == "1"),
+        "warmZoom": num("MAPS_WARM_ZOOM"),
+        "pixelCheck": std::env::var("MAPS_PIXEL_CHECK").is_ok_and(|v| v == "1"),
+        "fadeMs": num("MAPS_FADE_MS"),
+        // on unless MAPS_CACHED_PARENTS=0 (bench/2026-11-15-px-parents*.json)
+        "cachedParents": !std::env::var("MAPS_CACHED_PARENTS").is_ok_and(|v| v == "0"),
     })
 }
 
@@ -85,6 +94,11 @@ pub fn run() {
     let tile_times = Arc::new(devstats::TileTimes::default());
     let handler_times = tile_times.clone();
     let log_tiles = std::env::var("MAPS_LOG_TILES").is_ok_and(|v| v == "1");
+    // A control for the benchmark's gray-box measure: slow every tile response down on purpose.
+    // If gray frames do not climb as this grows, the measure is not measuring.
+    let tile_delay = std::time::Duration::from_millis(
+        std::env::var("MAPS_TILE_DELAY_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+    );
     tauri::Builder::default()
         .manage(gazetteer)
         .manage(tile_times)
@@ -94,6 +108,9 @@ pub fn run() {
             let data = data.clone();
             let times = handler_times.clone();
             tauri::async_runtime::spawn_blocking(move || {
+                if !tile_delay.is_zero() {
+                    std::thread::sleep(tile_delay);
+                }
                 let t0 = Instant::now();
                 let res = tiles::handle(&data, &request);
                 times.record(t0.elapsed(), res.body().len());

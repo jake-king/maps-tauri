@@ -2,6 +2,7 @@
 # Run the pan benchmark once and print a summary. Uses the Vite dev server on :1420 if one is
 # running, else starts one for the run and stops its whole process group afterwards.
 #   tools/bench.sh [label]          env such as MAPS_CACHE_ZOOMS=20 passes through to the app
+#   SKIP_BUILD=1                    reuse the last build (settings that are env vars need no rebuild)
 #   MODE=release tools/bench.sh x   the release build: optimized Rust, the frontend bundled by
 #                                   `vite build` and served from inside the app (no Vite)
 # The full JSON goes to bench/<date>-<label>.json.
@@ -11,7 +12,9 @@ label=${1:-run}
 out="bench/$(date +%F)-$label.json"
 log="logs/bench-$label.log"
 mode=${MODE:-debug}
-if [[ $mode == release ]]; then
+if [[ $mode == release && ${SKIP_BUILD:-0} == 1 ]]; then
+  app=./target/release/maps-tauri
+elif [[ $mode == release ]]; then
   systemd-run --user --scope -q -p MemoryMax=12G npx tauri build --no-bundle >logs/bench-build.log 2>&1 \
     || { tail -20 logs/bench-build.log >&2; exit 1; }
   app=./target/release/maps-tauri

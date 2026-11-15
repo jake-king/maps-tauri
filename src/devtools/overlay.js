@@ -8,6 +8,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { Ring, bar, columns, budgetY, frameBudget, clampPosition, formatBytes } from "./stats.js";
+import { measureCoverage } from "./coverage.js";
 
 const FRAMES = 120;
 const W = 360;
@@ -43,6 +44,7 @@ export function createStats() {
     frame: new Ring(FRAMES),        // rAF interval, ms
     render: new Ring(FRAMES),       // MapLibre render CPU per rendered frame, ms (0 when idle)
     missing: new Ring(FRAMES),      // 1 when a rendered frame still had tiles loading
+    gray: new Ring(FRAMES),         // needed tiles with NOTHING drawn over them, per rendered frame
     fetch: new Ring(FRAMES),        // tiles:// round trip as the webview sees it, ms
     load: new Ring(FRAMES),         // tile request -> decoded, ms
     serve: { avg: 0, worst: 0, requests: 0, bytes: 0 },
@@ -57,7 +59,28 @@ export function createStats() {
 }
 
 /** Wire the measurements into the map. Returns the per-frame sampler the overlay and bench use. */
-export function instrument(map, stats) {
+/** Fraction of the drawn frame that is pure magenta (#ff00ff), every 4th pixel each way. */
+function magentaFraction(gl, buf) {
+  const w = gl.drawingBufferWidth;
+  const h = gl.drawingBufferHeight;
+  if (buf.data.length !== w * h * 4) buf.data = new Uint8Array(w * h * 4);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf.data);
+  const d = buf.data;
+  let hit = 0;
+  let n = 0;
+  for (let y = 0; y < h; y += 4) {
+    for (let x = 0; x < w; x += 4) {
+      const i = (y * w + x) * 4;
+      n += 1;
+      if (d[i] === 255 && d[i + 1] === 0 && d[i + 2] === 255) hit += 1;
+    }
+  }
+  return n ? hit / n : 0;
+}
+
+export function instrument(map, stats, opts = {}) {
+  const pixbuf = { data: new Uint8Array(0) };
+  let framePix = 0;
   let renderMs = 0;
   let rendered = false;
   // MapLibre's _render is private; if a version renames it the row reads "n/a" instead of failing.
@@ -72,6 +95,18 @@ export function instrument(map, stats) {
     };
     stats.renderHooked = true;
   }
+  // Coverage is measured in MapLibre's own "render" event, at the end of _render: there the tile
+  // manager has been updated for the camera that was just drawn, so the measure is of what reached
+  // the screen. Measured from our requestAnimationFrame callback instead, it could run after the
+  // camera moved but before the tile manager caught up, and count gaps a parent would fill.
+  let frameCov = null;
+  map.on("render", () => {
+    // read in the render event, before the browser composites the frame, so the buffer is intact
+    if (opts.pixelCheck) framePix = Math.max(framePix, magentaFraction(map.painter.context.gl, pixbuf));
+    if (map.areTilesLoaded()) return;
+    const c = measureCoverage(map);
+    if (c && (!frameCov || c.uncovered > frameCov.uncovered)) frameCov = c;
+  });
   map.on("dataloading", (e) => {
     if (e.tile && e.sourceId === "protomaps") stats.tilesPending.set(e.tile.tileID.key, performance.now());
   });
@@ -93,11 +128,18 @@ export function instrument(map, stats) {
   return function sample(now) {
     const interval = now - last;
     const missing = rendered && !map.areTilesLoaded();
+    const cov = rendered ? frameCov : null;
+    frameCov = null;
+    const pixelGray = rendered ? framePix : 0;
+    framePix = 0;
+    const gray = cov ? cov.uncovered : 0;
+    const needed = cov ? cov.needed : 0;
+    stats.gray.push(gray);
     stats.frame.push(interval);
     last = now;
     stats.render.push(rendered ? renderMs : 0);
     stats.missing.push(missing ? 1 : 0);
-    stats.tap?.("frame", { interval, rendered, renderMs, missing });
+    stats.tap?.("frame", { interval, rendered, renderMs, missing, gray, needed, pixelGray });
     if (rendered) stats.renderedThisSecond += 1;
     renderMs = 0;
     rendered = false;
@@ -208,7 +250,8 @@ export function createOverlay(stats) {
     row("tile serve", stats.serve, `${stats.serve.requests}/s`);
     row("tile load", stats.load.summary(), `${stats.tilesPending.size} pending`);
     const missing = stats.missing.values().reduce((a, b) => a + b, 0);
-    text(`frames drawn with tiles missing: ${missing}/${FRAMES}`, 8, missing ? "#ebcb8b" : "#a3be8c");
+    const grayFrames = stats.gray.values().filter((g) => g > 0).length;
+    text(`tiles loading: ${missing}/${FRAMES} frames · gray: ${grayFrames}/${FRAMES}`, 8, grayFrames ? "#bf616a" : missing ? "#ebcb8b" : "#a3be8c");
     y += ROW;
     text(`memory (PSS)`, 8, "#81a1c1");
     y += ROW;
@@ -230,6 +273,7 @@ export function createOverlay(stats) {
     const frames = stats.frame.values();
     const renders = stats.render.values();
     const miss = stats.missing.values();
+    const grayv = stats.gray.values();
     const cw = (w - 16) / FRAMES;
     const cols = columns(frames, budget, GRAPH_H, 2 * budget, 1.5 * budget);
     const rcols = columns(renders, budget, GRAPH_H);
@@ -240,7 +284,7 @@ export function createOverlay(stats) {
       ctx.fillStyle = "#88c0d0";
       ctx.fillRect(x, y + GRAPH_H - rcols[i].h, Math.max(1, cw - 0.5), rcols[i].h);
       if (miss[i]) {
-        ctx.fillStyle = "#ebcb8b";
+        ctx.fillStyle = grayv[i] > 0 ? "#bf616a" : "#ebcb8b";
         ctx.fillRect(x, y + GRAPH_H + 2, Math.max(1, cw - 0.5), 4);
       }
     });

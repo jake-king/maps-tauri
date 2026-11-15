@@ -1,0 +1,100 @@
+{
+ "cache_zoom_levels": 20,
+ "cold": {
+  "cache_max": 240,
+  "dropped": 3,
+  "fetch": {
+   "avg": 3.1,
+   "n": 161,
+   "p95": 9,
+   "worst": 19
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 487,
+   "p95": 19,
+   "worst": 47
+  },
+  "gray_frames": 69,
+  "gray_pct": 14.2,
+  "jitter_only": 95,
+  "load": {
+   "avg": 33.3,
+   "n": 159,
+   "p95": 61,
+   "worst": 71
+  },
+  "memory_mb": 803,
+  "missing_frames": 161,
+  "missing_pct": 33.1,
+  "moving_s": 8.1,
+  "render": {
+   "avg": 4.8,
+   "n": 487,
+   "p95": 9,
+   "worst": 16
+  },
+  "rendered": 487,
+  "serve": {
+   "avg": 0.1,
+   "bytes": 7108961,
+   "n": 161,
+   "worst": 0.4
+  },
+  "settle_ms": 0,
+  "tiles_loaded": 159,
+  "unique_tiles": 161
+ },
+ "cores": 8,
+ "prefetch_zoom_delta": 6,
+ "speed_px_s": 4000,
+ "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+ "warm": {
+  "cache_max": 240,
+  "dropped": 0,
+  "fetch": {
+   "avg": 1,
+   "n": 2,
+   "p95": 1,
+   "worst": 1
+  },
+  "frames": {
+   "avg": 16.6,
+   "n": 487,
+   "p95": 18,
+   "worst": 24
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 66,
+  "load": {
+   "avg": 11.5,
+   "n": 2,
+   "p95": 12,
+   "worst": 12
+  },
+  "memory_mb": 809,
+  "missing_frames": 1,
+  "missing_pct": 0.2,
+  "moving_s": 8.1,
+  "render": {
+   "avg": 6.1,
+   "n": 487,
+   "p95": 10,
+   "worst": 13
+  },
+  "rendered": 487,
+  "serve": {
+   "avg": 0,
+   "bytes": 0,
+   "n": 0,
+   "worst": 0
+  },
+  "settle_ms": 0,
+  "tiles_loaded": 2,
+  "unique_tiles": 2
+ },
+ "workers": 3,
+ "zoom": 15,
+ "label": "prefetch6 (release)"
+}

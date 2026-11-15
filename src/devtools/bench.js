@@ -33,7 +33,9 @@ export function lawnmower(b, rows = ROWS, inset = 0.15) {
 }
 
 async function pass(map, stats, path) {
-  const rec = { frame: [], render: [], missing: 0, rendered: 0, fetch: [], load: [], tiles: new Set() };
+  const rec = { frame: [], render: [], missing: 0, rendered: 0, fetch: [], load: [], tiles: new Set(),
+                grayFrames: 0, grayTiles: 0, neededTiles: 0,
+                pix: { frames: 0, area: [], both: 0, tileOnly: 0, pixelOnly: 0 } };
   const onLoading = (e) => e.tile && e.sourceId === "protomaps" && rec.tiles.add(e.tile.tileID.key);
   map.on("dataloading", onLoading);
   stats.tap = (kind, v) => {
@@ -43,6 +45,15 @@ async function pass(map, stats, path) {
         rec.rendered += 1;
         rec.render.push(v.renderMs);
         if (v.missing) rec.missing += 1;
+        if (v.gray > 0) rec.grayFrames += 1;
+        rec.grayTiles += v.gray;
+        rec.neededTiles += v.needed;
+        const pixGray = v.pixelGray > 0.001; // more than 0.1% of the frame shows background
+        if (pixGray) rec.pix.frames += 1;
+        rec.pix.area.push(v.pixelGray * 100);
+        if (pixGray && v.gray > 0) rec.pix.both += 1;
+        else if (v.gray > 0) rec.pix.tileOnly += 1;
+        else if (pixGray) rec.pix.pixelOnly += 1;
       }
     } else rec[kind].push(v);
   };
@@ -74,6 +85,19 @@ async function pass(map, stats, path) {
     rendered: rec.rendered,
     missing_frames: rec.missing,
     missing_pct: r1((100 * rec.missing) / Math.max(1, rec.rendered)),
+    // the honest gray-box measure: frames where some needed tile had NOTHING drawn over it
+    gray_frames: rec.grayFrames,
+    gray_pct: r1((100 * rec.grayFrames) / Math.max(1, rec.rendered)),
+    // ground truth when MAPS_PIXEL_CHECK=1: frames with background visible, and agreement with
+    // the tile measure frame by frame
+    pixel: {
+      gray_frames: rec.pix.frames,
+      gray_pct: r1((100 * rec.pix.frames) / Math.max(1, rec.rendered)),
+      area_pct: summary(rec.pix.area),
+      agree_gray: rec.pix.both,
+      tile_says_gray_pixels_clean: rec.pix.tileOnly,
+      pixels_gray_tile_says_clean: rec.pix.pixelOnly,
+    },
     fetch: summary(rec.fetch),
     load: summary(rec.load),
     serve: { n: t.requests, avg: r1(t.requests ? t.total_ms / t.requests : 0), worst: r1(t.worst_ms), bytes: t.bytes },
@@ -84,8 +108,29 @@ async function pass(map, stats, path) {
   };
 }
 
+/**
+ * The pixel check's own control: with every layer but the background hidden, the frame must read
+ * as 100% background. Returns the magenta percentage measured, or 0 if the check is blind.
+ */
+async function pixelSelfTest(map, stats) {
+  let worst = 0;
+  stats.tap = (kind, v) => {
+    if (kind === "frame" && v.rendered) worst = Math.max(worst, v.pixelGray);
+  };
+  const hidden = map.getStyle().layers.filter((l) => l.type !== "background").map((l) => l.id);
+  for (const id of hidden) map.setLayoutProperty(id, "visibility", "none");
+  await once(map, "idle");
+  map.triggerRepaint();
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  for (const id of hidden) map.setLayoutProperty(id, "visibility", "visible");
+  await once(map, "idle");
+  stats.tap = null;
+  return r1(worst * 100);
+}
+
 /** Run cold then warm; returns both results. */
-export async function runBench(map, stats, bounds) {
+export async function runBench(map, stats, bounds, opts = {}) {
+  const outside_pct = opts.pixelCheck ? await pixelSelfTest(map, stats) : null;
   const path = lawnmower(bounds);
   map.jumpTo({ center: path[0], zoom: ZOOM });
   if (!map.areTilesLoaded()) await once(map, "idle");
@@ -93,5 +138,5 @@ export async function runBench(map, stats, bounds) {
   map.jumpTo({ center: path[0], zoom: ZOOM });
   if (!map.areTilesLoaded()) await once(map, "idle");
   const warm = await pass(map, stats, path);
-  return { speed_px_s: SPEED_PX_S, zoom: ZOOM, cold, warm };
+  return { speed_px_s: SPEED_PX_S, zoom: ZOOM, pixel_selftest_outside_pct: outside_pct, cold, warm };
 }
