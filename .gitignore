@@ -6,3 +6,4 @@
 /logs
 /src-tauri/gen/schemas
 /public/assets
+__pycache__/
