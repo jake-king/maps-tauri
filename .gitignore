@@ -5,3 +5,4 @@
 /src/wasm
 /logs
 /src-tauri/gen/schemas
+/public/assets

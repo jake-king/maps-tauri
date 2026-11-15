@@ -1,5 +1,7 @@
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { Protocol, PMTiles } from "pmtiles";
+import { layers, namedFlavor } from "@protomaps/basemaps";
 import { invoke } from "@tauri-apps/api/core";
 import initCoords, { parseCoords } from "./wasm/coords.js";
 
@@ -10,35 +12,54 @@ const say = (msg) => {
   invoke("report", { msg }).catch(() => {});
 };
 
-// M0: no tiles yet. A background and one GeoJSON point are enough to prove WebGL renders here.
+// The archive comes from the Rust backend's tiles:// scheme, never the filesystem. Tauri spells
+// a custom scheme differently per platform: tiles://localhost on Linux and macOS,
+// http://tiles.localhost on Windows (WebView2 only routes http(s) schemes).
+const TILES = navigator.userAgent.includes("Windows") ? "http://tiles.localhost" : "tiles://localhost";
+const ARCHIVE = `${TILES}/basemap.pmtiles`;
+
+const protocol = new Protocol();
+maplibregl.addProtocol("pmtiles", protocol.tile);
+const archive = new PMTiles(ARCHIVE);
+protocol.add(archive);
+
+// Glyphs and sprites are Vite public assets, served from the page's own origin. Plain
+// concatenation: new URL() would percent-encode the {fontstack}/{range} template tokens.
+const style = {
+  version: 8,
+  glyphs: `${location.origin}/assets/fonts/{fontstack}/{range}.pbf`,
+  sprite: `${location.origin}/assets/sprites/v4/light`,
+  sources: {
+    protomaps: {
+      type: "vector",
+      url: `pmtiles://${ARCHIVE}`,
+      attribution: '<a href="https://openstreetmap.org/copyright">© OpenStreetMap contributors</a>, Protomaps',
+    },
+  },
+  layers: layers("protomaps", namedFlavor("light"), { lang: "en" }),
+};
+
+const header = await archive.getHeader();
 const map = new maplibregl.Map({
   container: "map",
-  center: [-118.45, 34.02],
-  zoom: 11,
-  style: {
-    version: 8,
-    sources: {
-      pt: { type: "geojson", data: { type: "Point", coordinates: [-118.45, 34.02] } },
-    },
-    layers: [
-      { id: "bg", type: "background", paint: { "background-color": "#0b2239" } },
-      { id: "pt", type: "circle", source: "pt", paint: { "circle-radius": 12, "circle-color": "#f5a623" } },
-    ],
-  },
+  style,
+  center: [header.centerLon, header.centerLat],
+  zoom: 12,
+  maxBounds: [[header.minLon - 0.2, header.minLat - 0.2], [header.maxLon + 0.2, header.maxLat + 0.2]],
 });
+map.addControl(new maplibregl.NavigationControl(), "top-right");
+map.addControl(new maplibregl.ScaleControl());
 
 map.on("error", (e) => say(`map error: ${e.error?.message ?? e}`));
 map.once("idle", () => {
-  const gl = map.painter.context.gl;
-  const ext = gl.getExtension("WEBGL_debug_renderer_info");
-  const renderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
-  const version = gl.getParameter(gl.VERSION);
-  say(`map idle · ${version} · ${renderer}`);
+  const roads = map.querySourceFeatures("protomaps", { sourceLayer: "roads" }).length;
+  const places = map.querySourceFeatures("protomaps", { sourceLayer: "places" }).length;
+  say(`basemap idle · z${map.getZoom().toFixed(1)} · ${style.layers.length} layers · ` +
+      `${roads} road and ${places} place features decoded`);
 });
 
-// M2: the coordinate parser, compiled from crates/coords to WebAssembly. A startup self-check
-// proves the module loaded and answers like the Rust tests say it should.
+// The coordinate parser, compiled from crates/coords to WebAssembly.
 initCoords().then(() => {
   const probe = (q) => `${JSON.stringify(q)} → [${Array.from(parseCoords(q)).join(", ")}]`;
-  invoke("report", { msg: `wasm ${probe("51.5074N 0.1278W")} · ${probe("-0.1278, 51.5074")} · ${probe("110 00")}` });
+  invoke("report", { msg: `wasm ${probe("51.5074N 0.1278W")} · ${probe("110 00")}` });
 });

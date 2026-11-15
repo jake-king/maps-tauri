@@ -8,14 +8,21 @@ Python to Rust and compiled to WebAssembly for the frontend. Built to learn Taur
 - `crates/coords`: the coordinate parser, name folding and FTS5 query builder, ported from
   `Infrastructure/containers/epoch/maps/gazetteer/serve.py`. Native for the backend, WASM (`--features wasm`)
   for the frontend.
-- `src-tauri`: the Tauri backend.
+- `src-tauri`: the Tauri backend. `tiles.rs` serves the archive over a `tiles://` URI scheme with
+  HTTP Range semantics, off the UI thread; only listed file names are reachable.
 - `src`, `index.html`: the frontend (Vite).
 - `tools/diff.py`: the differential test, Rust port against the Python original.
 
+## Data
+`tools/fetch-data.sh` pulls everything from the Datastrike maps service on the LAN, never the
+internet: an LA cutout of the planet archive (6.2 MB, by HTTP Range with `go-pmtiles extract`),
+the Protomaps glyphs and sprites, and with `--gazetteer` the production GeoNames index (1.6 GB).
+
 ## Run
-Needs `wasm-pack` on PATH (`~/.cargo/bin`).
+Needs `wasm-pack` in `~/.cargo/bin` and `go-pmtiles` in `~/go/bin`.
 
     npm install
+    tools/fetch-data.sh --gazetteer
     npx tauri dev                 # builds the WASM module, then opens the app
     cargo test -p coords          # the parser's test tables, ported from the Python selftest
     npm run diff                  # Rust vs Python over ~190k inputs; exit 0 = no unexplained disagreement
