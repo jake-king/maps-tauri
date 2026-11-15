@@ -6,20 +6,12 @@ import { layers, namedFlavor } from "@protomaps/basemaps";
 import { invoke } from "@tauri-apps/api/core";
 import MaplibreGeocoder from "@maplibre/maplibre-gl-geocoder";
 import "@maplibre/maplibre-gl-geocoder/dist/maplibre-gl-geocoder.css";
-import initCoords, { parseCoords, coordFeatures } from "./wasm/coords.js";
-import { TimedSource, createStats, instrument, pollBackend, createOverlay } from "./devtools/overlay.js";
-import { runBench, runSoak, runZoomBench } from "./devtools/bench.js";
+import initCoords, { coordFeatures } from "./wasm/coords.js";
+import { TimedSource, createStats } from "./devtools/overlay.js";
 import { retainCachedParents } from "./maplibre-patch.js";
 import { GpuLedger, installGpuLedger } from "./devtools/gpumem.js";
-import { snapshot } from "./devtools/snapshot.js";
 import { blockRows } from "./devtools/blocks.js";
-
-const status = document.getElementById("status");
-const say = (msg) => {
-  status.textContent = msg;
-  // Mirror every status line to the backend's stdout so a run can be checked without looking.
-  invoke("report", { msg }).catch(() => {});
-};
+import { say, memprobeBlank, startDevtools } from "./devtools/harness.js";
 
 // The archive comes from the Rust backend's tiles:// scheme, never the filesystem. Tauri spells
 // a custom scheme differently per platform: tiles://localhost on Linux and macOS,
@@ -44,17 +36,7 @@ const flags = await invoke("dev_flags");
 // Memory probe: per-process memory at a stage, then exit. "blank" stops here, before any map,
 // source or worker exists (MapLibre's code is loaded, nothing more): the floor every Tauri +
 // WebKitGTK window pays. "idle" measures the map at rest after its first load.
-const memprobe = async (stage) => {
-  await new Promise((r) => setTimeout(r, 3000));
-  const s = await invoke("dev_stats");
-  const blocks = typeof map === "undefined" ? [] : blockRows(map, gpu);
-  await invoke("bench_done", { result: { probe: stage, memory: s.memory, blocks } });
-};
-if (flags.memprobe === "blank") {
-  say("memory probe: blank");
-  await memprobe("blank");
-  await new Promise(() => {}); // the app exits from bench_done
-}
+await memprobeBlank(flags, "maplibre");
 
 // Glyphs and sprites are Vite public assets, served from the page's own origin. Plain
 // concatenation: new URL() would percent-encode the {fontstack}/{range} template tokens.
@@ -128,93 +110,18 @@ if (flags.cachedParents) {
   });
 }
 
-// Dev tools: F4 toggles the overlay, F6 runs the pan benchmark (MAPS_BENCH=1 runs it at startup).
-let benching = false;
-let overlay = null;
-const sample = instrument(map, stats, {
-  pixelCheck: flags.pixelCheck,
-  active: () => benching || (overlay?.isVisible() ?? false),
-});
-overlay = createOverlay(stats);
-const frame = (now) => {
-  sample(now);
-  overlay.draw();
-  requestAnimationFrame(frame);
-};
-requestAnimationFrame(frame);
-setInterval(() => {
-  if (!overlay.isVisible() || benching) return;
-  pollBackend(stats);
-  stats.blocks = blockRows(map, gpu); // the tile walk runs here, once a second, never per frame
-}, 1000);
 const bounds = { minLon: header.minLon, minLat: header.minLat, maxLon: header.maxLon, maxLat: header.maxLat };
-const bench = async () => {
-  if (benching) return;
-  benching = true;
-  say("benchmark running…");
-  const result = await runBench(map, stats, bounds, { pixelCheck: flags.pixelCheck });
-  result.cache_zoom_levels = CACHE_ZOOM_LEVELS;
-  result.workers = maplibregl.getWorkerCount();
-  result.labels = !flags.noLabels;
-  result.pixel_check = !!flags.pixelCheck;
-  result.cached_parents = patchState;
-  result.blocks = blockRows(map, gpu);
-  result.cores = navigator.hardwareConcurrency;
-  result.user_agent = navigator.userAgent;
-  benching = false;
-  invoke("bench_done", { result });
-  const c = result.cold;
-  const w = result.warm;
-  say(`bench: cold ${c.missing_pct}% of frames missing tiles, warm ${w.missing_pct}% · ` +
-      `tile fetch cold avg ${c.fetch.avg} ms`);
-};
-window.addEventListener("keydown", (e) => {
-  if (e.key === "F6") {
-    e.preventDefault();
-    bench();
-  }
-});
-map.once("idle", async () => {
-  if (flags.zoomBench) {
-    benching = true;
-    const result = await runZoomBench(map, stats, [-118.4912, 34.0105], "zoombench-maplibre");
-    benching = false;
-    return invoke("bench_done", { result: { zoom_bench: true, renderer: "maplibre", ...result } });
-  }
-  if (flags.snapshot) {
-    // MAPS_SNAPSHOT_ZOOM picks the zoom; the center stays the pier
-    const center = flags.snapshotCenter ?? [-118.4912, 34.0105];
-    const view = flags.snapshotZoom != null ? { center, zoom: flags.snapshotZoom } : undefined;
-    const path = await snapshot(map, flags.snapshot, view);
-    return invoke("bench_done", { result: { snapshot: path, renderer: "maplibre" } });
-  }
-  if (flags.memprobe === "idle") return memprobe("idle");
-  if (flags.memprobe === "soak") {
-    benching = true;
-    const series = await runSoak(map, stats, bounds, 10);
-    benching = false;
-    const s = await invoke("dev_stats");
-    return invoke("bench_done", { result: { probe: "soak", series_mb: series, memory: s.memory, blocks: blockRows(map, gpu) } });
-  }
-  if (flags.memprobe === "pan") {
-    // the pan benchmark's two passes, then the usual 3 s settle, then 20 s more: does memory the
-    // pan added come back on its own (garbage not yet collected) or stay (held)?
-    benching = true;
-    await runBench(map, stats, bounds);
-    benching = false;
-    const s = await invoke("dev_stats");
-    const right_after = s.memory.reduce((a, m) => a + m.pss_kb, 0);
-    await new Promise((r) => setTimeout(r, 20000));
-    await invoke("report", { msg: `pan probe: ${Math.round(right_after / 1024)} MB right after the pan` });
-    return memprobe("pan");
-  }
-  if (flags.bench) bench();
+const tools = startDevtools({
+  map, flags, renderer: "maplibre", bounds, stats,
+  rows: () => blockRows(map, gpu),
+  describe: () => ({
+    cache_zoom_levels: CACHE_ZOOM_LEVELS, workers: maplibregl.getWorkerCount(), labels: !flags.noLabels,
+    cached_parents: patchState,
+  }),
 });
 map.once("idle", () => {
-  const roads = map.querySourceFeatures("protomaps", { sourceLayer: "roads" }).length;
-  const places = map.querySourceFeatures("protomaps", { sourceLayer: "places" }).length;
-  say(`basemap idle · z${map.getZoom().toFixed(1)} · ${style.layers.length} layers · ` +
-      `${roads} road and ${places} place features decoded`);
+  say(`MapLibre · z${map.getZoom().toFixed(1)} · ${style.layers.length} style layers`);
+  tools.runModes();
 });
 
 // Search. A coordinate is answered in the frontend by the WASM build of crates/coords, with no
@@ -245,17 +152,3 @@ map.addControl(new MaplibreGeocoder(geocoderApi, {
   marker: true,
   collapsed: false,
 }), "top-left");
-
-// Startup self-check through the same forwardGeocode the search box calls, timed.
-const probe = async (q) => {
-  const t0 = performance.now();
-  const { features } = await geocoderApi.forwardGeocode({ query: q, limit: 3 });
-  const ms = (performance.now() - t0).toFixed(1);
-  return `${JSON.stringify(q)} ${ms} ms → ${features.map((f) => f.place_name).join(" | ") || "(none)"}`;
-};
-wasmReady.then(async () => {
-  invoke("report", { msg: `wasm parseCoords("110 00") → [${Array.from(parseCoords("110 00"))}]` });
-  for (const q of ["santa mon", "51.5074N 0.1278W", "-0.1278, 51.5074", "110 00"]) {
-    invoke("report", { msg: `search ${await probe(q)}` });
-  }
-});

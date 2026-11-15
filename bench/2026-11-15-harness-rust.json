@@ -1,0 +1,265 @@
+{
+ "archive": "local",
+ "blocks": [
+  {
+   "bytes": 32983908,
+   "label": "GPU buffers",
+   "note": "416"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU textures",
+   "note": "0"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU renderbuffers",
+   "note": "0"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU shader programs",
+   "note": "2 linked (driver memory, not counted)"
+  },
+  {
+   "bytes": 0,
+   "label": "tiles, CPU arrays",
+   "note": "0+0"
+  },
+  {
+   "bytes": 33315232,
+   "label": "mesh cache (GPU copies)",
+   "note": "104 tiles"
+  }
+ ],
+ "cache_tiles": 240,
+ "cold": {
+  "cache_max": null,
+  "dropped": 0,
+  "fetch": {
+   "avg": 11.1,
+   "n": 77,
+   "p95": 23,
+   "worst": 33
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 486,
+   "p95": 18,
+   "worst": 23
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 85,
+  "label_draw": {
+   "avg": 2.6,
+   "labels_avg": 32.5,
+   "n": 485,
+   "p95": 5,
+   "slowest": [
+    {
+     "labels": 37,
+     "misses": 0,
+     "ms": 9
+    },
+    {
+     "labels": 40,
+     "misses": 0,
+     "ms": 8
+    },
+    {
+     "labels": 50,
+     "misses": 0,
+     "ms": 8
+    },
+    {
+     "labels": 18,
+     "misses": 0,
+     "ms": 7
+    },
+    {
+     "labels": 48,
+     "misses": 0,
+     "ms": 7
+    }
+   ],
+   "worst": 9
+  },
+  "listener_errors": 0,
+  "load": {
+   "avg": 12.1,
+   "n": 77,
+   "p95": 26,
+   "worst": 34
+  },
+  "memory_mb": 445,
+  "mesh_cache": {
+   "bytes": 0,
+   "entries": 0,
+   "hits": 0,
+   "misses": 77
+  },
+  "missing_frames": 0,
+  "missing_pct": 0,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 485,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 3.2,
+   "n": 485,
+   "p95": 6,
+   "worst": 10
+  },
+  "rendered": 485,
+  "rendered_ratio": 1,
+  "serve": {
+   "avg": 6.7,
+   "bytes": 23924828,
+   "n": 77,
+   "worst": 18.9
+  },
+  "settle_ms": 0,
+  "stages": {
+   "copy": 0.04,
+   "decode": 0.69,
+   "inflight_avg": 2.09,
+   "inflight_max": 5,
+   "mesh": 4.67,
+   "n": 77,
+   "read": 1.06,
+   "serialize": 0.18,
+   "wait": 0.03
+  },
+  "tiles_loaded": 77,
+  "unique_tiles": 77,
+  "visible_wait": {
+   "avg": 0,
+   "n": 40,
+   "not_ready": 0,
+   "p95": 0,
+   "worst": 0
+  }
+ },
+ "cores": 8,
+ "pixel_check": false,
+ "pixel_selftest_outside_pct": null,
+ "prefetch_ring": 1,
+ "renderer": "rust",
+ "speed_px_s": 4000,
+ "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+ "warm": {
+  "cache_max": null,
+  "dropped": 0,
+  "fetch": {
+   "avg": 0,
+   "n": 0,
+   "p95": 0,
+   "worst": 0
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 487,
+   "p95": 18,
+   "worst": 22
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 77,
+  "label_draw": {
+   "avg": 2.5,
+   "labels_avg": 32.4,
+   "n": 486,
+   "p95": 5,
+   "slowest": [
+    {
+     "labels": 41,
+     "misses": 0,
+     "ms": 10
+    },
+    {
+     "labels": 38,
+     "misses": 0,
+     "ms": 8
+    },
+    {
+     "labels": 34,
+     "misses": 0,
+     "ms": 7
+    },
+    {
+     "labels": 45,
+     "misses": 0,
+     "ms": 7
+    },
+    {
+     "labels": 44,
+     "misses": 0,
+     "ms": 7
+    }
+   ],
+   "worst": 10
+  },
+  "listener_errors": 0,
+  "load": {
+   "avg": 0,
+   "n": 0,
+   "p95": 0,
+   "worst": 0
+  },
+  "memory_mb": 433,
+  "mesh_cache": {
+   "bytes": 0,
+   "entries": 0,
+   "hits": 0,
+   "misses": 0
+  },
+  "missing_frames": 0,
+  "missing_pct": 0,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 486,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 3,
+   "n": 486,
+   "p95": 6,
+   "worst": 11
+  },
+  "rendered": 486,
+  "rendered_ratio": 1,
+  "serve": {
+   "avg": 0,
+   "bytes": 0,
+   "n": 0,
+   "worst": 0
+  },
+  "settle_ms": 0,
+  "stages": null,
+  "tiles_loaded": 0,
+  "unique_tiles": 0,
+  "visible_wait": null
+ },
+ "zoom": 15,
+ "label": "harness-rust (release)"
+}
