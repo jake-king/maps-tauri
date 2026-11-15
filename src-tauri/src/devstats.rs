@@ -67,13 +67,20 @@ pub fn classify_smaps(text: &str) -> MappingKinds {
                 0
             } else if path.starts_with("/dev/dri") || path.starts_with("/dev/nvidia") {
                 1
-            } else if path.starts_with("/memfd:") || path.starts_with("/dev/shm") || path.starts_with("/SYSV") {
+            } else if path.starts_with("/memfd:")
+                || path.starts_with("/dev/shm")
+                || path.starts_with("/SYSV")
+            {
                 2
             } else {
                 3
             };
         } else if let Some(rest) = line.strip_prefix("Pss:") {
-            let kb: u64 = rest.split_whitespace().next().and_then(|v| v.parse().ok()).unwrap_or(0);
+            let kb: u64 = rest
+                .split_whitespace()
+                .next()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
             match kind {
                 0 => k.anon_kb += kb,
                 1 => k.gpu_kb += kb,
@@ -142,7 +149,9 @@ pub struct ProcessMem {
 
 /// `(pid, ppid, name)` for every process, from `/proc/<pid>/stat`.
 fn all_processes() -> Vec<(u32, u32, String)> {
-    let Ok(dir) = std::fs::read_dir("/proc") else { return Vec::new() };
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
     dir.filter_map(|e| {
         let pid: u32 = e.ok()?.file_name().to_str()?.parse().ok()?;
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
@@ -205,8 +214,15 @@ pub fn process_tree_memory() -> Vec<ProcessMem> {
                         .ok()
                         .and_then(|t| kb_field(&t, "VmRSS:"))
                 })?;
-            let kinds = std::fs::read_to_string(format!("/proc/{pid}/smaps")).ok().map(|t| classify_smaps(&t));
-            Some(ProcessMem { pid, name: names.get(&pid).unwrap_or(&"?").to_string(), pss_kb: pss, kinds })
+            let kinds = std::fs::read_to_string(format!("/proc/{pid}/smaps"))
+                .ok()
+                .map(|t| classify_smaps(&t));
+            Some(ProcessMem {
+                pid,
+                name: names.get(&pid).unwrap_or(&"?").to_string(),
+                pss_kb: pss,
+                kinds,
+            })
         })
         .collect()
 }
@@ -217,15 +233,29 @@ mod tests {
 
     #[test]
     fn stat_names_with_spaces_and_parens() {
-        assert_eq!(parse_stat("42 (maps-tauri) S 7 42 42"), Some((7, "maps-tauri".into())));
-        assert_eq!(parse_stat("9 (Web Content (x)) R 42 9 9"), Some((42, "Web Content (x)".into())));
+        assert_eq!(
+            parse_stat("42 (maps-tauri) S 7 42 42"),
+            Some((7, "maps-tauri".into()))
+        );
+        assert_eq!(
+            parse_stat("9 (Web Content (x)) R 42 9 9"),
+            Some((42, "Web Content (x)".into()))
+        );
         assert_eq!(parse_stat("garbage"), None);
     }
 
     #[test]
     fn descendants_walks_the_whole_tree_and_nothing_else() {
         let p = |pid, ppid| (pid, ppid, String::new());
-        let procs = vec![p(1, 0), p(10, 1), p(11, 10), p(12, 11), p(13, 10), p(20, 1), p(21, 20)];
+        let procs = vec![
+            p(1, 0),
+            p(10, 1),
+            p(11, 10),
+            p(12, 11),
+            p(13, 10),
+            p(20, 1),
+            p(21, 20),
+        ];
         assert_eq!(descendants(10, &procs), vec![10, 11, 13, 12]);
         assert_eq!(descendants(99, &procs), vec![99]);
     }
@@ -255,7 +285,15 @@ Pss: 5 kB
 7f40-7f50 rw-s 00000000 00:05 3                                  /dev/nvidiactl
 Pss: 2 kB
 ";
-        assert_eq!(classify_smaps(t), MappingKinds { anon_kb: 105, gpu_kb: 42, shmem_kb: 30, file_kb: 20 });
+        assert_eq!(
+            classify_smaps(t),
+            MappingKinds {
+                anon_kb: 105,
+                gpu_kb: 42,
+                shmem_kb: 30,
+                file_kb: 20
+            }
+        );
     }
 
     #[test]

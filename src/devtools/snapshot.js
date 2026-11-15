@@ -5,7 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 /** The fixed view every snapshot uses, so the two renderers can be compared image to image. */
-export const SNAPSHOT_VIEW = { center: [-118.4912, 34.0105], zoom: 15 }; // Santa Monica Pier
+const SNAPSHOT_VIEW = { center: [-118.4912, 34.0105], zoom: 15 }; // Santa Monica Pier
 
 /** `paint(ctx, dpr)` (optional) draws extra state over the picture, e.g. HTML overlays, which
  *  readPixels cannot see. */

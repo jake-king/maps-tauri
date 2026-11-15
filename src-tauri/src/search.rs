@@ -25,7 +25,10 @@ SELECT p.id, p.name, p.lat, p.lon, p.fclass, p.fcode, p.country, p.admin1, p.pop
 /// (a rebuild replaces it whole), so SQLite may skip locking.
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let uri = format!("file:{}?mode=ro&immutable=1", path.display());
-    Connection::open_with_flags(uri, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI)
+    Connection::open_with_flags(
+        uri,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )
 }
 
 fn fclass_label(fclass: &str) -> &'static str {
@@ -60,9 +63,15 @@ pub fn search(db: &Connection, raw: &str, limit: usize) -> Vec<Value> {
     let limit = limit.clamp(1, MAX_LIMIT);
     let points = coords::parse_coords(raw);
     if !points.is_empty() {
-        return points.into_iter().take(limit).map(|(lat, lon)| coords::coord_feature(lat, lon)).collect();
+        return points
+            .into_iter()
+            .take(limit)
+            .map(|(lat, lon)| coords::coord_feature(lat, lon))
+            .collect();
     }
-    let Some(matcher) = coords::fts_query(raw) else { return Vec::new() };
+    let Some(matcher) = coords::fts_query(raw) else {
+        return Vec::new();
+    };
     let folded = coords::fold(raw.trim());
     let run = || -> rusqlite::Result<Vec<Value>> {
         let mut stmt = db.prepare_cached(SEARCH_SQL)?;

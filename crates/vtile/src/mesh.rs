@@ -10,7 +10,7 @@
 //!   line vertices (8 B: i16 x, i16 y, i8 ex, i8 ey, u8 class, u8 pad), line indices,
 //!   labels, each: i16 x, i16 y, i16 angle (radians x 10000), u16 run (tile units of straight line
 //!   the text may sit on; 0 for a point), u8 kind (LabelKind), u8 min zoom, u8 icon (sprite index
-//!   + 1, 0 for none), u8 color (label color index, POIs/water/shields), i32 priority (lower
+//!   plus 1, 0 for none), u8 color (label color index, POIs/water/shields), i32 priority (lower
 //!   first), u8 text length, UTF-8 text, u8 path point count, that many (i16 x, i16 y): the line a
 //!   street or stream name follows (0 points for a point label); the block padded to 4.
 //! x, y are tile coordinates (extent 4096). (ex, ey) / 32 is the unit extrusion; the shader scales
@@ -131,8 +131,14 @@ impl Mesh {
         out.reserve(self.byte_len());
         let flags = u32::from(fw) | (u32::from(lw) << 1);
         let header = [
-            MAGIC, VERSION, flags, self.fill.len() as u32, self.fill_idx.len() as u32,
-            self.line.len() as u32, self.line_idx.len() as u32, self.labels.len() as u32,
+            MAGIC,
+            VERSION,
+            flags,
+            self.fill.len() as u32,
+            self.fill_idx.len() as u32,
+            self.line.len() as u32,
+            self.line_idx.len() as u32,
+            self.labels.len() as u32,
             self.label_block_len() as u32,
         ];
         for v in header {
@@ -198,7 +204,11 @@ pub fn simplify(pts: &[[f64; 2]], tol: f64) -> Vec<[f64; 2]> {
         let len = dx.hypot(dy);
         let mut far = (0.0, a);
         for (i, p) in pts.iter().enumerate().take(b).skip(a + 1) {
-            let d = if len == 0.0 { (p[0] - pa[0]).hypot(p[1] - pa[1]) } else { ((p[0] - pa[0]) * dy - (p[1] - pa[1]) * dx).abs() / len };
+            let d = if len == 0.0 {
+                (p[0] - pa[0]).hypot(p[1] - pa[1])
+            } else {
+                ((p[0] - pa[0]) * dy - (p[1] - pa[1]) * dx).abs() / len
+            };
             if d > far.0 {
                 far = (d, i);
             }
@@ -209,14 +219,20 @@ pub fn simplify(pts: &[[f64; 2]], tol: f64) -> Vec<[f64; 2]> {
             stack.push((far.1, b));
         }
     }
-    pts.iter().zip(keep).filter(|(_, k)| *k).map(|(p, _)| *p).collect()
+    pts.iter()
+        .zip(keep)
+        .filter(|(_, k)| *k)
+        .map(|(p, _)| *p)
+        .collect()
 }
 
 /// The longest run of a polyline that stays inside the tile (with a small margin), as separate
 /// pieces wherever it leaves; returns the longest piece and its length.
 pub fn longest_inside(pts: &[[i32; 2]], extent: u32) -> Option<(Vec<[f64; 2]>, f64)> {
     let m = 32;
-    let inside = |p: [i32; 2]| p[0] >= -m && p[1] >= -m && p[0] < extent as i32 + m && p[1] < extent as i32 + m;
+    let inside = |p: [i32; 2]| {
+        p[0] >= -m && p[1] >= -m && p[0] < extent as i32 + m && p[1] < extent as i32 + m
+    };
     let mut best: Option<(Vec<[f64; 2]>, f64)> = None;
     let mut cur: Vec<[f64; 2]> = Vec::new();
     let mut len = 0.0;
@@ -247,18 +263,23 @@ fn utf8_prefix(s: &str, max: usize) -> usize {
     if s.len() <= max {
         return s.len();
     }
-    (0..=max).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0)
+    (0..=max)
+        .rev()
+        .find(|&i| s.is_char_boundary(i))
+        .unwrap_or(0)
 }
 
 /// MapLibre's calculateSignedArea: positive or negative by winding, zero for a degenerate ring.
 pub fn signed_area(ring: &[[i32; 2]]) -> f64 {
     let mut sum = 0.0;
     for w in ring.windows(2) {
-        sum += (f64::from(w[1][0]) - f64::from(w[0][0])) * (f64::from(w[0][1]) + f64::from(w[1][1]));
+        sum +=
+            (f64::from(w[1][0]) - f64::from(w[0][0])) * (f64::from(w[0][1]) + f64::from(w[1][1]));
     }
     if let (Some(last), Some(first)) = (ring.last(), ring.first()) {
         if last != first {
-            sum += (f64::from(first[0]) - f64::from(last[0])) * (f64::from(last[1]) + f64::from(first[1]));
+            sum += (f64::from(first[0]) - f64::from(last[0]))
+                * (f64::from(last[1]) + f64::from(first[1]));
         }
     }
     sum
@@ -313,7 +334,11 @@ impl Mesher {
         self.flat.clear();
         self.holes.clear();
         for (n, r) in self.rings[range].iter().enumerate() {
-            let pts = if r.len() > 1 && r.first() == r.last() { &r[..r.len() - 1] } else { &r[..] };
+            let pts = if r.len() > 1 && r.first() == r.last() {
+                &r[..r.len() - 1]
+            } else {
+                &r[..]
+            };
             if n > 0 {
                 self.holes.push(self.flat.len() / 2);
             }
@@ -327,10 +352,16 @@ impl Mesher {
             return;
         };
         let base = self.mesh.fill.len() as u32;
-        for p in self.flat.chunks_exact(2) {
-            self.mesh.fill.push(FillVertex { x: to_i16(p[0] as i32), y: to_i16(p[1] as i32), color });
+        for p in self.flat.as_chunks::<2>().0 {
+            self.mesh.fill.push(FillVertex {
+                x: to_i16(p[0] as i32),
+                y: to_i16(p[1] as i32),
+                color,
+            });
         }
-        self.mesh.fill_idx.extend(tri.iter().map(|&i| base + i as u32));
+        self.mesh
+            .fill_idx
+            .extend(tri.iter().map(|&i| base + i as u32));
     }
 
     /// Every polygon of a feature, in one color.
@@ -380,14 +411,31 @@ impl Mesher {
                     [m[0] * scale, m[1] * scale]
                 }
             };
-            let (ex, ey) = ((e[0] * EXTRUDE_SCALE).round() as i8, (e[1] * EXTRUDE_SCALE).round() as i8);
+            let (ex, ey) = (
+                (e[0] * EXTRUDE_SCALE).round() as i8,
+                (e[1] * EXTRUDE_SCALE).round() as i8,
+            );
             let (x, y) = (to_i16(p[i][0] as i32), to_i16(p[i][1] as i32));
-            self.mesh.line.push(LineVertex { x, y, ex, ey, class: class as u8 });
-            self.mesh.line.push(LineVertex { x, y, ex: -ex, ey: -ey, class: class as u8 });
+            self.mesh.line.push(LineVertex {
+                x,
+                y,
+                ex,
+                ey,
+                class: class as u8,
+            });
+            self.mesh.line.push(LineVertex {
+                x,
+                y,
+                ex: -ex,
+                ey: -ey,
+                class: class as u8,
+            });
         }
         for s in 0..(p.len() as u32 - 1) {
             let a = base + 2 * s;
-            self.mesh.line_idx.extend_from_slice(&[a, a + 1, a + 2, a + 1, a + 3, a + 2]);
+            self.mesh
+                .line_idx
+                .extend_from_slice(&[a, a + 1, a + 2, a + 1, a + 3, a + 2]);
         }
     }
 
@@ -402,7 +450,11 @@ impl Mesher {
                 // dashed: on/off lengths from the style, in this tile's zoom (+0.5) pixels
                 let w = rail_width(f64::from(z) + 0.5).max(0.5);
                 let px = 4096.0 / (512.0 * 2f64.sqrt()); // tile units per px at zoom z + 0.5
-                for d in dash_polyline(r, palette::RAIL_DASH[0] * w * px, palette::RAIL_DASH[1] * w * px) {
+                for d in dash_polyline(
+                    r,
+                    palette::RAIL_DASH[0] * w * px,
+                    palette::RAIL_DASH[1] * w * px,
+                ) {
                     self.line_strip(&d, class);
                 }
             } else {
@@ -416,7 +468,11 @@ impl Mesher {
     pub fn build(&mut self, layers: &[Layer], z: u8) -> &Mesh {
         self.mesh.clear();
         let layer = |name: &str| layers.iter().find(|l| l.name == name);
-        let kind = |l: &Layer, f: &mvt::Feature| l.prop(f, "kind").and_then(|v| v.as_str()).map(str::to_owned);
+        let kind = |l: &Layer, f: &mvt::Feature| {
+            l.prop(f, "kind")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        };
 
         // fills, bottom to top
         if let Some(l) = layer("earth") {
@@ -443,7 +499,9 @@ impl Mesher {
                     .filter_map(|f| {
                         let k = kind(l, f)?;
                         (palette::landuse_above_water(&k) == above)
-                            .then(|| palette::landuse(&k).map(|c| (palette::landuse_rank(&k), f, c)))
+                            .then(|| {
+                                palette::landuse(&k).map(|c| (palette::landuse_rank(&k), f, c))
+                            })
                             .flatten()
                     })
                     .collect();
@@ -479,13 +537,26 @@ impl Mesher {
         }
         if let Some(l) = layer("boundaries") {
             for (i, f) in l.features.iter().enumerate() {
-                let detail = l.prop(f, "kind_detail").and_then(|v| v.as_f64()).unwrap_or(99.0);
-                lines.push((if detail <= 2.0 { LineClass::BoundaryCountry } else { LineClass::Boundary }, l, i));
+                let detail = l
+                    .prop(f, "kind_detail")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(99.0);
+                lines.push((
+                    if detail <= 2.0 {
+                        LineClass::BoundaryCountry
+                    } else {
+                        LineClass::Boundary
+                    },
+                    l,
+                    i,
+                ));
             }
         }
         // every road with a casing also gets its casing strip, drawn below all road fills
-        let casings: Vec<(LineClass, &Layer, usize)> =
-            lines.iter().filter_map(|&(c, l, i)| casing_of(c).map(|k| (k, l, i))).collect();
+        let casings: Vec<(LineClass, &Layer, usize)> = lines
+            .iter()
+            .filter_map(|&(c, l, i)| casing_of(c).map(|k| (k, l, i)))
+            .collect();
         lines.extend(casings);
         lines.sort_by_key(|(c, _, _)| *c as u8);
         for (c, l, i) in lines {
@@ -502,10 +573,15 @@ impl Mesher {
     /// label is not sent by two neighbouring tiles (MVT geometry overlaps into a buffer).
     fn labels(&mut self, layers: &[Layer]) {
         let name = |l: &Layer, f: &mvt::Feature| {
-            l.prop(f, "name:en").or_else(|| l.prop(f, "name")).and_then(|v| v.as_str()).map(str::to_owned)
+            l.prop(f, "name:en")
+                .or_else(|| l.prop(f, "name"))
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
         };
         let num = |l: &Layer, f: &mvt::Feature, k: &str| l.prop(f, k).and_then(|v| v.as_f64());
-        let inside = |p: [i32; 2], extent: u32| p[0] >= 0 && p[1] >= 0 && p[0] < extent as i32 && p[1] < extent as i32;
+        let inside = |p: [i32; 2], extent: u32| {
+            p[0] >= 0 && p[1] >= 0 && p[0] < extent as i32 && p[1] < extent as i32
+        };
         if let Some(l) = layers.iter().find(|l| l.name == "places") {
             for f in &l.features {
                 let Some(text) = name(l, f) else { continue };
@@ -516,16 +592,27 @@ impl Mesher {
                     _ => continue,
                 };
                 mvt::geometry(&f.geometry, &mut self.rings);
-                let Some(&p) = self.rings.first().and_then(|r| r.first()) else { continue };
+                let Some(&p) = self.rings.first().and_then(|r| r.first()) else {
+                    continue;
+                };
                 if !inside(p, l.extent) {
                     continue;
                 }
                 self.mesh.labels.push(Label {
-                    x: to_i16(p[0]), y: to_i16(p[1]), angle: 0.0, run: 0, kind,
+                    x: to_i16(p[0]),
+                    y: to_i16(p[1]),
+                    angle: 0.0,
+                    run: 0,
+                    kind,
                     min_zoom: num(l, f, "min_zoom").unwrap_or(0.0).clamp(0.0, 24.0) as u8,
-                    icon: 0, color: 0,
-                    priority: num(l, f, "sort_key").unwrap_or(0.0).clamp(i32::MIN as f64, i32::MAX as f64) as i32,
-                    text, path: Vec::new(),
+                    icon: 0,
+                    color: 0,
+                    priority: num(l, f, "sort_key")
+                        .unwrap_or(0.0)
+                        .clamp(i32::MIN as f64, i32::MAX as f64)
+                        as i32,
+                    text,
+                    path: Vec::new(),
                 });
             }
         }
@@ -537,17 +624,31 @@ impl Mesher {
                 let kind = match road_class(l, f) {
                     Some(LineClass::RoadHighway) => LabelKind::RoadHighway,
                     Some(LineClass::RoadMajor) => LabelKind::RoadMajor,
-                    Some(LineClass::RoadMinor | LineClass::RoadService | LineClass::RoadOther | LineClass::RoadLink) => LabelKind::RoadMinor,
+                    Some(
+                        LineClass::RoadMinor
+                        | LineClass::RoadService
+                        | LineClass::RoadOther
+                        | LineClass::RoadLink,
+                    ) => LabelKind::RoadMinor,
                     _ => continue,
                 };
                 mvt::geometry(&f.geometry, &mut self.rings);
                 for r in &self.rings {
-                    if let Some(label) = path_label(r, l.extent, &text, kind, LabelExtra {
-                        min_zoom: num(l, f, "min_zoom").unwrap_or(0.0).clamp(0.0, 24.0) as u8,
-                        color: 0,
-                        priority: 1_000_000 - num(l, f, "sort_rank").unwrap_or(0.0) as i32,
-                    }) {
-                        if best.get(&text).is_none_or(|(bl, _)| f64::from(label.run) > *bl) {
+                    if let Some(label) = path_label(
+                        r,
+                        l.extent,
+                        &text,
+                        kind,
+                        LabelExtra {
+                            min_zoom: num(l, f, "min_zoom").unwrap_or(0.0).clamp(0.0, 24.0) as u8,
+                            color: 0,
+                            priority: 1_000_000 - num(l, f, "sort_rank").unwrap_or(0.0) as i32,
+                        },
+                    ) {
+                        if best
+                            .get(&text)
+                            .is_none_or(|(bl, _)| f64::from(label.run) > *bl)
+                        {
                             best.insert(text.clone(), (f64::from(label.run), label));
                         }
                     }
@@ -560,7 +661,9 @@ impl Mesher {
             // shields: one per route number per tile, upright, on that route's longest segment
             let mut shields: std::collections::HashMap<String, (f64, Label)> = Default::default();
             for f in &l.features {
-                let Some(st) = l.prop(f, "shield_text").and_then(|v| v.as_str()) else { continue };
+                let Some(st) = l.prop(f, "shield_text").and_then(|v| v.as_str()) else {
+                    continue;
+                };
                 let kind = l.prop(f, "kind").and_then(|v| v.as_str());
                 if !matches!(kind, Some("highway" | "major_road")) || st.chars().count() > 5 {
                     continue;
@@ -579,13 +682,26 @@ impl Mesher {
                         if shields.get(&key).is_some_and(|(bl, _)| *bl >= len) {
                             continue;
                         }
-                        shields.insert(key, (len, Label {
-                            x: to_i16(mid[0]), y: to_i16(mid[1]), angle: 0.0, run: 0, kind: LabelKind::Shield,
-                            min_zoom: num(l, f, "min_zoom").unwrap_or(0.0).clamp(0.0, 24.0) as u8,
-                            icon, color: palette::SHIELD_TEXT_COLOR,
-                            priority: if kind == Some("highway") { 0 } else { 1 },
-                            text: st.to_owned(), path: Vec::new(),
-                        }));
+                        shields.insert(
+                            key,
+                            (
+                                len,
+                                Label {
+                                    x: to_i16(mid[0]),
+                                    y: to_i16(mid[1]),
+                                    angle: 0.0,
+                                    run: 0,
+                                    kind: LabelKind::Shield,
+                                    min_zoom: num(l, f, "min_zoom").unwrap_or(0.0).clamp(0.0, 24.0)
+                                        as u8,
+                                    icon,
+                                    color: palette::SHIELD_TEXT_COLOR,
+                                    priority: if kind == Some("highway") { 0 } else { 1 },
+                                    text: st.to_owned(),
+                                    path: Vec::new(),
+                                },
+                            ),
+                        );
                     }
                 }
             }
@@ -596,16 +712,33 @@ impl Mesher {
         if let Some(l) = layers.iter().find(|l| l.name == "pois") {
             for f in &l.features {
                 let Some(text) = name(l, f) else { continue };
-                let Some((icon, color)) = l.prop(f, "kind").and_then(|v| v.as_str()).and_then(palette::poi) else { continue };
+                let Some((icon, color)) = l
+                    .prop(f, "kind")
+                    .and_then(|v| v.as_str())
+                    .and_then(palette::poi)
+                else {
+                    continue;
+                };
                 mvt::geometry(&f.geometry, &mut self.rings);
-                let Some(&p) = self.rings.first().and_then(|r| r.first()) else { continue };
+                let Some(&p) = self.rings.first().and_then(|r| r.first()) else {
+                    continue;
+                };
                 if !inside(p, l.extent) {
                     continue;
                 }
                 let min_zoom = num(l, f, "min_zoom").unwrap_or(0.0).clamp(0.0, 24.0) as u8;
                 self.mesh.labels.push(Label {
-                    x: to_i16(p[0]), y: to_i16(p[1]), angle: 0.0, run: 0, kind: LabelKind::Poi,
-                    min_zoom, icon, color, priority: i32::from(min_zoom), text, path: Vec::new(),
+                    x: to_i16(p[0]),
+                    y: to_i16(p[1]),
+                    angle: 0.0,
+                    run: 0,
+                    kind: LabelKind::Poi,
+                    min_zoom,
+                    icon,
+                    color,
+                    priority: i32::from(min_zoom),
+                    text,
+                    path: Vec::new(),
                 });
             }
         }
@@ -617,30 +750,62 @@ impl Mesher {
                 let kind = l.prop(f, "kind").and_then(|v| v.as_str()).unwrap_or("");
                 mvt::geometry(&f.geometry, &mut self.rings);
                 let mk = |x: i32, y: i32, angle: f64, run: f64, prio: i32| Label {
-                    x: to_i16(x), y: to_i16(y), angle: angle as f32, run: run.min(f64::from(u16::MAX)) as u16,
-                    kind: LabelKind::Water, min_zoom, icon: 0, color: palette::WATER_LABEL_COLOR, priority: prio, text: text.clone(),
+                    x: to_i16(x),
+                    y: to_i16(y),
+                    angle: angle as f32,
+                    run: run.min(f64::from(u16::MAX)) as u16,
+                    kind: LabelKind::Water,
+                    min_zoom,
+                    icon: 0,
+                    color: palette::WATER_LABEL_COLOR,
+                    priority: prio,
+                    text: text.clone(),
                     path: Vec::new(),
                 };
                 match (f.geom_type, kind) {
                     // rivers and streams: along their longest straight segment, like streets
                     (2, "river" | "stream") => {
                         for r in &self.rings {
-                            let extra = LabelExtra { min_zoom, color: palette::WATER_LABEL_COLOR, priority: 2 };
-                            if let Some(label) = path_label(r, l.extent, &text, LabelKind::Water, extra) {
-                                if best.get(&text).is_none_or(|(bl, _)| f64::from(label.run) > *bl) {
+                            let extra = LabelExtra {
+                                min_zoom,
+                                color: palette::WATER_LABEL_COLOR,
+                                priority: 2,
+                            };
+                            if let Some(label) =
+                                path_label(r, l.extent, &text, LabelKind::Water, extra)
+                            {
+                                if best
+                                    .get(&text)
+                                    .is_none_or(|(bl, _)| f64::from(label.run) > *bl)
+                                {
                                     best.insert(text.clone(), (f64::from(label.run), label));
                                 }
                             }
                         }
                     }
                     // seas, oceans, bays, lakes: at the point, or the middle of the outer ring
-                    (1, _) | (3, _) if matches!(kind, "sea" | "ocean" | "bay" | "strait" | "lake" | "water") => {
-                        let Some(r) = self.rings.first() else { continue };
-                        let (sx, sy) = r.iter().fold((0i64, 0i64), |(a, b), p| (a + i64::from(p[0]), b + i64::from(p[1])));
+                    (1, _) | (3, _)
+                        if matches!(
+                            kind,
+                            "sea" | "ocean" | "bay" | "strait" | "lake" | "water"
+                        ) =>
+                    {
+                        let Some(r) = self.rings.first() else {
+                            continue;
+                        };
+                        let (sx, sy) = r.iter().fold((0i64, 0i64), |(a, b), p| {
+                            (a + i64::from(p[0]), b + i64::from(p[1]))
+                        });
                         let n = r.len().max(1) as i64;
                         let c = [(sx / n) as i32, (sy / n) as i32];
                         if inside(c, l.extent) && !best.contains_key(&text) {
-                            best.insert(text.clone(), (f64::MAX, mk(c[0], c[1], 0.0, 0.0, if kind == "ocean" { 0 } else { 1 })));
+                            best.insert(
+                                text.clone(),
+                                (
+                                    f64::MAX,
+                                    mk(c[0], c[1], 0.0, 0.0, if kind == "ocean" { 0 } else { 1 }),
+                                ),
+                            );
                         }
                     }
                     _ => {}
@@ -664,7 +829,13 @@ pub struct LabelExtra {
 /// (Douglas-Peucker, at most PATH_MAX_POINTS points), oriented to read left to right, anchored at
 /// its middle. `run` is the path's length; `angle` the direction at the middle (kept for the
 /// straight-label fallback).
-pub fn path_label(ring: &[[i32; 2]], extent: u32, text: &str, kind: LabelKind, extra: LabelExtra) -> Option<Label> {
+pub fn path_label(
+    ring: &[[i32; 2]],
+    extent: u32,
+    text: &str,
+    kind: LabelKind,
+    extra: LabelExtra,
+) -> Option<Label> {
     let (piece, len) = longest_inside(ring, extent)?;
     if len < 1.0 {
         return None;
@@ -689,21 +860,35 @@ pub fn path_label(ring: &[[i32; 2]], extent: u32, text: &str, kind: LabelKind, e
         let seg = (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]);
         if acc + seg >= half && seg > 0.0 {
             let t = (half - acc) / seg;
-            mid = [w[0][0] + (w[1][0] - w[0][0]) * t, w[0][1] + (w[1][1] - w[0][1]) * t];
+            mid = [
+                w[0][0] + (w[1][0] - w[0][0]) * t,
+                w[0][1] + (w[1][1] - w[0][1]) * t,
+            ];
             angle = (w[1][1] - w[0][1]).atan2(w[1][0] - w[0][0]);
             break;
         }
         acc += seg;
     }
     // only anchors inside the tile's own extent: a neighbouring tile sends its own
-    if !(mid[0] >= 0.0 && mid[1] >= 0.0 && mid[0] < f64::from(extent) && mid[1] < f64::from(extent)) {
+    if !(mid[0] >= 0.0 && mid[1] >= 0.0 && mid[0] < f64::from(extent) && mid[1] < f64::from(extent))
+    {
         return None;
     }
     Some(Label {
-        x: to_i16(mid[0] as i32), y: to_i16(mid[1] as i32), angle: angle as f32,
-        run: len.min(f64::from(u16::MAX)) as u16, kind, min_zoom: extra.min_zoom, icon: 0, color: extra.color,
-        priority: extra.priority, text: text.to_owned(),
-        path: path.iter().map(|p| [to_i16(p[0].round() as i32), to_i16(p[1].round() as i32)]).collect(),
+        x: to_i16(mid[0] as i32),
+        y: to_i16(mid[1] as i32),
+        angle: angle as f32,
+        run: len.min(f64::from(u16::MAX)) as u16,
+        kind,
+        min_zoom: extra.min_zoom,
+        icon: 0,
+        color: extra.color,
+        priority: extra.priority,
+        text: text.to_owned(),
+        path: path
+            .iter()
+            .map(|p| [to_i16(p[0].round() as i32), to_i16(p[1].round() as i32)])
+            .collect(),
     })
 }
 
@@ -731,7 +916,11 @@ pub fn rail_width(z: f64) -> f64 {
     let i = s.windows(2).position(|w| z < w[1][0]).unwrap_or(0);
     let ([z0, v0], [z1, v1]) = (s[i], s[i + 1]);
     let b = palette::RAIL_WIDTH_BASE;
-    let t = if b == 1.0 { (z - z0) / (z1 - z0) } else { (b.powf(z - z0) - 1.0) / (b.powf(z1 - z0) - 1.0) };
+    let t = if b == 1.0 {
+        (z - z0) / (z1 - z0)
+    } else {
+        (b.powf(z - z0) - 1.0) / (b.powf(z1 - z0) - 1.0)
+    };
     v0 + t * (v1 - v0)
 }
 
@@ -747,17 +936,29 @@ pub fn dash_polyline(pts: &[[i32; 2]], on: f64, off: f64) -> Vec<Vec<[i32; 2]>> 
     let mut cur: Vec<[f64; 2]> = Vec::new();
     let flush = |cur: &mut Vec<[f64; 2]>, out: &mut Vec<Vec<[i32; 2]>>| {
         if cur.len() >= 2 {
-            out.push(cur.iter().map(|p| [p[0].round() as i32, p[1].round() as i32]).collect());
+            out.push(
+                cur.iter()
+                    .map(|p| [p[0].round() as i32, p[1].round() as i32])
+                    .collect(),
+            );
         }
         cur.clear();
     };
     for w in pts.windows(2) {
-        let (a, b) = ([f64::from(w[0][0]), f64::from(w[0][1])], [f64::from(w[1][0]), f64::from(w[1][1])]);
+        let (a, b) = (
+            [f64::from(w[0][0]), f64::from(w[0][1])],
+            [f64::from(w[1][0]), f64::from(w[1][1])],
+        );
         let len = (b[0] - a[0]).hypot(b[1] - a[1]);
         if len == 0.0 {
             continue;
         }
-        let at = |d: f64| [a[0] + (b[0] - a[0]) * d / len, a[1] + (b[1] - a[1]) * d / len];
+        let at = |d: f64| {
+            [
+                a[0] + (b[0] - a[0]) * d / len,
+                a[1] + (b[1] - a[1]) * d / len,
+            ]
+        };
         let mut d = 0.0;
         while d < len {
             let in_dash = phase < on;
@@ -808,11 +1009,18 @@ mod tests {
 
     fn tri_area(m: &Mesh) -> f64 {
         m.fill_idx
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|t| {
-                let (a, b, c) = (m.fill[t[0] as usize], m.fill[t[1] as usize], m.fill[t[2] as usize]);
-                let (ax, ay, bx, by, cx, cy) =
-                    (a.x as f64, a.y as f64, b.x as f64, b.y as f64, c.x as f64, c.y as f64);
+                let (a, b, c) = (
+                    m.fill[t[0] as usize],
+                    m.fill[t[1] as usize],
+                    m.fill[t[2] as usize],
+                );
+                let (ax, ay, bx, by, cx, cy) = (
+                    a.x as f64, a.y as f64, b.x as f64, b.y as f64, c.x as f64, c.y as f64,
+                );
                 ((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)).abs() / 2.0
             })
             .sum()
@@ -827,7 +1035,11 @@ mod tests {
             }
             r
         };
-        let rings = vec![sq(0, 0, 100, true), sq(10, 10, 20, false), sq(200, 0, 50, true)];
+        let rings = vec![
+            sq(0, 0, 100, true),
+            sq(10, 10, 20, false),
+            sq(200, 0, 50, true),
+        ];
         assert_eq!(classify_rings(&rings), vec![0..2, 2..3]);
         // a degenerate ring is skipped, not taken as an exterior
         let rings = vec![vec![[0, 0], [5, 0], [0, 0]], sq(0, 0, 10, true)];
@@ -836,11 +1048,13 @@ mod tests {
 
     #[test]
     fn a_polygon_with_a_hole_triangulates_to_its_area() {
-        let mut m = Mesher::default();
-        m.rings = vec![
-            vec![[0, 0], [100, 0], [100, 100], [0, 100], [0, 0]],
-            vec![[20, 20], [20, 40], [40, 40], [40, 20], [20, 20]],
-        ];
+        let mut m = Mesher {
+            rings: vec![
+                vec![[0, 0], [100, 0], [100, 100], [0, 100], [0, 0]],
+                vec![[20, 20], [20, 40], [40, 40], [40, 20], [20, 20]],
+            ],
+            ..Default::default()
+        };
         m.fill_polygon(0..2, 7);
         assert_eq!(tri_area(&m.mesh), 100.0 * 100.0 - 20.0 * 20.0);
         assert_eq!(m.mesh.fill.len(), 8, "closing duplicates dropped");
@@ -853,7 +1067,12 @@ mod tests {
         // straight: both ends extrude along the unit normal (0, 1) * 32
         m.line_strip(&[[0, 0], [10, 0], [10, 0], [20, 0]], LineClass::RoadMinor);
         assert_eq!(m.mesh.line.len(), 6, "the repeated point is dropped");
-        assert!(m.mesh.line.iter().step_by(2).all(|v| (v.ex, v.ey) == (0, 32)));
+        assert!(m
+            .mesh
+            .line
+            .iter()
+            .step_by(2)
+            .all(|v| (v.ex, v.ey) == (0, 32)));
         assert_eq!(m.mesh.line_idx.len(), 12);
         // a right angle: the miter is sqrt(2) long, along the diagonal
         m.mesh.clear();
@@ -874,8 +1093,10 @@ mod tests {
 
     #[test]
     fn wire_format_header_layout_and_padding() {
-        let mut m = Mesher::default();
-        m.rings = vec![vec![[0, 0], [10, 0], [10, 10], [0, 0]]]; // 3 fill vertices: 18 B, padded
+        let mut m = Mesher {
+            rings: vec![vec![[0, 0], [10, 0], [10, 10], [0, 0]]], // 3 fill vertices: 18 B, padded
+            ..Default::default()
+        };
         m.fill_polygon(0..1, 5);
         m.line_strip(&[[0, 0], [10, 0]], LineClass::RoadMajor);
         let mut out = Vec::new();
@@ -884,12 +1105,23 @@ mod tests {
         assert_eq!(&out[0..4], b"MESH");
         assert_eq!(u32_at(&out, 4), 5);
         assert_eq!(u32_at(&out, 8), 0, "both index blocks u16");
-        assert_eq!([u32_at(&out, 12), u32_at(&out, 16), u32_at(&out, 20), u32_at(&out, 24)], [3, 3, 4, 6]);
+        assert_eq!(
+            [
+                u32_at(&out, 12),
+                u32_at(&out, 16),
+                u32_at(&out, 20),
+                u32_at(&out, 24)
+            ],
+            [3, 3, 4, 6]
+        );
         assert_eq!([u32_at(&out, 28), u32_at(&out, 32)], [0, 0], "no labels");
         // fills at 36: 3 x 6 B = 18, padded to 20; fill indices 3 x 2 = 6, padded to 8
         assert_eq!(out[36 + 4], 5, "first fill vertex color index");
         let line_at = 36 + 20 + 8;
-        assert_eq!(&out[line_at + 4..line_at + 7], &[0, 32, LineClass::RoadMajor as u8]);
+        assert_eq!(
+            &out[line_at + 4..line_at + 7],
+            &[0, 32, LineClass::RoadMajor as u8]
+        );
         assert_eq!(out.len(), line_at + 4 * 8 + 12);
         assert_eq!(out.len() % 4, 0);
     }
@@ -897,25 +1129,67 @@ mod tests {
     #[test]
     fn simplify_keeps_corners_and_drops_near_straight_points() {
         let p = [[0.0, 0.0], [50.0, 1.0], [100.0, 0.0], [100.0, 100.0]];
-        assert_eq!(simplify(&p, 6.0), vec![[0.0, 0.0], [100.0, 0.0], [100.0, 100.0]]);
-        assert_eq!(simplify(&p, 0.5), p.to_vec(), "within tolerance nothing is dropped");
+        assert_eq!(
+            simplify(&p, 6.0),
+            vec![[0.0, 0.0], [100.0, 0.0], [100.0, 100.0]]
+        );
+        assert_eq!(
+            simplify(&p, 0.5),
+            p.to_vec(),
+            "within tolerance nothing is dropped"
+        );
     }
 
     #[test]
     fn a_path_label_reads_left_to_right_and_is_anchored_mid_length() {
         // drawn right to left: reversed so the text is not upside down
         let ring = [[3000, 2000], [2000, 2000], [1000, 2000]];
-        let l = path_label(&ring, 4096, "X St", LabelKind::RoadMinor, LabelExtra { min_zoom: 0, color: 0, priority: 0 }).unwrap();
-        assert_eq!(l.path, vec![[1000, 2000], [3000, 2000]], "collinear middle point simplified away");
+        let l = path_label(
+            &ring,
+            4096,
+            "X St",
+            LabelKind::RoadMinor,
+            LabelExtra {
+                min_zoom: 0,
+                color: 0,
+                priority: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            l.path,
+            vec![[1000, 2000], [3000, 2000]],
+            "collinear middle point simplified away"
+        );
         assert_eq!((l.x, l.y, l.run), (2000, 2000, 2000));
         // a run leaving the tile is cut where it leaves; the longest piece inside wins
-        let out = [[100, 100], [600, 100], [9000, 100], [9000, 900], [700, 900], [100, 900]];
+        let out = [
+            [100, 100],
+            [600, 100],
+            [9000, 100],
+            [9000, 900],
+            [700, 900],
+            [100, 900],
+        ];
         let (piece, len) = longest_inside(&out, 4096).unwrap();
         assert_eq!(piece, vec![[700.0, 900.0], [100.0, 900.0]]);
         assert_eq!(len, 600.0);
         // a long wiggly path is capped at PATH_MAX_POINTS
-        let zig: Vec<[i32; 2]> = (0..400).map(|i| [i * 10, if i % 2 == 0 { 0 } else { 60 }]).collect();
-        let z = path_label(&zig, 4096, "Zig", LabelKind::RoadMinor, LabelExtra { min_zoom: 0, color: 0, priority: 0 }).unwrap();
+        let zig: Vec<[i32; 2]> = (0..400)
+            .map(|i| [i * 10, if i % 2 == 0 { 0 } else { 60 }])
+            .collect();
+        let z = path_label(
+            &zig,
+            4096,
+            "Zig",
+            LabelKind::RoadMinor,
+            LabelExtra {
+                min_zoom: 0,
+                color: 0,
+                priority: 0,
+            },
+        )
+        .unwrap();
         assert!(z.path.len() <= PATH_MAX_POINTS && z.path.len() >= 2);
     }
 
@@ -923,30 +1197,66 @@ mod tests {
     fn a_path_that_one_tolerance_cannot_reduce_still_ends_under_the_cap() {
         // 40 points zigzagging 60 units: simplifying at the tolerance the first version computed
         // (6 x 2 x 40/32 = 15) keeps every point, and it looped forever on a canyon road
-        let zig: Vec<[i32; 2]> = (0..40).map(|i| [i * 50, if i % 2 == 0 { 1000 } else { 1060 }]).collect();
-        let l = path_label(&zig, 4096, "Topanga Canyon", LabelKind::RoadMajor, LabelExtra { min_zoom: 0, color: 0, priority: 0 }).unwrap();
-        assert!(l.path.len() <= PATH_MAX_POINTS && l.path.len() >= 2, "{} points", l.path.len());
+        let zig: Vec<[i32; 2]> = (0..40)
+            .map(|i| [i * 50, if i % 2 == 0 { 1000 } else { 1060 }])
+            .collect();
+        let l = path_label(
+            &zig,
+            4096,
+            "Topanga Canyon",
+            LabelKind::RoadMajor,
+            LabelExtra {
+                min_zoom: 0,
+                color: 0,
+                priority: 0,
+            },
+        )
+        .unwrap();
+        assert!(
+            l.path.len() <= PATH_MAX_POINTS && l.path.len() >= 2,
+            "{} points",
+            l.path.len()
+        );
     }
 
     #[test]
     fn dashes_follow_the_pattern_across_corners() {
         // a straight 100-unit line, 10 on / 15 off: dashes at 0-10, 25-35, 50-60, 75-85
         let d = dash_polyline(&[[0, 0], [100, 0]], 10.0, 15.0);
-        assert_eq!(d, vec![vec![[0, 0], [10, 0]], vec![[25, 0], [35, 0]], vec![[50, 0], [60, 0]], vec![[75, 0], [85, 0]]]);
+        assert_eq!(
+            d,
+            vec![
+                vec![[0, 0], [10, 0]],
+                vec![[25, 0], [35, 0]],
+                vec![[50, 0], [60, 0]],
+                vec![[75, 0], [85, 0]]
+            ]
+        );
         // the pattern carries round a corner: a dash that starts before it keeps the corner point
         let c = dash_polyline(&[[0, 0], [6, 0], [6, 20]], 10.0, 5.0);
         assert_eq!(c[0], vec![[0, 0], [6, 0], [6, 4]]);
         assert_eq!(c[1], vec![[6, 9], [6, 19]]);
         // no dash is longer than `on`, nothing degenerate
-        assert!(dash_polyline(&[[0, 0], [1000, 7]], 33.0, 41.0).iter().all(|d| d.len() >= 2));
+        assert!(dash_polyline(&[[0, 0], [1000, 7]], 33.0, 41.0)
+            .iter()
+            .all(|d| d.len() >= 2));
         assert!(dash_polyline(&[[0, 0]], 5.0, 5.0).is_empty());
     }
 
     #[test]
     fn every_road_class_with_a_casing_has_one_drawn_before_it() {
-        for c in [LineClass::RoadService, LineClass::RoadMinor, LineClass::RoadLink, LineClass::RoadMajor, LineClass::RoadHighway] {
+        for c in [
+            LineClass::RoadService,
+            LineClass::RoadMinor,
+            LineClass::RoadLink,
+            LineClass::RoadMajor,
+            LineClass::RoadHighway,
+        ] {
             let k = casing_of(c).expect("casing");
-            assert!((k as u8) < (LineClass::RoadOther as u8), "{k:?} must come before every road fill");
+            assert!(
+                (k as u8) < (LineClass::RoadOther as u8),
+                "{k:?} must come before every road fill"
+            );
         }
         assert_eq!(casing_of(LineClass::Rail), None);
         assert_eq!(casing_of(LineClass::RoadOther), None);
@@ -955,20 +1265,51 @@ mod tests {
     #[test]
     fn labels_on_the_wire() {
         let mut m = Mesh::default();
-        m.labels.push(Label { x: 10, y: -2, angle: 0.5, run: 300, kind: LabelKind::RoadMajor, min_zoom: 12, icon: 3, color: 4, priority: -7, text: "Ocean Ave".into(), path: vec![[0, 0], [300, -5]] });
-        m.labels.push(Label { x: 1, y: 2, angle: 0.0, run: 0, kind: LabelKind::City, min_zoom: 8, icon: 0, color: 0, priority: 3, text: "Zürich".into(), path: vec![] });
+        m.labels.push(Label {
+            x: 10,
+            y: -2,
+            angle: 0.5,
+            run: 300,
+            kind: LabelKind::RoadMajor,
+            min_zoom: 12,
+            icon: 3,
+            color: 4,
+            priority: -7,
+            text: "Ocean Ave".into(),
+            path: vec![[0, 0], [300, -5]],
+        });
+        m.labels.push(Label {
+            x: 1,
+            y: 2,
+            angle: 0.0,
+            run: 0,
+            kind: LabelKind::City,
+            min_zoom: 8,
+            icon: 0,
+            color: 0,
+            priority: 3,
+            text: "Zürich".into(),
+            path: vec![],
+        });
         let mut out = Vec::new();
         m.to_bytes(&mut out);
         assert_eq!(out.len(), m.byte_len());
         assert_eq!(u32_at(&out, 28), 2);
         let block = u32_at(&out, 32) as usize;
-        assert_eq!(block, (18 + 9 + 8 + 18 + 7 + 3) & !3, "Zürich is 7 bytes of UTF-8; Ocean Ave has 2 path points");
+        assert_eq!(
+            block,
+            (18 + 9 + 8 + 18 + 7 + 3) & !3,
+            "Zürich is 7 bytes of UTF-8; Ocean Ave has 2 path points"
+        );
         let b = &out[36..];
         assert_eq!(i16::from_le_bytes([b[0], b[1]]), 10);
         assert_eq!(i16::from_le_bytes([b[2], b[3]]), -2);
         assert_eq!(i16::from_le_bytes([b[4], b[5]]), 5000);
         assert_eq!(u16::from_le_bytes([b[6], b[7]]), 300);
-        assert_eq!((b[8], b[9], b[10], b[11]), (LabelKind::RoadMajor as u8, 12, 3, 4));
+        assert_eq!(
+            (b[8], b[9], b[10], b[11]),
+            (LabelKind::RoadMajor as u8, 12, 3, 4)
+        );
         assert_eq!(i32::from_le_bytes(b[12..16].try_into().unwrap()), -7);
         assert_eq!(b[16], 9);
         assert_eq!(&b[17..26], b"Ocean Ave");
@@ -988,9 +1329,18 @@ mod tests {
 
     #[test]
     fn indices_widen_past_65535_vertices() {
-        let mut m = Mesh::default();
-        m.fill = vec![FillVertex { x: 0, y: 0, color: 0 }; 65536];
-        m.fill_idx = vec![0, 1, 65535];
+        let m = Mesh {
+            fill: vec![
+                FillVertex {
+                    x: 0,
+                    y: 0,
+                    color: 0
+                };
+                65536
+            ],
+            fill_idx: vec![0, 1, 65535],
+            ..Default::default()
+        };
         let mut out = Vec::new();
         m.to_bytes(&mut out);
         assert_eq!(u32_at(&out, 8), 1, "fill indices u32");

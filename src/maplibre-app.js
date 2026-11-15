@@ -104,12 +104,10 @@ const CACHE_ZOOM_LEVELS = flags.cacheZoomLevels ?? 20; // bench/2026-11-15-cache
 // saves ~130 MB for nothing measurable. MAPS_WORKERS overrides it; setWorkerCount must run before
 // the first map is created.
 maplibregl.setWorkerCount(flags.workers ?? 1);
-const PREFETCH = flags.prefetch ?? 4; // MapLibre's default prefetchZoomDelta
+// prefetchZoomDelta (0-6), fadeDuration (0) and a startup warm-up pass were measured too and changed
+// nothing (bench/2026-11-15-prefetch*, px-fade0, px-warm*.json); MapLibre's defaults stand.
 const map = new maplibregl.Map({
   maxTileCacheZoomLevels: CACHE_ZOOM_LEVELS,
-  prefetchZoomDelta: PREFETCH,
-  // MapLibre fades newly loaded content in over 300 ms by default; MAPS_FADE_MS overrides it
-  fadeDuration: flags.fadeMs ?? 300,
   container: "map",
   style,
   center: [header.centerLon, header.centerLat],
@@ -149,33 +147,6 @@ setInterval(() => {
   pollBackend(stats);
   stats.blocks = blockRows(map, gpu); // the tile walk runs here, once a second, never per frame
 }, 1000);
-// Cache warm-up: before anyone pans, visit the whole region once at a low zoom so its tiles sit in
-// the out-of-view cache. Panning into a new area at high zoom then finds a loaded PARENT to draw,
-// blurry, for the ~30 ms its own tile takes, instead of nothing. MapLibre does not do this by
-// itself: it requests a tile only when the tile enters the view. MAPS_WARM_ZOOM sets the zoom
-// (0 turns warm-up off).
-const WARM_ZOOM = flags.warmZoom ?? 0;
-async function warmUp(b, zoom) {
-  if (!zoom) return 0;
-  const home = { center: map.getCenter(), zoom: map.getZoom() };
-  map.jumpTo({ center: [(b.minLon + b.maxLon) / 2, (b.minLat + b.maxLat) / 2], zoom });
-  // step one viewport at a time across the bounds, waiting for each view's tiles
-  const nw = map.project([b.minLon, b.maxLat]);
-  const se = map.project([b.maxLon, b.minLat]);
-  const w = map.getCanvas().clientWidth;
-  const h = map.getCanvas().clientHeight;
-  let views = 0;
-  for (let y = nw.y + h / 2; y < se.y + h / 2; y += h) {
-    for (let x = nw.x + w / 2; x < se.x + w / 2; x += w) {
-      map.jumpTo({ center: map.unproject([x, y]), zoom });
-      views += 1;
-      if (!map.areTilesLoaded()) await new Promise((r) => map.once("idle", r));
-    }
-  }
-  map.jumpTo(home);
-  return views;
-}
-
 const bounds = { minLon: header.minLon, minLat: header.minLat, maxLon: header.maxLon, maxLat: header.maxLat };
 const bench = async () => {
   if (benching) return;
@@ -184,11 +155,8 @@ const bench = async () => {
   const result = await runBench(map, stats, bounds, { pixelCheck: flags.pixelCheck });
   result.cache_zoom_levels = CACHE_ZOOM_LEVELS;
   result.workers = maplibregl.getWorkerCount();
-  result.prefetch_zoom_delta = PREFETCH;
   result.labels = !flags.noLabels;
-  result.warm_zoom = WARM_ZOOM;
   result.pixel_check = !!flags.pixelCheck;
-  result.fade_ms = flags.fadeMs ?? 300;
   result.cached_parents = patchState;
   result.blocks = blockRows(map, gpu);
   result.cores = navigator.hardwareConcurrency;
@@ -240,9 +208,6 @@ map.once("idle", async () => {
     await invoke("report", { msg: `pan probe: ${Math.round(right_after / 1024)} MB right after the pan` });
     return memprobe("pan");
   }
-  const t0 = performance.now();
-  const views = await warmUp(bounds, WARM_ZOOM);
-  if (views) invoke("report", { msg: `warm-up: ${views} views at z${WARM_ZOOM} in ${Math.round(performance.now() - t0)} ms` });
   if (flags.bench) bench();
 });
 map.once("idle", () => {

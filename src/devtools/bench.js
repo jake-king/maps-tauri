@@ -23,7 +23,7 @@ const summary = (xs) => ({ n: xs.length, avg: r1(avg(xs)), p95: r1(pct(xs, 95)),
 const once = (map, ev) => new Promise((res) => map.once(ev, res));
 
 /** The path's waypoints: ROWS passes west->east and back, inset from the bounds. */
-export function lawnmower(b, rows = ROWS, inset = 0.15) {
+function lawnmower(b, rows = ROWS, inset = 0.15) {
   const dx = (b.maxLon - b.minLon) * inset;
   const dy = (b.maxLat - b.minLat) * inset;
   const pts = [];
@@ -50,7 +50,7 @@ async function pass(map, stats, path) {
         if (map.lastDrawn?.labelMs !== undefined) {
           rec.labelMs.push(map.lastDrawn.labelMs);
           rec.labels.push(map.lastDrawn.labels);
-          (rec.labelFrames ??= []).push({ ms: map.lastDrawn.labelMs, misses: map.lastDrawn.labelMisses, firstSprite: map.lastDrawn.firstSprite, labels: map.lastDrawn.labels });
+          (rec.labelFrames ??= []).push({ ms: map.lastDrawn.labelMs, misses: map.lastDrawn.labelMisses, labels: map.lastDrawn.labels });
         }
         if (v.missing) rec.missing += 1;
         if (v.gray > 0) rec.grayFrames += 1;

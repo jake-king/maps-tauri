@@ -50,11 +50,7 @@ fn coord_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         // The separator is never empty (so `5130` is not 51°, 30°), and `/` is not one.
-        let pat = format!(
-            r"(?xi)^{}(?:\ ?[,;]\ ?|\ ){}$",
-            component(1),
-            component(2)
-        );
+        let pat = format!(r"(?xi)^{}(?:\ ?[,;]\ ?|\ ){}$", component(1), component(2));
         Regex::new(&pat).expect("coordinate pattern compiles")
     })
 }
@@ -227,4 +223,3 @@ pub fn coord_feature(lat: f64, lon: f64) -> serde_json::Value {
         "properties": {"source": "coordinate", "lat": lat, "lon": lon},
     })
 }
-

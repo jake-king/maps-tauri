@@ -10,17 +10,27 @@ use vtile::{mvt, pmtiles::Archive};
 
 fn tri_area(m: &vtile::mesh::Mesh, from: usize) -> f64 {
     m.fill_idx[from..]
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|t| {
-            let (a, b, c) = (m.fill[t[0] as usize], m.fill[t[1] as usize], m.fill[t[2] as usize]);
-            let (ax, ay, bx, by, cx, cy) = (a.x as f64, a.y as f64, b.x as f64, b.y as f64, c.x as f64, c.y as f64);
+            let (a, b, c) = (
+                m.fill[t[0] as usize],
+                m.fill[t[1] as usize],
+                m.fill[t[2] as usize],
+            );
+            let (ax, ay, bx, by, cx, cy) = (
+                a.x as f64, a.y as f64, b.x as f64, b.y as f64, c.x as f64, c.y as f64,
+            );
             ((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)).abs() / 2.0
         })
         .sum()
 }
 
 fn main() -> std::io::Result<()> {
-    let path = std::env::args().nth(1).expect("usage: meshcheck <archive.pmtiles>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: meshcheck <archive.pmtiles>");
     let a = Archive::open(Path::new(&path))?;
     let mut m = Mesher::default();
     let mut rings = Vec::new();
@@ -29,7 +39,9 @@ fn main() -> std::io::Result<()> {
     let mut out = Vec::new();
     let mut per_zoom: std::collections::BTreeMap<u8, [usize; 6]> = Default::default();
     for (z, x, y) in a.all_tiles()? {
-        let Some(bytes) = a.tile(z, x, y)? else { continue };
+        let Some(bytes) = a.tile(z, x, y)? else {
+            continue;
+        };
         // timing: decode + full mesh, as the server will do it
         let t0 = Instant::now();
         let layers = mvt::decode(&bytes)?;
@@ -55,7 +67,10 @@ fn main() -> std::io::Result<()> {
                     .into_iter()
                     .map(|r| {
                         let ext = signed_area(&rings[r.start]).abs();
-                        let holes: f64 = rings[r.start + 1..r.end].iter().map(|h| signed_area(h).abs()).sum();
+                        let holes: f64 = rings[r.start + 1..r.end]
+                            .iter()
+                            .map(|h| signed_area(h).abs())
+                            .sum();
                         (ext - holes) / 2.0
                     })
                     .sum();
@@ -63,13 +78,20 @@ fn main() -> std::io::Result<()> {
                 m.fill_feature(f, 0);
                 let got = tri_area(&m.mesh, 0);
                 polys += 1;
-                let err = if want > 0.0 { (got - want).abs() / want } else { got };
+                let err = if want > 0.0 {
+                    (got - want).abs() / want
+                } else {
+                    got
+                };
                 if err > 1e-6 {
                     bad += 1;
                 }
                 if err > worst {
                     worst = err;
-                    worst_at = format!("{z}/{x}/{y} {} feature {} (want {want}, got {got})", l.name, f.id);
+                    worst_at = format!(
+                        "{z}/{x}/{y} {} feature {} (want {want}, got {got})",
+                        l.name, f.id
+                    );
                 }
             }
         }
@@ -79,9 +101,21 @@ fn main() -> std::io::Result<()> {
     println!("zoom tiles  fills KB  lines KB  decoded MVT KB  vertices  tiles over 65535 vertices (per tile averages)");
     for (z, e) in &per_zoom {
         let n = e[0].max(1);
-        println!("{z:4} {:5} {:9} {:9} {:15} {:9} {:3}", e[0], e[1] / n / 1024, e[2] / n / 1024, e[3] / n / 1024, e[4] / n, e[5]);
+        println!(
+            "{z:4} {:5} {:9} {:9} {:15} {:9} {:3}",
+            e[0],
+            e[1] / n / 1024,
+            e[2] / n / 1024,
+            e[3] / n / 1024,
+            e[4] / n,
+            e[5]
+        );
     }
-    println!("decode + mesh: {:.2} ms/tile avg; meshes {:.1} MB total ({} KB/tile avg)",
-             ms_total / tiles as f64, mesh_bytes as f64 / 1048576.0, mesh_bytes / tiles as usize / 1024);
+    println!(
+        "decode + mesh: {:.2} ms/tile avg; meshes {:.1} MB total ({} KB/tile avg)",
+        ms_total / tiles as f64,
+        mesh_bytes as f64 / 1048576.0,
+        mesh_bytes / tiles as usize / 1024
+    );
     Ok(())
 }

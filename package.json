@@ -9,11 +9,16 @@
     "build": "npm run wasm && vite build",
     "tauri": "tauri",
     "diff": "python3 tools/diff.py",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "check": "tools/check.sh",
+    "lint": "eslint ."
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "@mapbox/vector-tile": "3.0.0",
     "@tauri-apps/cli": "2.12.4",
+    "eslint": "10.15.0",
+    "globals": "17.14.0",
     "pbf": "5.1.2",
     "vite": "8.3.8"
   },

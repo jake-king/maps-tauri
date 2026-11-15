@@ -33,11 +33,15 @@ pub enum Range {
 /// refused rather than half-answered; PMTiles never sends them.
 pub fn parse_range(header: Option<&str>, len: u64) -> Range {
     let Some(h) = header else { return Range::Whole };
-    let Some(spec) = h.trim().strip_prefix("bytes=") else { return Range::Unsatisfiable };
+    let Some(spec) = h.trim().strip_prefix("bytes=") else {
+        return Range::Unsatisfiable;
+    };
     if spec.contains(',') || len == 0 {
         return Range::Unsatisfiable;
     }
-    let Some((a, b)) = spec.split_once('-') else { return Range::Unsatisfiable };
+    let Some((a, b)) = spec.split_once('-') else {
+        return Range::Unsatisfiable;
+    };
     let (a, b) = (a.trim(), b.trim());
     let (start, end) = match (a.is_empty(), b.is_empty()) {
         // bytes=-N: the last N bytes
@@ -69,7 +73,10 @@ fn respond(status: StatusCode) -> tauri::http::response::Builder {
         // The page is served from another origin (Vite in dev, tauri:// in a build), so the
         // archive's headers must be readable cross-origin: pmtiles checks Content-Range and ETag.
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(header::ACCESS_CONTROL_EXPOSE_HEADERS, "Content-Range, Content-Length, ETag")
+        .header(
+            header::ACCESS_CONTROL_EXPOSE_HEADERS,
+            "Content-Range, Content-Length, ETag",
+        )
         .header(header::ACCEPT_RANGES, "bytes")
 }
 
@@ -102,9 +109,12 @@ pub struct MeshCache {
     inner: std::sync::Mutex<MeshCacheInner>,
 }
 
+/// A cached mesh and the tick it was last used at, by tile.
+type MeshEntries = std::collections::HashMap<(u8, u32, u32), (std::sync::Arc<Vec<u8>>, u64)>;
+
 #[derive(Default)]
 struct MeshCacheInner {
-    map: std::collections::HashMap<(u8, u32, u32), (std::sync::Arc<Vec<u8>>, u64)>,
+    map: MeshEntries,
     bytes: usize,
     tick: u64,
     hits: u64,
@@ -113,7 +123,10 @@ struct MeshCacheInner {
 
 impl MeshCache {
     pub fn new(budget_bytes: usize) -> Self {
-        MeshCache { budget: budget_bytes, inner: Default::default() }
+        MeshCache {
+            budget: budget_bytes,
+            inner: Default::default(),
+        }
     }
 
     pub fn get(&self, k: (u8, u32, u32)) -> Option<std::sync::Arc<Vec<u8>>> {
@@ -148,7 +161,9 @@ impl MeshCache {
         }
         c.bytes += v.len();
         while c.bytes > self.budget {
-            let Some((&victim, _)) = c.map.iter().min_by_key(|(_, (_, t))| *t) else { break };
+            let Some((&victim, _)) = c.map.iter().min_by_key(|(_, (_, t))| *t) else {
+                break;
+            };
             if let Some((old, _)) = c.map.remove(&victim) {
                 c.bytes -= old.len();
             }
@@ -179,11 +194,21 @@ pub struct MeshStages {
 /// The native renderer's tiles, through the cache: decoded and meshed in Rust, sent as the mesh wire
 /// format (crates/vtile/src/mesh.rs); 204 when the archive has no such tile. A hit is copied out of
 /// the cache, a miss is built and kept.
-pub fn handle_mesh_cached(archive: &vtile::pmtiles::Archive, cache: &MeshCache, z: u8, x: u32, y: u32) -> (Response<Vec<u8>>, MeshStages) {
+pub fn handle_mesh_cached(
+    archive: &vtile::pmtiles::Archive,
+    cache: &MeshCache,
+    z: u8,
+    x: u32,
+    y: u32,
+) -> (Response<Vec<u8>>, MeshStages) {
     let t0 = std::time::Instant::now();
     if let Some(bytes) = cache.get((z, x, y)) {
         let body = bytes.as_ref().clone();
-        let st = MeshStages { copy: t0.elapsed(), cache_hit: true, ..Default::default() };
+        let st = MeshStages {
+            copy: t0.elapsed(),
+            cache_hit: true,
+            ..Default::default()
+        };
         return (mesh_response(body), st);
     }
     let (res, st) = handle_mesh_timed(archive, z, x, y);
@@ -202,7 +227,12 @@ fn mesh_response(body: Vec<u8>) -> Response<Vec<u8>> {
 }
 
 /// Build one tile's mesh response, with the time each stage took.
-pub fn handle_mesh_timed(archive: &vtile::pmtiles::Archive, z: u8, x: u32, y: u32) -> (Response<Vec<u8>>, MeshStages) {
+pub fn handle_mesh_timed(
+    archive: &vtile::pmtiles::Archive,
+    z: u8,
+    x: u32,
+    y: u32,
+) -> (Response<Vec<u8>>, MeshStages) {
     use std::time::Instant;
     let mut st = MeshStages::default();
     let t0 = Instant::now();
@@ -213,7 +243,9 @@ pub fn handle_mesh_timed(archive: &vtile::pmtiles::Archive, z: u8, x: u32, y: u3
     };
     let t1 = Instant::now();
     st.read = t1 - t0;
-    let Ok(layers) = vtile::mvt::decode(&tile) else { return (error(StatusCode::INTERNAL_SERVER_ERROR), st) };
+    let Ok(layers) = vtile::mvt::decode(&tile) else {
+        return (error(StatusCode::INTERNAL_SERVER_ERROR), st);
+    };
     let t2 = Instant::now();
     st.decode = t2 - t1;
     let body = MESHER.with(|m| {
@@ -243,8 +275,12 @@ pub fn handle(data_dir: &Path, archive_name: &str, req: &Request<Vec<u8>>) -> Re
         return error(StatusCode::NOT_FOUND);
     }
     let path: PathBuf = data_dir.join(archive_name);
-    let Ok(mut file) = File::open(&path) else { return error(StatusCode::NOT_FOUND) };
-    let Ok(meta) = file.metadata() else { return error(StatusCode::INTERNAL_SERVER_ERROR) };
+    let Ok(mut file) = File::open(&path) else {
+        return error(StatusCode::NOT_FOUND);
+    };
+    let Ok(meta) = file.metadata() else {
+        return error(StatusCode::INTERNAL_SERVER_ERROR);
+    };
     let len = meta.len();
     let mtime = meta
         .modified()
@@ -253,7 +289,10 @@ pub fn handle(data_dir: &Path, archive_name: &str, req: &Request<Vec<u8>>) -> Re
         .map_or(0, |d| d.as_secs());
     let etag = format!("\"{len:x}-{mtime:x}\"");
 
-    let range_header = req.headers().get(header::RANGE).and_then(|v| v.to_str().ok());
+    let range_header = req
+        .headers()
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok());
     let (status, start, end) = match parse_range(range_header, len) {
         Range::Bytes(s, e) => (StatusCode::PARTIAL_CONTENT, s, e),
         Range::Whole if len <= MAX_RANGE => (StatusCode::OK, 0, len.saturating_sub(1)),
@@ -265,7 +304,11 @@ pub fn handle(data_dir: &Path, archive_name: &str, req: &Request<Vec<u8>>) -> Re
         }
     };
     let mut body = vec![0u8; (end - start + 1) as usize];
-    if file.seek(SeekFrom::Start(start)).and_then(|_| file.read_exact(&mut body)).is_err() {
+    if file
+        .seek(SeekFrom::Start(start))
+        .and_then(|_| file.read_exact(&mut body))
+        .is_err()
+    {
         return error(StatusCode::INTERNAL_SERVER_ERROR);
     }
     let mut res = respond(status)
@@ -294,14 +337,28 @@ mod tests {
 
     #[test]
     fn unsatisfiable() {
-        for h in ["bytes=100-", "bytes=5-4", "bytes=0-1,5-6", "bytes=-0", "bytes=-", "items=0-1",
-                  "bytes=a-b", "bytes=0-x"] {
+        for h in [
+            "bytes=100-",
+            "bytes=5-4",
+            "bytes=0-1,5-6",
+            "bytes=-0",
+            "bytes=-",
+            "items=0-1",
+            "bytes=a-b",
+            "bytes=0-x",
+        ] {
             assert_eq!(parse_range(Some(h), 100), Range::Unsatisfiable, "{h}");
         }
         assert_eq!(parse_range(Some("bytes=0-0"), 0), Range::Unsatisfiable);
         let big = MAX_RANGE * 2;
-        assert_eq!(parse_range(Some(&format!("bytes=0-{}", MAX_RANGE)), big), Range::Unsatisfiable);
-        assert_eq!(parse_range(Some(&format!("bytes=0-{}", MAX_RANGE - 1)), big), Range::Bytes(0, MAX_RANGE - 1));
+        assert_eq!(
+            parse_range(Some(&format!("bytes=0-{}", MAX_RANGE)), big),
+            Range::Unsatisfiable
+        );
+        assert_eq!(
+            parse_range(Some(&format!("bytes=0-{}", MAX_RANGE - 1)), big),
+            Range::Bytes(0, MAX_RANGE - 1)
+        );
     }
 
     #[test]
@@ -326,8 +383,18 @@ mod tests {
 
     #[test]
     fn mesh_paths() {
-        assert_eq!(parse_mesh_path("/mesh/14/2801/6543"), Some((14, 2801, 6543)));
-        for bad in ["/mesh/14/2801", "/mesh/14/2801/6543/1", "/mesh/1/2/0", "/mesh/x/0/0", "/mesh/25/0/0", "/basemap.pmtiles"] {
+        assert_eq!(
+            parse_mesh_path("/mesh/14/2801/6543"),
+            Some((14, 2801, 6543))
+        );
+        for bad in [
+            "/mesh/14/2801",
+            "/mesh/14/2801/6543/1",
+            "/mesh/1/2/0",
+            "/mesh/x/0/0",
+            "/mesh/25/0/0",
+            "/basemap.pmtiles",
+        ] {
             assert_eq!(parse_mesh_path(bad), None, "{bad}");
         }
     }
@@ -336,8 +403,15 @@ mod tests {
     fn only_listed_paths_are_served() {
         let dir = std::env::temp_dir();
         for p in ["/../Cargo.toml", "/basemap.pmtiles/..", "/etc/passwd", "/"] {
-            let req = Request::builder().uri(format!("tiles://localhost{p}")).body(Vec::new()).unwrap();
-            assert_eq!(handle(&dir, "basemap.pmtiles", &req).status(), StatusCode::NOT_FOUND, "{p}");
+            let req = Request::builder()
+                .uri(format!("tiles://localhost{p}"))
+                .body(Vec::new())
+                .unwrap();
+            assert_eq!(
+                handle(&dir, "basemap.pmtiles", &req).status(),
+                StatusCode::NOT_FOUND,
+                "{p}"
+            );
         }
     }
 }

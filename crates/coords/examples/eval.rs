@@ -8,7 +8,10 @@ fn main() -> io::Result<()> {
     let mut out = BufWriter::new(io::stdout().lock());
     for line in stdin.lock().lines() {
         let q: String = serde_json::from_str(&line?).expect("each line is a JSON string");
-        let coords: Vec<[f64; 2]> = coords::parse_coords(&q).into_iter().map(|(a, b)| [a, b]).collect();
+        let coords: Vec<[f64; 2]> = coords::parse_coords(&q)
+            .into_iter()
+            .map(|(a, b)| [a, b])
+            .collect();
         let row = serde_json::json!({
             "coords": coords,
             "fold": coords::fold(&q),

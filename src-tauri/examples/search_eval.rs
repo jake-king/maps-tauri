@@ -5,7 +5,9 @@ use std::io::{self, BufRead, BufWriter, Write};
 use std::path::Path;
 
 fn main() -> io::Result<()> {
-    let db_path = std::env::args().nth(1).expect("usage: search_eval <geonames.db>");
+    let db_path = std::env::args()
+        .nth(1)
+        .expect("usage: search_eval <geonames.db>");
     let db = maps_tauri_lib::search::open(Path::new(&db_path)).expect("open gazetteer");
     let mut out = BufWriter::new(io::stdout().lock());
     for line in io::stdin().lock().lines() {

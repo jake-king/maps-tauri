@@ -9,11 +9,15 @@ use serde_json::json;
 use vtile::{mvt, pmtiles::Archive};
 
 fn main() -> std::io::Result<()> {
-    let path = std::env::args().nth(1).expect("usage: summary <archive.pmtiles>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: summary <archive.pmtiles>");
     let a = Archive::open(Path::new(&path))?;
     let mut rings = Vec::new();
     for (z, x, y) in a.all_tiles()? {
-        let Some(bytes) = a.tile(z, x, y)? else { continue };
+        let Some(bytes) = a.tile(z, x, y)? else {
+            continue;
+        };
         let mut layers = BTreeMap::new();
         for l in mvt::decode(&bytes)? {
             let (mut types, mut nrings, mut verts, mut sum) = ([0u64; 4], 0u64, 0u64, 0i64);
@@ -28,7 +32,11 @@ fn main() -> std::io::Result<()> {
                         sum += i64::from(p[0]) + 3 * i64::from(p[1]);
                     }
                 }
-                let k = l.prop(f, "kind").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let k = l
+                    .prop(f, "kind")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 *kinds.entry(k).or_default() += 1;
             }
             layers.insert(l.name.clone(), json!({
@@ -36,7 +44,10 @@ fn main() -> std::io::Result<()> {
                 "checksum": sum, "extent": l.extent, "kinds": kinds,
             }));
         }
-        println!("{}", json!({ "tile": format!("{z}/{x}/{y}"), "layers": layers }));
+        println!(
+            "{}",
+            json!({ "tile": format!("{z}/{x}/{y}"), "layers": layers })
+        );
     }
     Ok(())
 }

@@ -51,7 +51,10 @@ fn main() -> std::io::Result<()> {
                         let s3 = Instant::now();
                         m.mesh.to_bytes(&mut out);
                         let s4 = Instant::now();
-                        ([s1 - s0, s2 - s1, s3 - s2, s4 - s3], (s4 - s0).as_secs_f64() * 1000.0)
+                        (
+                            [s1 - s0, s2 - s1, s3 - s2, s4 - s3],
+                            (s4 - s0).as_secs_f64() * 1000.0,
+                        )
                     })
                     .join()
                     .unwrap()

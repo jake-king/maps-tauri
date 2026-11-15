@@ -5,7 +5,7 @@
 
 import palette from "./palette.json" with { type: "json" };
 
-export const KIND = { City: 0, Suburb: 1, Neighbourhood: 2, RoadHighway: 3, RoadMajor: 4, RoadMinor: 5, Poi: 6, Water: 7, Shield: 8 };
+const KIND = { City: 0, Suburb: 1, Neighbourhood: 2, RoadHighway: 3, RoadMajor: 4, RoadMinor: 5, Poi: 6, Water: 7, Shield: 8 };
 
 // placement order by kind, as MapLibre places the style's symbol layers: places, then points of
 // interest, roads and shields, water, and minor streets last
@@ -298,11 +298,6 @@ export class LabelLayer {
     ctx.textBaseline = "middle";
     ctx.lineJoin = "round";
     const sprite = this.sprites.img;
-    this.firstSpriteFrame = false;
-    if (sprite && !this.spriteDrawn && kept.some((c) => c.icon)) {
-      this.spriteDrawn = true;
-      this.firstSpriteFrame = true;
-    }
     this.measureFont = null; // drawing changes the font
     let font = null;
     for (const c of kept) {

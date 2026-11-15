@@ -533,7 +533,6 @@ export class RustMap {
     drawn.labels = this.labelLayer.count;
     drawn.labelMs = performance.now() - lt0;
     drawn.labelMisses = this.labelLayer.frameMisses;
-    drawn.firstSprite = this.labelLayer.firstSpriteFrame;
     this.fire("render");
 
     if (this.anim) this.triggerRepaint();

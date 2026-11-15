@@ -1,7 +1,7 @@
 // Pure pieces of the native renderer: Web Mercator camera math, tile coverage, width interpolation,
 // and the mesh wire format's header. No WebGL, no DOM: tested in tests/geo.test.js.
 
-export const TILE_PX = 512; // the vector pyramid's tile size: a zoom-z tile is 512 px at zoom z
+const TILE_PX = 512; // the vector pyramid's tile size: a zoom-z tile is 512 px at zoom z
 
 /** Longitude/latitude to world coordinates in [0, 1) (x east, y south). */
 export function lngLatToWorld(lng, lat) {

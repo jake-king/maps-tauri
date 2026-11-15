@@ -7,6 +7,7 @@ grouped by function. Exit status is 0 only when they agree on everything.
 
     tools/diff.py [--fuzz N] [--seed S]       SERVE_PY overrides the path to serve.py
 """
+
 import argparse
 import importlib.util
 import json
@@ -14,24 +15,65 @@ import os
 import random
 import sqlite3
 import subprocess
-import unicodedata
 import sys
+import unicodedata
 from collections import defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 INFRA = os.path.join(os.path.dirname(ROOT), "Infrastructure")
-SERVE = os.environ.get("SERVE_PY", os.path.join(INFRA, "containers/epoch/maps/gazetteer/serve.py"))
+SERVE = os.environ.get(
+    "SERVE_PY", os.path.join(INFRA, "containers/epoch/maps/gazetteer/serve.py")
+)
 SELFTEST = os.path.join(INFRA, "ci/maps-search-selftest.py")
 
 NAMES = [
-    "Reykjavík", "São Paulo", "Zürich", "Đà Nẵng", "İstanbul", "Straße", "ΟΔΟΣ", "Ḩajjah",
-    "नई दिल्ली", "กรุงเทพมหานคร", "서울특별시", "東京都", "Ｔｏｋｙｏ", "ﬁnland", "Kelvin",
-    "القاهرة", "قَاهِرَة", "ירושלים", "יְרוּשָׁלַיִם", "Ελληνικά", "Ǆemal", "Ŀlorenç", "١٢٣",
-    "१२३", "x²", "Ⅻ", "St. John's", "Coeur d'Alene", "Wrocław", "Øresund", "Þingvellir",
+    "Reykjavík",
+    "São Paulo",
+    "Zürich",
+    "Đà Nẵng",
+    "İstanbul",
+    "Straße",
+    "ΟΔΟΣ",
+    "Ḩajjah",
+    "नई दिल्ली",
+    "กรุงเทพมหานคร",
+    "서울특별시",
+    "東京都",
+    "Ｔｏｋｙｏ",
+    "ﬁnland",
+    "Kelvin",
+    "القاهرة",
+    "قَاهِرَة",
+    "ירושלים",
+    "יְרוּשָׁלַיִם",
+    "Ελληνικά",
+    "Ǆemal",
+    "Ŀlorenç",
+    "١٢٣",
+    "१२३",
+    "x²",
+    "Ⅻ",
+    "St. John's",
+    "Coeur d'Alene",
+    "Wrocław",
+    "Øresund",
+    "Þingvellir",
 ]
 FUZZ_ALPHABET = list("0123456789.-+ ,;°º'\"NSEWnsewa/e") + [
-    "′", "″", "ſ", " ", " ", "\u001c", "\u0085", " ", "٥", "١", "１", "\t", "\n",
+    "′",
+    "″",
+    "ſ",
+    " ",
+    " ",
+    "\u001c",
+    "\u0085",
+    " ",
+    "٥",
+    "١",
+    "１",
+    "\t",
+    "\n",
 ]
 
 
@@ -44,13 +86,17 @@ def load(path, name):
 
 def corpus(fuzz, seed):
     st = load(SELFTEST, "selftest")
-    items = [q for q, _ in st.COORD_CASES] + st.COORD_REFUSED + st.COORD_REFUSED_REALISTIC
+    items = (
+        [q for q, _ in st.COORD_CASES] + st.COORD_REFUSED + st.COORD_REFUSED_REALISTIC
+    )
     items += st.COORD_HOSTILE + st.ADVERSARIAL + st.FOLD_CASES + NAMES
     for name in [row[1] for row in st.FIXTURE] + NAMES:
         items += [name[:i] for i in range(1, len(name) + 1)]
     rng = random.Random(seed)
     for _ in range(fuzz):
-        items.append("".join(rng.choice(FUZZ_ALPHABET) for _ in range(rng.randint(1, 28))))
+        items.append(
+            "".join(rng.choice(FUZZ_ALPHABET) for _ in range(rng.randint(1, 28)))
+        )
     seen, out = set(), []
     for q in items:
         if q not in seen:
@@ -71,7 +117,10 @@ def rust_side(inputs):
     proc = subprocess.run(
         ["cargo", "run", "-q", "--release", "-p", "coords", "--example", "eval"],
         input="".join(json.dumps(q) + "\n" for q in inputs),
-        capture_output=True, text=True, cwd=ROOT, check=True,
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=True,
     )
     # Split on "\n" only: serde_json leaves U+2028 and U+0085 unescaped, and splitlines() would
     # break a row at them.
@@ -87,7 +136,9 @@ def fts_tokens(query):
     if query is None:
         return None
     db = sqlite3.connect(":memory:")
-    db.execute('CREATE VIRTUAL TABLE t USING fts5(x, tokenize="unicode61 remove_diacritics 2")')
+    db.execute(
+        'CREATE VIRTUAL TABLE t USING fts5(x, tokenize="unicode61 remove_diacritics 2")'
+    )
     db.execute("CREATE VIRTUAL TABLE v USING fts5vocab(t, instance)")
     db.execute("INSERT INTO t VALUES (?)", (query.removesuffix("*").strip('"'),))
     return [row[0] for row in db.execute("SELECT term FROM v ORDER BY offset")]
@@ -103,13 +154,17 @@ EXPLAINED = {
     # Python's \d and float() accept any Unicode decimal digit ("١", "５"); the port reads ASCII
     # digits only. Refusing sends the text to the gazetteer, the safe direction by serve.py's own
     # rule, and nobody types an Arabic-Indic coordinate on purpose.
-    "coords": ("non-ASCII digits refused by the port",
-               lambda q, p, r: has_non_ascii_digit(q) and r == []),
+    "coords": (
+        "non-ASCII digits refused by the port",
+        lambda q, p, r: has_non_ascii_digit(q) and r == [],
+    ),
     # Python splits words at combining marks (Indic vowel signs, Arabic harakat, Hebrew niqqud);
     # the port keeps them in the word. FTS5 re-tokenizes the phrase either way, so the two
     # queries find the same rows.
-    "fts": ("same FTS5 tokens, different query text",
-            lambda q, p, r: fts_tokens(p) == fts_tokens(r)),
+    "fts": (
+        "same FTS5 tokens, different query text",
+        lambda q, p, r: fts_tokens(p) == fts_tokens(r),
+    ),
 }
 
 
@@ -132,7 +187,9 @@ def main():
             if p[key] != r[key]:
                 diffs[key].append((q, p[key], r[key]))
 
-    print(f"{len(inputs)} inputs (seed {args.seed}); python accepted {accepted} as coordinates")
+    print(
+        f"{len(inputs)} inputs (seed {args.seed}); python accepted {accepted} as coordinates"
+    )
     failed = False
     for key in ("coords", "fold", "fts"):
         rows = diffs[key]

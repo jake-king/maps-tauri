@@ -53,8 +53,8 @@ fn dev_stats(
 
 /// Development switches from the environment, so a benchmark can compare settings without code
 /// edits. `MAPS_BENCH=1` runs the pan benchmark at startup; `MAPS_CACHE_ZOOMS=<n>` overrides
-/// MapLibre's maxTileCacheZoomLevels, `MAPS_WORKERS=<n>` its worker count, `MAPS_PREFETCH=<n>` its
-/// prefetchZoomDelta (the frontend's defaults when unset).
+/// MapLibre's maxTileCacheZoomLevels, `MAPS_WORKERS=<n>` its worker count (the frontend's defaults
+/// when unset).
 #[tauri::command]
 fn dev_flags() -> serde_json::Value {
     let num = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u32>().ok());
@@ -62,11 +62,8 @@ fn dev_flags() -> serde_json::Value {
         "bench": std::env::var("MAPS_BENCH").is_ok_and(|v| v == "1"),
         "cacheZoomLevels": num("MAPS_CACHE_ZOOMS"),
         "workers": num("MAPS_WORKERS"),
-        "prefetch": num("MAPS_PREFETCH"),
         "noLabels": std::env::var("MAPS_NO_LABELS").is_ok_and(|v| v == "1"),
-        "warmZoom": num("MAPS_WARM_ZOOM"),
         "pixelCheck": std::env::var("MAPS_PIXEL_CHECK").is_ok_and(|v| v == "1"),
-        "fadeMs": num("MAPS_FADE_MS"),
         // MAPS_MEMPROBE=blank|idle|pan: report per-process memory at that stage, then exit
         "memprobe": std::env::var("MAPS_MEMPROBE").ok(),
         // MAPS_RENDERER=rust: the native renderer (Rust decodes and meshes, WebGL draws)
@@ -113,7 +110,11 @@ struct ArchiveState(Arc<Option<vtile::pmtiles::Archive>>, &'static str);
 /// renderer needs to place its camera, without loading a JavaScript tile library.
 #[tauri::command]
 fn archive_info(state: tauri::State<'_, ArchiveState>) -> Result<serde_json::Value, String> {
-    let a = state.0.as_ref().as_ref().ok_or("no archive could be opened")?;
+    let a = state
+        .0
+        .as_ref()
+        .as_ref()
+        .ok_or("no archive could be opened")?;
     let h = &a.header;
     Ok(serde_json::json!({
         "minZoom": h.min_zoom, "maxZoom": h.max_zoom,
@@ -140,12 +141,18 @@ fn remote_url() -> Option<String> {
 /// a renderer's output without the screen. Development only.
 #[tauri::command]
 fn save_snapshot(name: String, data_url: String) -> Result<String, String> {
-    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         return Err("snapshot name: letters, digits, - and _ only".into());
     }
-    let b64 = data_url.strip_prefix("data:image/png;base64,").ok_or("not a PNG data URL")?;
+    let b64 = data_url
+        .strip_prefix("data:image/png;base64,")
+        .ok_or("not a PNG data URL")?;
     let png = base64_decode(b64).ok_or("bad base64")?;
-    let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../logs")).join(format!("snapshot-{name}.png"));
+    let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../logs"))
+        .join(format!("snapshot-{name}.png"));
     std::fs::write(&path, png).map_err(|e| e.to_string())?;
     Ok(path.display().to_string())
 }
@@ -162,7 +169,10 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
             _ => return None,
         } as u32)
     };
-    let bytes: Vec<u8> = s.bytes().filter(|&c| c != b'=' && !c.is_ascii_whitespace()).collect();
+    let bytes: Vec<u8> = s
+        .bytes()
+        .filter(|&c| c != b'=' && !c.is_ascii_whitespace())
+        .collect();
     let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
     for chunk in bytes.chunks(4) {
         let mut n = 0u32;
@@ -187,9 +197,19 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
 fn archive_name() -> String {
     std::env::var("MAPS_ARCHIVE")
         .ok()
-        .filter(|n| !n.is_empty() && !n.starts_with('.') && n.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)))
+        .filter(|n| {
+            !n.is_empty()
+                && !n.starts_with('.')
+                && n.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+        })
         .unwrap_or_else(|| {
-            if data_dir().join("westla.pmtiles").exists() { "westla.pmtiles" } else { "basemap.pmtiles" }.into()
+            if data_dir().join("westla.pmtiles").exists() {
+                "westla.pmtiles"
+            } else {
+                "basemap.pmtiles"
+            }
+            .into()
         })
 }
 
@@ -216,14 +236,20 @@ pub fn run() {
     // local extract. The MapLibre app always reads the local file through tiles://basemap.pmtiles.
     let (archive, source) = match remote_url().map(|u| vtile::pmtiles::Archive::open_url(&u)) {
         Some(Ok(a)) => {
-            println!("[archive] remote planet, zooms {}-{}", a.header.min_zoom, a.header.max_zoom);
+            println!(
+                "[archive] remote planet, zooms {}-{}",
+                a.header.min_zoom, a.header.max_zoom
+            );
             (Some(a), "remote")
         }
         other => {
             if let Some(Err(e)) = other {
                 eprintln!("[archive] remote planet unreachable ({e}); using the local extract");
             }
-            (vtile::pmtiles::Archive::open(&data.join(&archive_file)).ok(), "local")
+            (
+                vtile::pmtiles::Archive::open(&data.join(&archive_file)).ok(),
+                "local",
+            )
         }
     };
     let archive = Arc::new(archive);
@@ -235,7 +261,10 @@ pub fn run() {
     // without this cache; it cost ~20 MB and halved only requests already ahead of the view
     // (bench/2026-11-15-{nc-ring1,small-gpu-rust*,fast-rust*}.json). Kept for cases prefetch cannot
     // cover, off until one is measured.
-    let cache_mb: usize = std::env::var("MAPS_MESH_CACHE_MB").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let cache_mb: usize = std::env::var("MAPS_MESH_CACHE_MB")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     let mesh_cache = Arc::new(tiles::MeshCache::new(cache_mb << 20));
     let handler_cache = mesh_cache.clone();
     let handler_stages = stage_times.clone();
@@ -243,7 +272,10 @@ pub fn run() {
     // A control for the benchmark's gray-box measure: slow every tile response down on purpose.
     // If gray frames do not climb as this grows, the measure is not measuring.
     let tile_delay = std::time::Duration::from_millis(
-        std::env::var("MAPS_TILE_DELAY_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+        std::env::var("MAPS_TILE_DELAY_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
     );
     tauri::Builder::default()
         .manage(gazetteer)
@@ -269,7 +301,10 @@ pub fn run() {
                     std::thread::sleep(tile_delay);
                 }
                 let t0 = Instant::now();
-                let res = match (tiles::parse_mesh_path(request.uri().path()), archive.as_ref()) {
+                let res = match (
+                    tiles::parse_mesh_path(request.uri().path()),
+                    archive.as_ref(),
+                ) {
                     (Some((z, x, y)), Some(a)) => {
                         let (res, st) = tiles::handle_mesh_cached(a, &cache, z, x, y);
                         stages.record(wait, &st, inflight);
@@ -280,14 +315,31 @@ pub fn run() {
                 stages.inflight.fetch_sub(1, Ordering::Relaxed);
                 times.record(t0.elapsed(), res.body().len());
                 if log_tiles {
-                    let range = request.headers().get("range").and_then(|v| v.to_str().ok()).unwrap_or("-");
-                    println!("[tiles] {} {} range={range} -> {} ({} B)",
-                             request.method(), request.uri().path(), res.status().as_u16(), res.body().len());
+                    let range = request
+                        .headers()
+                        .get("range")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("-");
+                    println!(
+                        "[tiles] {} {} range={range} -> {} ({} B)",
+                        request.method(),
+                        request.uri().path(),
+                        res.status().as_u16(),
+                        res.body().len()
+                    );
                 }
                 responder.respond(res);
             });
         })
-        .invoke_handler(tauri::generate_handler![report, search, dev_stats, dev_flags, bench_done, archive_info, save_snapshot])
+        .invoke_handler(tauri::generate_handler![
+            report,
+            search,
+            dev_stats,
+            dev_flags,
+            bench_done,
+            archive_info,
+            save_snapshot
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

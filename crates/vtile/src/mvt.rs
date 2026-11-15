@@ -21,7 +21,11 @@ pub enum Value {
 
 impl Value {
     pub fn as_str(&self) -> Option<&str> {
-        if let Value::String(s) = self { Some(s) } else { None }
+        if let Value::String(s) = self {
+            Some(s)
+        } else {
+            None
+        }
     }
     pub fn as_f64(&self) -> Option<f64> {
         match *self {
@@ -64,7 +68,12 @@ impl Layer {
     /// The value of property `key` on feature `f`.
     pub fn prop<'a>(&'a self, f: &Feature, key: &str) -> Option<&'a Value> {
         let k = self.keys.iter().position(|x| x == key)? as u32;
-        f.tags.chunks_exact(2).find(|p| p[0] == k).and_then(|p| self.values.get(p[1] as usize))
+        f.tags
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .find(|p| p[0] == k)
+            .and_then(|p| self.values.get(p[1] as usize))
     }
 }
 
@@ -88,7 +97,9 @@ fn next_field<'a>(b: &'a [u8], p: &mut usize) -> io::Result<(u32, Field<'a>)> {
         }
         2 => {
             let n = varint(b, p)? as usize;
-            let s = b.get(*p..*p + n).ok_or_else(|| bad("truncated bytes field"))?;
+            let s = b
+                .get(*p..*p + n)
+                .ok_or_else(|| bad("truncated bytes field"))?;
             *p += n;
             Field::Bytes(s)
         }
@@ -148,7 +159,13 @@ fn feature(b: &[u8]) -> io::Result<Feature> {
 }
 
 fn layer(b: &[u8]) -> io::Result<Layer> {
-    let mut l = Layer { name: String::new(), extent: 4096, keys: vec![], values: vec![], features: vec![] };
+    let mut l = Layer {
+        name: String::new(),
+        extent: 4096,
+        keys: vec![],
+        values: vec![],
+        features: vec![],
+    };
     let mut p = 0;
     while p < b.len() {
         match next_field(b, &mut p)? {
@@ -190,7 +207,9 @@ pub fn geometry(cmds: &[u32], out: &mut Vec<Vec<[i32; 2]>>) {
         match id {
             1 | 2 => {
                 for _ in 0..count {
-                    let (Some(&dx), Some(&dy)) = (cmds.get(i), cmds.get(i + 1)) else { break };
+                    let (Some(&dx), Some(&dy)) = (cmds.get(i), cmds.get(i + 1)) else {
+                        break;
+                    };
                     i += 2;
                     x += zz(dx);
                     y += zz(dy);
@@ -246,7 +265,10 @@ mod tests {
 
     #[test]
     fn values_by_wire_type() {
-        assert_eq!(value(&[0x0a, 2, b'h', b'i']).unwrap(), Value::String("hi".into()));
+        assert_eq!(
+            value(&[0x0a, 2, b'h', b'i']).unwrap(),
+            Value::String("hi".into())
+        );
         assert_eq!(value(&[0x30, 3]).unwrap(), Value::Int(-2)); // sint64 zigzag 3 = -2
         assert_eq!(value(&[0x38, 1]).unwrap(), Value::Bool(true));
         assert_eq!(value(&[0x20, 7]).unwrap(), Value::Int(7));

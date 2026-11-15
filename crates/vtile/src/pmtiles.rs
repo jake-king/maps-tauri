@@ -92,7 +92,15 @@ pub fn parse_directory(b: &[u8]) -> io::Result<Vec<Entry>> {
     if n > b.len() {
         return Err(bad("directory entry count exceeds its size"));
     }
-    let mut e = vec![Entry { tile_id: 0, offset: 0, length: 0, run_length: 0 }; n];
+    let mut e = vec![
+        Entry {
+            tile_id: 0,
+            offset: 0,
+            length: 0,
+            run_length: 0
+        };
+        n
+    ];
     let mut last = 0u64;
     for x in e.iter_mut() {
         last += varint(b, &mut p)?;
@@ -106,7 +114,11 @@ pub fn parse_directory(b: &[u8]) -> io::Result<Vec<Entry>> {
     }
     for i in 0..n {
         let v = varint(b, &mut p)?;
-        e[i].offset = if v == 0 && i > 0 { e[i - 1].offset + u64::from(e[i - 1].length) } else { v.saturating_sub(1) };
+        e[i].offset = if v == 0 && i > 0 {
+            e[i - 1].offset + u64::from(e[i - 1].length)
+        } else {
+            v.saturating_sub(1)
+        };
     }
     Ok(e)
 }
@@ -137,7 +149,10 @@ pub fn zxy_to_tile_id(z: u8, x: u32, y: u32) -> u64 {
 pub fn find(entries: &[Entry], id: u64) -> Option<Entry> {
     let i = entries.partition_point(|e| e.tile_id <= id);
     let e = *entries.get(i.checked_sub(1)?)?;
-    if e.tile_id == id || (e.run_length > 0 && id < e.tile_id + u64::from(e.run_length)) || e.run_length == 0 {
+    if e.tile_id == id
+        || (e.run_length > 0 && id < e.tile_id + u64::from(e.run_length))
+        || e.run_length == 0
+    {
         // run_length 0 marks a leaf directory, which may hold the id
         Some(e)
     } else {
@@ -156,7 +171,10 @@ pub fn gunzip(b: &[u8], out: &mut Vec<u8>) -> io::Result<()> {
 enum Source {
     File(File),
     #[cfg(feature = "http")]
-    Http { agent: ureq::Agent, url: String },
+    Http {
+        agent: ureq::Agent,
+        url: String,
+    },
 }
 
 impl Source {
@@ -173,14 +191,29 @@ impl Source {
                     return Ok(Vec::new());
                 }
                 let range = format!("bytes={}-{}", offset, offset + len as u64 - 1);
-                let mut res = agent.get(url).header("Range", &range).call().map_err(io::Error::other)?;
+                let mut res = agent
+                    .get(url)
+                    .header("Range", &range)
+                    .call()
+                    .map_err(io::Error::other)?;
                 if res.status().as_u16() != 206 {
                     // a 200 here would be the whole planet: refuse rather than read it
-                    return Err(bad(&format!("expected 206 Partial Content for {range}, got {}", res.status())));
+                    return Err(bad(&format!(
+                        "expected 206 Partial Content for {range}, got {}",
+                        res.status()
+                    )));
                 }
-                let buf = res.body_mut().with_config().limit(64 << 20).read_to_vec().map_err(io::Error::other)?;
+                let buf = res
+                    .body_mut()
+                    .with_config()
+                    .limit(64 << 20)
+                    .read_to_vec()
+                    .map_err(io::Error::other)?;
                 if buf.len() != len {
-                    return Err(bad(&format!("asked for {len} bytes at {offset}, got {}", buf.len())));
+                    return Err(bad(&format!(
+                        "asked for {len} bytes at {offset}, got {}",
+                        buf.len()
+                    )));
                 }
                 Ok(buf)
             }
@@ -192,11 +225,14 @@ impl Source {
 /// trip over the network, so a region's leaf is fetched once and kept.
 const LEAF_CACHE: usize = 512;
 
+/// Leaf directories by (offset, length) within the leaf section.
+type LeafCache = HashMap<(u64, u64), Arc<Vec<Entry>>>;
+
 pub struct Archive {
     source: Source,
     pub header: Header,
     root: Vec<Entry>,
-    leaves: Mutex<HashMap<(u64, u64), Arc<Vec<Entry>>>>,
+    leaves: Mutex<LeafCache>,
     /// round trips made (header/root, leaves, tiles): for measuring a remote archive
     pub reads: std::sync::atomic::AtomicU64,
 }
@@ -214,7 +250,10 @@ impl Archive {
             .http_status_as_error(false) // a non-206 is reported by Source::read
             .build()
             .into();
-        Self::from_source(Source::Http { agent, url: url.to_owned() })
+        Self::from_source(Source::Http {
+            agent,
+            url: url.to_owned(),
+        })
     }
 
     fn from_source(source: Source) -> io::Result<Self> {
@@ -224,7 +263,13 @@ impl Archive {
             return Err(bad("this reader handles gzip-compressed archives only"));
         }
         let root = Self::read_dir(&source, header.root_offset, header.root_length)?;
-        Ok(Archive { source, header, root, leaves: Mutex::new(HashMap::new()), reads: Default::default() })
+        Ok(Archive {
+            source,
+            header,
+            root,
+            leaves: Mutex::new(HashMap::new()),
+            reads: Default::default(),
+        })
     }
 
     fn read_dir(source: &Source, offset: u64, length: u64) -> io::Result<Vec<Entry>> {
@@ -235,11 +280,21 @@ impl Archive {
     }
 
     fn leaf(&self, offset: u64, length: u64) -> io::Result<Arc<Vec<Entry>>> {
-        if let Some(l) = self.leaves.lock().expect("leaf cache").get(&(offset, length)) {
+        if let Some(l) = self
+            .leaves
+            .lock()
+            .expect("leaf cache")
+            .get(&(offset, length))
+        {
             return Ok(l.clone());
         }
-        self.reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = Arc::new(Self::read_dir(&self.source, self.header.leaf_offset + offset, length)?);
+        self.reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = Arc::new(Self::read_dir(
+            &self.source,
+            self.header.leaf_offset + offset,
+            length,
+        )?);
         let mut c = self.leaves.lock().expect("leaf cache");
         if c.len() >= LEAF_CACHE {
             c.clear(); // crude, but bounded: refill on demand
@@ -254,7 +309,9 @@ impl Archive {
         let mut leaf: Option<Arc<Vec<Entry>>> = None;
         for _depth in 0..4 {
             let dir: &[Entry] = leaf.as_deref().map_or(&self.root, |v| v);
-            let Some(e) = find(dir, id) else { return Ok(None) };
+            let Some(e) = find(dir, id) else {
+                return Ok(None);
+            };
             if e.run_length == 0 {
                 leaf = Some(self.leaf(e.offset, u64::from(e.length))?);
                 continue;
@@ -262,8 +319,11 @@ impl Archive {
             if id >= e.tile_id + u64::from(e.run_length) {
                 return Ok(None);
             }
-            self.reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let raw = self.source.read(self.header.tile_data_offset + e.offset, e.length as usize)?;
+            self.reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let raw = self
+                .source
+                .read(self.header.tile_data_offset + e.offset, e.length as usize)?;
             let mut out = Vec::new();
             gunzip(&raw, &mut out)?;
             return Ok(Some(out));
@@ -278,7 +338,11 @@ impl Archive {
         while let Some(dir) = stack.pop() {
             for e in dir {
                 if e.run_length == 0 {
-                    stack.push(Self::read_dir(&self.source, self.header.leaf_offset + e.offset, u64::from(e.length))?);
+                    stack.push(Self::read_dir(
+                        &self.source,
+                        self.header.leaf_offset + e.offset,
+                        u64::from(e.length),
+                    )?);
                 } else {
                     for id in e.tile_id..e.tile_id + u64::from(e.run_length) {
                         out.push(tile_id_to_zxy(id));
@@ -346,7 +410,11 @@ mod tests {
             let n = 1u32 << z;
             for x in (0..n).step_by(((n / 7).max(1)) as usize) {
                 for y in (0..n).step_by(((n / 5).max(1)) as usize) {
-                    assert_eq!(tile_id_to_zxy(zxy_to_tile_id(z, x, y)), (z, x, y), "{z}/{x}/{y}");
+                    assert_eq!(
+                        tile_id_to_zxy(zxy_to_tile_id(z, x, y)),
+                        (z, x, y),
+                        "{z}/{x}/{y}"
+                    );
                 }
             }
         }
@@ -367,7 +435,23 @@ mod tests {
         // 2 entries: ids 5, 7; runs 1, 1; lengths 10, 20; offsets 100 (stored +1 = 101), then 0 = follows
         let d = [2, 5, 2, 1, 1, 10, 20, 101, 0];
         let e = parse_directory(&d).unwrap();
-        assert_eq!(e[0], Entry { tile_id: 5, offset: 100, length: 10, run_length: 1 });
-        assert_eq!(e[1], Entry { tile_id: 7, offset: 110, length: 20, run_length: 1 });
+        assert_eq!(
+            e[0],
+            Entry {
+                tile_id: 5,
+                offset: 100,
+                length: 10,
+                run_length: 1
+            }
+        );
+        assert_eq!(
+            e[1],
+            Entry {
+                tile_id: 7,
+                offset: 110,
+                length: 20,
+                run_length: 1
+            }
+        );
     }
 }
