@@ -44,6 +44,17 @@ Needs `wasm-pack` in `~/.cargo/bin` and `go-pmtiles` in `~/go/bin`.
   it at startup, prints one `[bench]` JSON line and exits. Results to compare against live in
   `bench/`.
 
+Benchmark switches (environment variables, no rebuild needed with `SKIP_BUILD=1`):
+`MAPS_CACHE_ZOOMS`, `MAPS_WORKERS`, `MAPS_PREFETCH`, `MAPS_FADE_MS`, `MAPS_WARM_ZOOM`,
+`MAPS_NO_LABELS=1`, `MAPS_CACHED_PARENTS=0`, `MAPS_TILE_DELAY_MS` (a control: slows every tile),
+and `MAPS_PIXEL_CHECK=1` (magenta background, counts it in every frame: coverage truth, timings
+invalid). The investigation and every result are written up in `docs/JOURNAL.md`.
+
+## MapLibre patch
+`src/maplibre-patch.js` makes MapLibre draw a loaded parent from its cache while a newly visible
+tile decodes, instead of the background (gray boxes in 30% of first-visit frames before, 0%
+after). It overrides a private method, so it applies only to MapLibre 6.7.0. See the journal.
+
 ## Known differences from the Python
 The full search path matches `serve.py` exactly: 156 queries, 896 features, identical.
 
