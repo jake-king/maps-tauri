@@ -77,6 +77,45 @@ fn error(status: StatusCode) -> Response<Vec<u8>> {
     respond(status).body(Vec::new()).expect("static response")
 }
 
+thread_local! {
+    /// Each blocking-pool thread keeps one mesher and one output buffer, reused request after
+    /// request: their capacity grows to the largest tile seen and stays (guile-2d's scratch memory).
+    static MESHER: std::cell::RefCell<(vtile::mesh::Mesher, Vec<u8>)> = Default::default();
+}
+
+/// `/mesh/{z}/{x}/{y}` -> the tile's z/x/y in the archive, or None for any other path.
+pub fn parse_mesh_path(path: &str) -> Option<(u8, u32, u32)> {
+    let mut it = path.strip_prefix("/mesh/")?.split('/');
+    let z: u8 = it.next()?.parse().ok()?;
+    let x: u32 = it.next()?.parse().ok()?;
+    let y: u32 = it.next()?.parse().ok()?;
+    if it.next().is_some() || z > 24 || x >= (1 << z) || y >= (1 << z) {
+        return None;
+    }
+    Some((z, x, y))
+}
+
+/// The native renderer's tiles: decoded and meshed in Rust, sent as the mesh wire format
+/// (crates/vtile/src/mesh.rs). 204 when the archive has no such tile.
+pub fn handle_mesh(archive: &vtile::pmtiles::Archive, z: u8, x: u32, y: u32) -> Response<Vec<u8>> {
+    let tile = match archive.tile(z, x, y) {
+        Ok(Some(t)) => t,
+        Ok(None) => return error(StatusCode::NO_CONTENT),
+        Err(_) => return error(StatusCode::INTERNAL_SERVER_ERROR),
+    };
+    let Ok(layers) = vtile::mvt::decode(&tile) else { return error(StatusCode::INTERNAL_SERVER_ERROR) };
+    let body = MESHER.with(|m| {
+        let (mesher, out) = &mut *m.borrow_mut();
+        mesher.build(&layers, z).to_bytes(out);
+        out.clone()
+    });
+    respond(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::CONTENT_LENGTH, body.len())
+        .body(body)
+        .expect("valid response")
+}
+
 /// Answer one request. Runs on a worker thread, never the UI thread.
 pub fn handle(data_dir: &Path, req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     if req.method() == tauri::http::Method::OPTIONS {
@@ -148,6 +187,14 @@ mod tests {
         let big = MAX_RANGE * 2;
         assert_eq!(parse_range(Some(&format!("bytes=0-{}", MAX_RANGE)), big), Range::Unsatisfiable);
         assert_eq!(parse_range(Some(&format!("bytes=0-{}", MAX_RANGE - 1)), big), Range::Bytes(0, MAX_RANGE - 1));
+    }
+
+    #[test]
+    fn mesh_paths() {
+        assert_eq!(parse_mesh_path("/mesh/14/2801/6543"), Some((14, 2801, 6543)));
+        for bad in ["/mesh/14/2801", "/mesh/14/2801/6543/1", "/mesh/1/2/0", "/mesh/x/0/0", "/mesh/25/0/0", "/basemap.pmtiles"] {
+            assert_eq!(parse_mesh_path(bad), None, "{bad}");
+        }
     }
 
     #[test]

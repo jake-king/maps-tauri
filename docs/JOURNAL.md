@@ -405,3 +405,64 @@ buffers per tile measured by the GPU ledger. 32-bit indices, full colors in ever
 extrusion vectors were the waste. Version 2 uses 16-bit indices (32-bit only past 65,535 vertices,
 which no tile here reaches), palette indices instead of colors, and `i8` extrusion: 6-byte fill and
 8-byte line vertices, 235 KB per zoom-14 tile.
+
+## R2: the WebGL renderer, and R3: measured against MapLibre
+
+The backend serves `tiles://localhost/mesh/{z}/{x}/{y}`: the tile decoded and meshed in Rust on
+request (about 1.7 ms), each blocking-pool thread reusing one mesher and one output buffer.
+`src/main.js` now picks a renderer, and only the chosen one is imported, so a `MAPS_RENDERER=rust`
+run never loads MapLibre's code. `archive_info` reads the archive's bounds in Rust, so the native
+app loads no JavaScript tile library either.
+
+`src/rust-renderer/renderer.js` (about 450 lines) fetches meshes, uploads them as they arrive (the
+only parsing is a 28-byte header) and draws two calls a tile. Each needed tile is drawn clipped to
+its own rectangle (WebGL scissor); a tile still loading is replaced by its nearest loaded ancestor,
+clipped the same way, and each needed tile's ancestor three zooms up is requested as a backstop.
+That is the behaviour MapLibre needed a patch for, built in, with no draw-order problems between
+tiles. The renderer also implements the part of MapLibre's API the dev tools use, so F4, F6, the
+memory probes and the pixel check measure both renderers the same way. The pure parts (Mercator
+math, tile coverage, MapLibre's exponential interpolation, the mesh header) have 16 tests, among
+them that the camera's center tile is the archive's own tile under Santa Monica.
+
+To check the output without a screen, `MAPS_SNAPSHOT=<name>` settles at a fixed view, reads the
+frame and saves a PNG through a `save_snapshot` command. At the Santa Monica Pier at zoom 15 the
+native renderer draws the same coastline, beach, water, parks, buildings and roads as MapLibre,
+almost line for line. Missing, as planned: labels and POI icons, road casings, dashed rail. The pier
+comes out as an outline rather than a filled shape, a classification gap still to fix.
+
+**A bug in my own tools invalidated the first comparison.** The first native runs showed 0% of
+frames with tiles loading, which cannot be right with 150 ms tile delays, and only 201 of 504 frames
+rendered. Recording each tile's state the first time a render saw it needed showed 44 already loaded,
+though they had been requested only as needed: the frames where they were missing never reached the
+render listeners. The cause: the dev tools' render listener calls `measureCoverage(map)`, which
+called `map.getSource()`, a MapLibre method the native renderer does not have. It threw, the
+exception escaped `_render`, and the next frame was never scheduled, exactly while tiles were
+loading. Those frames vanished from every measure and the pan stalled until a tile arrived. Fixed
+three ways: `measureCoverage` returns null for a map without MapLibre's internals; the renderer
+catches and counts a listener's exception and keeps rendering; and the benchmark now reports the
+share of frames rendered and listener errors, and warns when frames were not rendered.
+
+Controls after the fix: with the ancestor fallback turned off (`MAPS_NO_FALLBACK=1`), background
+shows in 8.4% of first-visit frames by the pixel check, and the renderer's own count agrees (41
+frames both, 1 flagged by the count only, none by pixels only). With the fallback, 0%, and still 0%
+with every tile slowed by 150 ms (62.7% of frames then draw an ancestor). Pixel self-test 100%.
+
+| | MapLibre (1 worker, cache 240, parent patch) | native renderer |
+|---|---|---|
+| memory at rest | ~500 MB | **296 MB** |
+| memory after the pan | ~700 MB | **340 MB** |
+| 10-pass soak | flat at 670-695 MB | **flat at 325-331 MB** |
+| web process at rest | ~355 MB | **157 MB** (the blank-window floor) |
+| render CPU per frame, avg / p95 | 4.7 / 8 ms | **0.5 / 1 ms** |
+| tile request to drawable, avg / p95 | 37 / 60 ms | **14 / 24 ms** |
+| tiles loaded on the first pass | 158 | **43** |
+| gray on screen, first visit / revisit | 0% / 0% (with the patch) | **0% / 0%** |
+| dropped frames | 1 | **0** |
+
+The tile count differs because past zoom 14 MapLibre lays out each zoom-14 tile again as four
+separate overzoomed tiles; the native renderer scales the zoom-14 mesh. At rest the web process is
+at the blank-window floor: everything the map costs now lives in the app process (Rust meshing
+scratch) and the GPU.
+
+What it costs: no labels, no search box yet in native mode, a simplified road style, and about 900
+lines of renderer and mesher to own.

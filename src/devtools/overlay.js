@@ -140,8 +140,9 @@ export function instrument(map, stats, opts = {}) {
       return;
     }
     const interval = now - last;
-    const missing = rendered && !map.areTilesLoaded();
-    const cov = rendered ? frameCov : null;
+    // The native renderer says how it drew each needed tile; MapLibre is asked areTilesLoaded().
+    const missing = rendered && (map.lastDrawn ? map.lastDrawn.ancestor + map.lastDrawn.none > 0 : !map.areTilesLoaded());
+    const cov = rendered ? (map.lastDrawn ? { uncovered: map.lastDrawn.none, needed: map.lastDrawn.self + map.lastDrawn.ancestor + map.lastDrawn.none } : frameCov) : null;
     frameCov = null;
     const pixelGray = rendered ? framePix : 0;
     framePix = 0;

@@ -26,6 +26,8 @@ def main():
         print(f"  after: {b['label']:<26} {b['bytes'] / 1048576:7.1f} MB  {b['note']}")
     for k in ("cold", "warm"):
         v = d[k]
+        if v.get("rendered_ratio", 1) < 0.9 or v.get("listener_errors", 0):
+            print(f"  WARNING {k}: only {v.get('rendered_ratio')} of frames rendered, {v.get('listener_errors')} listener errors: figures suspect")
         print(f"  {k}: GRAY {v['gray_pct']:5}% of frames | loading {v['missing_pct']:5}% | tiles loaded {v['load']['n']:3}"
               f" (avg {v['load']['avg']} ms) | unique {v['unique_tiles']} | cache max {v['cache_max']}"
               f" | dropped frames {v['dropped']}/{v['frames']['n']} (+{v['jitter_only']} within timer rounding)"

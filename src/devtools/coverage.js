@@ -31,9 +31,12 @@ const canon = (id) => ({ z: id.canonical.z, x: id.canonical.x, y: id.canonical.y
  * what can be drawn this frame.
  */
 export function measureCoverage(map, sourceId = "protomaps") {
+  // a map without MapLibre's internals (the native renderer) has no tile manager and no getSource:
+  // answer null rather than throw (a throw here once stopped the native renderer's frame loop)
   const tm = map.style?.tileManagers?.[sourceId];
+  if (!tm || typeof tm.getRenderableIds !== "function" || typeof map.getSource !== "function") return null;
   const src = map.getSource(sourceId);
-  if (!tm || !src || typeof tm.getRenderableIds !== "function") return null;
+  if (!src) return null;
   const needed = map
     .coveringTiles({ tileSize: src.tileSize ?? 512, minzoom: src.minzoom, maxzoom: src.maxzoom, roundZoom: false })
     .map(canon);

@@ -62,6 +62,12 @@ fn dev_flags() -> serde_json::Value {
         "fadeMs": num("MAPS_FADE_MS"),
         // MAPS_MEMPROBE=blank|idle|pan: report per-process memory at that stage, then exit
         "memprobe": std::env::var("MAPS_MEMPROBE").ok(),
+        // MAPS_RENDERER=rust: the native renderer (Rust decodes and meshes, WebGL draws)
+        "renderer": std::env::var("MAPS_RENDERER").ok(),
+        // MAPS_NO_FALLBACK=1: the native renderer draws nothing for a tile still loading (a control)
+        "noFallback": std::env::var("MAPS_NO_FALLBACK").is_ok_and(|v| v == "1"),
+        // MAPS_SNAPSHOT=<name>: settle at a fixed view, save the frame as logs/snapshot-<name>.png, exit
+        "snapshot": std::env::var("MAPS_SNAPSHOT").ok(),
         // MAPS_EMPTY_STYLE=1: a background layer only, no source, tiles or fonts (a memory control)
         "emptyStyle": std::env::var("MAPS_EMPTY_STYLE").is_ok_and(|v| v == "1"),
         // on unless MAPS_CACHED_PARENTS=0 (bench/2026-11-15-px-parents*.json)
@@ -77,6 +83,62 @@ fn bench_done(result: serde_json::Value, app: tauri::AppHandle) {
     if std::env::var("MAPS_BENCH").is_ok_and(|v| v == "1") {
         app.exit(0);
     }
+}
+
+/// The archive's bounds, center and zoom range, read by vtile from its header: what the native
+/// renderer needs to place its camera, without loading a JavaScript tile library.
+#[tauri::command]
+fn archive_info() -> Result<serde_json::Value, String> {
+    let a = vtile::pmtiles::Archive::open(&data_dir().join("basemap.pmtiles")).map_err(|e| e.to_string())?;
+    let h = &a.header;
+    Ok(serde_json::json!({
+        "minZoom": h.min_zoom, "maxZoom": h.max_zoom,
+        "minLon": h.bounds[0], "minLat": h.bounds[1], "maxLon": h.bounds[2], "maxLat": h.bounds[3],
+    }))
+}
+
+/// Saves a frame the frontend captured (a PNG data URL) as logs/snapshot-<name>.png, for looking at
+/// a renderer's output without the screen. Development only.
+#[tauri::command]
+fn save_snapshot(name: String, data_url: String) -> Result<String, String> {
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err("snapshot name: letters, digits, - and _ only".into());
+    }
+    let b64 = data_url.strip_prefix("data:image/png;base64,").ok_or("not a PNG data URL")?;
+    let png = base64_decode(b64).ok_or("bad base64")?;
+    let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../logs")).join(format!("snapshot-{name}.png"));
+    std::fs::write(&path, png).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
+}
+
+/// Standard base64 (RFC 4648) without a crate: 30 lines for a development command.
+fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    let val = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        } as u32)
+    };
+    let bytes: Vec<u8> = s.bytes().filter(|&c| c != b'=' && !c.is_ascii_whitespace()).collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    for chunk in bytes.chunks(4) {
+        let mut n = 0u32;
+        for (i, &c) in chunk.iter().enumerate() {
+            n |= val(c)? << (18 - 6 * i);
+        }
+        out.push((n >> 16) as u8);
+        if chunk.len() > 2 {
+            out.push((n >> 8) as u8);
+        }
+        if chunk.len() > 3 {
+            out.push(n as u8);
+        }
+    }
+    Some(out)
 }
 
 /// Where the archive and the gazetteer live: `MAPS_DATA`, else the repo's `data/`.
@@ -95,6 +157,9 @@ pub fn run() {
             Gazetteer(None)
         }
     };
+    // The native renderer reads the same archive through vtile; opened once, read with pread from
+    // any thread.
+    let archive = Arc::new(vtile::pmtiles::Archive::open(&data.join("basemap.pmtiles")).ok());
     let tile_times = Arc::new(devstats::TileTimes::default());
     let handler_times = tile_times.clone();
     let log_tiles = std::env::var("MAPS_LOG_TILES").is_ok_and(|v| v == "1");
@@ -111,12 +176,16 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol("tiles", move |_ctx, request, responder| {
             let data = data.clone();
             let times = handler_times.clone();
+            let archive = archive.clone();
             tauri::async_runtime::spawn_blocking(move || {
                 if !tile_delay.is_zero() {
                     std::thread::sleep(tile_delay);
                 }
                 let t0 = Instant::now();
-                let res = tiles::handle(&data, &request);
+                let res = match (tiles::parse_mesh_path(request.uri().path()), archive.as_ref()) {
+                    (Some((z, x, y)), Some(a)) => tiles::handle_mesh(a, z, x, y),
+                    _ => tiles::handle(&data, &request),
+                };
                 times.record(t0.elapsed(), res.body().len());
                 if log_tiles {
                     let range = request.headers().get("range").and_then(|v| v.to_str().ok()).unwrap_or("-");
@@ -126,7 +195,7 @@ pub fn run() {
                 responder.respond(res);
             });
         })
-        .invoke_handler(tauri::generate_handler![report, search, dev_stats, dev_flags, bench_done])
+        .invoke_handler(tauri::generate_handler![report, search, dev_stats, dev_flags, bench_done, archive_info, save_snapshot])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -101,6 +101,10 @@ async function pass(map, stats, path) {
     fetch: summary(rec.fetch),
     load: summary(rec.load),
     serve: { n: t.requests, avg: r1(t.requests ? t.total_ms / t.requests : 0), worst: r1(t.worst_ms), bytes: t.bytes },
+    // every display frame should have been rendered while the camera moves; far fewer means the
+    // render loop stalled (as it did when a listener threw), and every figure above is suspect
+    rendered_ratio: r1(rec.rendered / Math.max(1, rec.frame.length)),
+    listener_errors: map.listenerErrors ?? 0,
     tiles_loaded: rec.load.length,
     unique_tiles: rec.tiles.size,
     cache_max: map.style?.tileManagers?.protomaps?._outOfViewCache?.max ?? null,

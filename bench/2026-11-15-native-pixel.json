@@ -1,0 +1,162 @@
+{
+ "blocks": [
+  {
+   "bytes": 15667476,
+   "label": "GPU buffers",
+   "note": "220"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU textures",
+   "note": "0"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU renderbuffers",
+   "note": "0"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU shader programs",
+   "note": "2 linked (driver memory, not counted)"
+  },
+  {
+   "bytes": 0,
+   "label": "tiles, CPU arrays",
+   "note": "0+0"
+  },
+  {
+   "bytes": 15667572,
+   "label": "mesh cache (GPU copies)",
+   "note": "55 tiles"
+  }
+ ],
+ "cache_tiles": 240,
+ "cold": {
+  "cache_max": null,
+  "dropped": 0,
+  "fetch": {
+   "avg": 13.4,
+   "n": 43,
+   "p95": 22,
+   "worst": 24
+  },
+  "frames": {
+   "avg": 16.6,
+   "n": 488,
+   "p95": 18,
+   "worst": 21
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 51,
+  "listener_errors": 0,
+  "load": {
+   "avg": 14,
+   "n": 43,
+   "p95": 24,
+   "worst": 25
+  },
+  "memory_mb": 348,
+  "missing_frames": 43,
+  "missing_pct": 8.8,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 487,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 2,
+   "n": 487,
+   "p95": 3,
+   "worst": 5
+  },
+  "rendered": 487,
+  "rendered_ratio": 1,
+  "serve": {
+   "avg": 10,
+   "bytes": 12374044,
+   "n": 43,
+   "worst": 18.2
+  },
+  "settle_ms": 0,
+  "tiles_loaded": 43,
+  "unique_tiles": 43
+ },
+ "cores": 8,
+ "pixel_check": true,
+ "pixel_selftest_outside_pct": 100,
+ "renderer": "rust",
+ "speed_px_s": 4000,
+ "warm": {
+  "cache_max": null,
+  "dropped": 0,
+  "fetch": {
+   "avg": 0,
+   "n": 0,
+   "p95": 0,
+   "worst": 0
+  },
+  "frames": {
+   "avg": 16.6,
+   "n": 488,
+   "p95": 18,
+   "worst": 20
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 56,
+  "listener_errors": 0,
+  "load": {
+   "avg": 0,
+   "n": 0,
+   "p95": 0,
+   "worst": 0
+  },
+  "memory_mb": 349,
+  "missing_frames": 0,
+  "missing_pct": 0,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 486,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 2,
+   "n": 486,
+   "p95": 3,
+   "worst": 5
+  },
+  "rendered": 486,
+  "rendered_ratio": 1,
+  "serve": {
+   "avg": 0,
+   "bytes": 0,
+   "n": 0,
+   "worst": 0
+  },
+  "settle_ms": 0,
+  "tiles_loaded": 0,
+  "unique_tiles": 0
+ },
+ "zoom": 15,
+ "label": "native-pixel (release)"
+}
