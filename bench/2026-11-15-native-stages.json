@@ -1,0 +1,174 @@
+{
+ "blocks": [
+  {
+   "bytes": 15667476,
+   "label": "GPU buffers",
+   "note": "220"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU textures",
+   "note": "0"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU renderbuffers",
+   "note": "0"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU shader programs",
+   "note": "2 linked (driver memory, not counted)"
+  },
+  {
+   "bytes": 0,
+   "label": "tiles, CPU arrays",
+   "note": "0+0"
+  },
+  {
+   "bytes": 15667572,
+   "label": "mesh cache (GPU copies)",
+   "note": "55 tiles"
+  }
+ ],
+ "cache_tiles": 240,
+ "cold": {
+  "cache_max": null,
+  "dropped": 0,
+  "fetch": {
+   "avg": 14.1,
+   "n": 43,
+   "p95": 23,
+   "worst": 24
+  },
+  "frames": {
+   "avg": 16.6,
+   "n": 485,
+   "p95": 18,
+   "worst": 19
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 52,
+  "listener_errors": 0,
+  "load": {
+   "avg": 14.6,
+   "n": 43,
+   "p95": 24,
+   "worst": 25
+  },
+  "memory_mb": 338,
+  "missing_frames": 43,
+  "missing_pct": 8.9,
+  "moving_s": 8,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 484,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 0.5,
+   "n": 484,
+   "p95": 1,
+   "worst": 3
+  },
+  "rendered": 484,
+  "rendered_ratio": 1,
+  "serve": {
+   "avg": 10.6,
+   "bytes": 12374044,
+   "n": 43,
+   "worst": 20.2
+  },
+  "settle_ms": 0,
+  "stages": {
+   "copy": 0.07,
+   "decode": 1.12,
+   "inflight_avg": 1.35,
+   "inflight_max": 3,
+   "mesh": 7.5,
+   "n": 43,
+   "read": 1.56,
+   "serialize": 0.31,
+   "wait": 0.04
+  },
+  "tiles_loaded": 43,
+  "unique_tiles": 43
+ },
+ "cores": 8,
+ "pixel_check": false,
+ "pixel_selftest_outside_pct": null,
+ "renderer": "rust",
+ "speed_px_s": 4000,
+ "warm": {
+  "cache_max": null,
+  "dropped": 0,
+  "fetch": {
+   "avg": 0,
+   "n": 0,
+   "p95": 0,
+   "worst": 0
+  },
+  "frames": {
+   "avg": 16.6,
+   "n": 486,
+   "p95": 18,
+   "worst": 20
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 37,
+  "listener_errors": 0,
+  "load": {
+   "avg": 0,
+   "n": 0,
+   "p95": 0,
+   "worst": 0
+  },
+  "memory_mb": 336,
+  "missing_frames": 0,
+  "missing_pct": 0,
+  "moving_s": 8,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 484,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 0.5,
+   "n": 484,
+   "p95": 1,
+   "worst": 1
+  },
+  "rendered": 484,
+  "rendered_ratio": 1,
+  "serve": {
+   "avg": 0,
+   "bytes": 0,
+   "n": 0,
+   "worst": 0
+  },
+  "settle_ms": 1,
+  "stages": null,
+  "tiles_loaded": 0,
+  "unique_tiles": 0
+ },
+ "zoom": 15,
+ "label": "native-stages (release)"
+}

@@ -85,6 +85,48 @@ pub fn classify_smaps(text: &str) -> MappingKinds {
     k
 }
 
+/// The mesh handler's time by stage, since the last read: where a request's milliseconds go.
+#[derive(Default, Clone, Serialize)]
+pub struct StageWindow {
+    pub requests: u64,
+    /// from the URI-scheme callback to a blocking-pool thread starting it
+    pub wait_ms: f64,
+    pub read_ms: f64,
+    pub decode_ms: f64,
+    pub mesh_ms: f64,
+    pub serialize_ms: f64,
+    /// copying the serialized mesh out of the thread's reusable buffer into the response
+    pub copy_ms: f64,
+    /// requests running at once, seen by each request as it starts: sum (for the mean) and max
+    pub inflight_sum: u64,
+    pub inflight_max: u64,
+}
+
+#[derive(Default)]
+pub struct StageTimes {
+    inner: Mutex<StageWindow>,
+    pub inflight: std::sync::atomic::AtomicU64,
+}
+
+impl StageTimes {
+    pub fn record(&self, wait: Duration, s: &crate::tiles::MeshStages, inflight: u64) {
+        let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+        let mut w = self.inner.lock().expect("stage lock");
+        w.requests += 1;
+        w.wait_ms += ms(wait);
+        w.read_ms += ms(s.read);
+        w.decode_ms += ms(s.decode);
+        w.mesh_ms += ms(s.mesh);
+        w.serialize_ms += ms(s.serialize);
+        w.copy_ms += ms(s.copy);
+        w.inflight_sum += inflight;
+        w.inflight_max = w.inflight_max.max(inflight);
+    }
+    pub fn take(&self) -> StageWindow {
+        std::mem::take(&mut *self.inner.lock().expect("stage lock"))
+    }
+}
+
 #[derive(Serialize)]
 pub struct ProcessMem {
     pub pid: u32,

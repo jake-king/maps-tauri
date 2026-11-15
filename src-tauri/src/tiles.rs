@@ -95,25 +95,55 @@ pub fn parse_mesh_path(path: &str) -> Option<(u8, u32, u32)> {
     Some((z, x, y))
 }
 
+/// How long each stage of one mesh request took.
+#[derive(Default, Debug, Clone, Copy)]
+pub struct MeshStages {
+    pub read: std::time::Duration,
+    pub decode: std::time::Duration,
+    pub mesh: std::time::Duration,
+    pub serialize: std::time::Duration,
+    pub copy: std::time::Duration,
+}
+
 /// The native renderer's tiles: decoded and meshed in Rust, sent as the mesh wire format
 /// (crates/vtile/src/mesh.rs). 204 when the archive has no such tile.
 pub fn handle_mesh(archive: &vtile::pmtiles::Archive, z: u8, x: u32, y: u32) -> Response<Vec<u8>> {
+    handle_mesh_timed(archive, z, x, y).0
+}
+
+/// [`handle_mesh`], with the time each stage took.
+pub fn handle_mesh_timed(archive: &vtile::pmtiles::Archive, z: u8, x: u32, y: u32) -> (Response<Vec<u8>>, MeshStages) {
+    use std::time::Instant;
+    let mut st = MeshStages::default();
+    let t0 = Instant::now();
     let tile = match archive.tile(z, x, y) {
         Ok(Some(t)) => t,
-        Ok(None) => return error(StatusCode::NO_CONTENT),
-        Err(_) => return error(StatusCode::INTERNAL_SERVER_ERROR),
+        Ok(None) => return (error(StatusCode::NO_CONTENT), st),
+        Err(_) => return (error(StatusCode::INTERNAL_SERVER_ERROR), st),
     };
-    let Ok(layers) = vtile::mvt::decode(&tile) else { return error(StatusCode::INTERNAL_SERVER_ERROR) };
+    let t1 = Instant::now();
+    st.read = t1 - t0;
+    let Ok(layers) = vtile::mvt::decode(&tile) else { return (error(StatusCode::INTERNAL_SERVER_ERROR), st) };
+    let t2 = Instant::now();
+    st.decode = t2 - t1;
     let body = MESHER.with(|m| {
         let (mesher, out) = &mut *m.borrow_mut();
-        mesher.build(&layers, z).to_bytes(out);
-        out.clone()
+        mesher.build(&layers, z);
+        let t3 = Instant::now();
+        st.mesh = t3 - t2;
+        mesher.mesh.to_bytes(out);
+        let t4 = Instant::now();
+        st.serialize = t4 - t3;
+        let body = out.clone();
+        st.copy = t4.elapsed();
+        body
     });
-    respond(StatusCode::OK)
+    let res = respond(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .header(header::CONTENT_LENGTH, body.len())
         .body(body)
-        .expect("valid response")
+        .expect("valid response");
+    (res, st)
 }
 
 /// Answer one request. Runs on a worker thread, never the UI thread.

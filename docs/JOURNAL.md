@@ -466,3 +466,46 @@ scratch) and the GPU.
 
 What it costs: no labels, no search box yet in native mode, a simplified road style, and about 900
 lines of renderer and mesher to own.
+
+## Profiling the mesh handler: the CPU, not the code
+
+In the app, a native tile took 14 ms from request to drawable, 10.3 ms of it in the Rust handler.
+The same decode and mesh took 1.7 ms a tile in the offline check, so the question was where the
+other 8.5 ms came from.
+
+Stage timers in the live handler (`MeshStages`, reported through `dev_stats` and the benchmark):
+
+| stage | offline, back to back | in the app |
+|---|---|---|
+| read + gunzip | 0.21 ms | 1.56 ms |
+| decode | 0.14 ms | 1.12 ms |
+| mesh | 1.37 ms | 7.50 ms |
+| serialize | 0.06 ms | 0.31 ms |
+| wait for a pool thread | | 0.04 ms |
+| copy into the response | | 0.07 ms |
+
+Not queueing, not concurrency (1.4 requests at once on average, 3 at most), not the extra copy:
+every stage was uniformly 5-8 times slower. `examples/stages.rs` reproduces it offline:
+
+| offline run (z14 tiles) | per tile |
+|---|---|
+| back to back | 1.74 ms |
+| 16 ms sleep between tiles (the app's rhythm) | 7.75 ms |
+| the same, pinned to a performance core | 7.53 ms |
+| pinned to an efficiency core, back to back | 2.55 ms |
+| a fresh thread per tile, back to back | 5.67 ms |
+| 16 ms gap spent busy-waiting instead of sleeping | 1.76 ms |
+
+The busy-wait run separates the two explanations: spinning keeps the core awake and clocked
+without touching the caches, and the tile is fast again. So it is the CPU going idle between
+requests (the i5-12600KF under the `powersave` governor swung between 1.2 and 4.2 GHz while
+gapping), not cold caches. The hybrid chip's efficiency cores and thread hopping are smaller
+factors.
+
+This is how a real machine behaves, a laptop with power saving more so, and a benchmark that runs
+tiles back to back would never show it. Keeping the CPU awake would waste power. The fix is to take
+meshing off the critical path: a mesh cache and background prefetch, so a tile is ready before it
+is visible however slowly a resting CPU builds it.
+
+Problem:
+- zsh again: `B="cmd args"; $B` does not split into words in zsh. A shell function does.

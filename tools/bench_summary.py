@@ -32,6 +32,10 @@ def main():
               f" (avg {v['load']['avg']} ms) | unique {v['unique_tiles']} | cache max {v['cache_max']}"
               f" | dropped frames {v['dropped']}/{v['frames']['n']} (+{v['jitter_only']} within timer rounding)"
               f" | mem {v['memory_mb']} MB")
+        s = v.get("stages")
+        if s:
+            print(f"     handler stages, ms/request: wait {s['wait']}, read {s['read']}, decode {s['decode']}, mesh {s['mesh']},"
+                  f" serialize {s['serialize']}, copy {s['copy']} | in flight avg {s['inflight_avg']:.1f}, max {s['inflight_max']}")
         if d.get("pixel_check"):
             px = v["pixel"]
             print(f"     pixels: GRAY {px['gray_pct']}% of frames, area {px['area_pct']} %"

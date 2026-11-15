@@ -101,6 +101,14 @@ async function pass(map, stats, path) {
     fetch: summary(rec.fetch),
     load: summary(rec.load),
     serve: { n: t.requests, avg: r1(t.requests ? t.total_ms / t.requests : 0), worst: r1(t.worst_ms), bytes: t.bytes },
+    // the native renderer's mesh handler, by stage (ms per request, averaged)
+    stages: (() => {
+      const s = backend.stages;
+      if (!s || !s.requests) return null;
+      const per = (k) => Math.round((s[k] / s.requests) * 100) / 100;
+      return { n: s.requests, wait: per("wait_ms"), read: per("read_ms"), decode: per("decode_ms"), mesh: per("mesh_ms"),
+               serialize: per("serialize_ms"), copy: per("copy_ms"), inflight_avg: per("inflight_sum") / 1, inflight_max: s.inflight_max };
+    })(),
     // every display frame should have been rendered while the camera moves; far fewer means the
     // render loop stalled (as it did when a listener threw), and every figure above is suspect
     rendered_ratio: r1(rec.rendered / Math.max(1, rec.frame.length)),

@@ -37,10 +37,14 @@ fn search(query: String, limit: Option<usize>, db: tauri::State<'_, Gazetteer>) 
 /// One poll of the F4 overlay's backend numbers: per-process memory and the tile handler's timings
 /// since the previous poll.
 #[tauri::command(async)]
-fn dev_stats(tiles: tauri::State<'_, Arc<devstats::TileTimes>>) -> serde_json::Value {
+fn dev_stats(
+    tiles: tauri::State<'_, Arc<devstats::TileTimes>>,
+    stages: tauri::State<'_, Arc<devstats::StageTimes>>,
+) -> serde_json::Value {
     serde_json::json!({
         "memory": devstats::process_tree_memory(),
         "tiles": tiles.take(),
+        "stages": stages.take(),
     })
 }
 
@@ -162,6 +166,8 @@ pub fn run() {
     let archive = Arc::new(vtile::pmtiles::Archive::open(&data.join("basemap.pmtiles")).ok());
     let tile_times = Arc::new(devstats::TileTimes::default());
     let handler_times = tile_times.clone();
+    let stage_times = Arc::new(devstats::StageTimes::default());
+    let handler_stages = stage_times.clone();
     let log_tiles = std::env::var("MAPS_LOG_TILES").is_ok_and(|v| v == "1");
     // A control for the benchmark's gray-box measure: slow every tile response down on purpose.
     // If gray frames do not climb as this grows, the measure is not measuring.
@@ -171,21 +177,32 @@ pub fn run() {
     tauri::Builder::default()
         .manage(gazetteer)
         .manage(tile_times)
+        .manage(stage_times)
         // Asynchronous so a file read never runs on the UI thread: the handler hands the request
         // to a blocking-pool thread and answers through the responder when the read is done.
         .register_asynchronous_uri_scheme_protocol("tiles", move |_ctx, request, responder| {
             let data = data.clone();
             let times = handler_times.clone();
             let archive = archive.clone();
+            let stages = handler_stages.clone();
+            let queued = Instant::now();
             tauri::async_runtime::spawn_blocking(move || {
+                use std::sync::atomic::Ordering;
+                let wait = queued.elapsed();
+                let inflight = stages.inflight.fetch_add(1, Ordering::Relaxed) + 1;
                 if !tile_delay.is_zero() {
                     std::thread::sleep(tile_delay);
                 }
                 let t0 = Instant::now();
                 let res = match (tiles::parse_mesh_path(request.uri().path()), archive.as_ref()) {
-                    (Some((z, x, y)), Some(a)) => tiles::handle_mesh(a, z, x, y),
+                    (Some((z, x, y)), Some(a)) => {
+                        let (res, st) = tiles::handle_mesh_timed(a, z, x, y);
+                        stages.record(wait, &st, inflight);
+                        res
+                    }
                     _ => tiles::handle(&data, &request),
                 };
+                stages.inflight.fetch_sub(1, Ordering::Relaxed);
                 times.record(t0.elapsed(), res.body().len());
                 if log_tiles {
                     let range = request.headers().get("range").and_then(|v| v.to_str().ok()).unwrap_or("-");
