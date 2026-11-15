@@ -8,8 +8,9 @@
 // painter.context.gl, project/unproject, jumpTo/easeTo, areTilesLoaded), so F4, F6 and the pixel
 // check measure both renderers the same way.
 
-import { Camera, lngLatToWorld, worldToLngLat, visibleTiles, ringTiles, tileRect, ancestor, interpolate, parseMeshHeader, tileZoom, clampCamera } from "./geo.js";
-import palette from "./palette.json";
+import { Camera, lngLatToWorld, worldToLngLat, visibleTiles, ringTiles, tileRect, ancestor, interpolate, parseMeshHeader, parseLabels, tileZoom, clampCamera } from "./geo.js";
+import { LabelLayer } from "./labels.js";
+import palette from "./palette.json" with { type: "json" };
 
 const EXTENT = 4096;
 const MAX_INFLIGHT = 8;
@@ -74,7 +75,7 @@ function program(gl, vs, fs) {
 const rgbaF = (c) => [c[0] / 255, c[1] / 255, c[2] / 255, c[3] / 255];
 
 export class RustMap {
-  constructor({ container, baseUrl, center, zoom, minZoom = 0, maxZoom = 14, cacheSize = 240, background, fallback = true, prefetchRing = 1 }) {
+  constructor({ container, baseUrl, center, zoom, minZoom = 0, maxZoom = 14, cacheSize = 240, background, fallback = true, prefetchRing = 1, labels = true }) {
     this.prefetchRing = prefetchRing; // tiles beyond the view to fetch ahead (0: off)
     this.fallback = fallback; // draw a loaded ancestor for a tile still loading
     this.baseUrl = baseUrl;
@@ -93,8 +94,11 @@ export class RustMap {
 
     const canvas = document.createElement("canvas");
     canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;";
-    (typeof container === "string" ? document.getElementById(container) : container).appendChild(canvas);
+    const parent = typeof container === "string" ? document.getElementById(container) : container;
+    parent.appendChild(canvas);
     this.canvas = canvas;
+    this.labelLayer = new LabelLayer(parent); // a 2D canvas over the map
+    this.labelLayer.visible = labels;
     const gl = canvas.getContext("webgl2", { antialias: true, premultipliedAlpha: true });
     if (!gl) throw new Error("WebGL2 unavailable");
     this.gl = gl;
@@ -329,6 +333,7 @@ export class RustMap {
     gl.vertexAttribPointer(this.line.a("a_class"), 1, gl.UNSIGNED_BYTE, false, 8, 6);
     t.buffers.push(mk(gl.ELEMENT_ARRAY_BUFFER, h.lineWide ? new Uint32Array(buf, h.lineIdx, h.lineI) : new Uint16Array(buf, h.lineIdx, h.lineI)));
     gl.bindVertexArray(null);
+    t.labels = parseLabels(buf, h);
     t.fillCount = h.fillI;
     t.lineCount = h.lineI;
     t.fillType = h.fillWide ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
@@ -466,6 +471,7 @@ export class RustMap {
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.enable(gl.SCISSOR_TEST);
     const drawn = { self: 0, ancestor: 0, children: 0, none: 0 };
+    const labelTiles = []; // tiles drawn as themselves: only they contribute labels
     if (this.tilesVisible) {
       for (const [z, x, y] of needed) {
         let how = "none";
@@ -493,6 +499,7 @@ export class RustMap {
             t.lastUsed = this.frame;
             this.drawTile(t, rect);
             how = pz === z ? "self" : "ancestor";
+            if (pz === z) labelTiles.push({ tile: t, rect });
             break;
           }
           // An empty tile (the cutout has no tile here at this zoom) is not the end: a coarser
@@ -510,6 +517,10 @@ export class RustMap {
     this.lastDrawn = drawn;
     gl.disable(gl.SCISSOR_TEST);
     gl.bindVertexArray(null);
+    const lt0 = performance.now();
+    this.labelLayer.draw(labelTiles, zoom, this.dpr, this.cam.w, this.cam.h);
+    drawn.labels = this.labelLayer.count;
+    drawn.labelMs = performance.now() - lt0;
     this.fire("render");
 
     if (this.anim) this.triggerRepaint();

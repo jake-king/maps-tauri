@@ -134,6 +134,12 @@ writeFileSync("src/rust-renderer/palette.json", JSON.stringify({
   generated_by: "tools/gen_palette.mjs",
   background: rgba(flavor.background),
   fill_colors: fillColors,
+  // label colors and halos, by the renderer's LabelKind order: city, suburb, neighbourhood, highway,
+  // major road, minor road
+  labels: [
+    ["city_label", "city_label_halo"], ["subplace_label", "subplace_label_halo"], ["subplace_label", "subplace_label_halo"],
+    ["roads_label_major", "roads_label_major_halo"], ["roads_label_major", "roads_label_major_halo"], ["roads_label_minor", "roads_label_minor_halo"],
+  ].map(([c, h]) => ({ color: rgba(flavor[c]), halo: rgba(flavor[h]) })),
   lines: lines.map(({ name, id, class: c, color, width, minzoom }) => ({ name, id, class: c, color, width, minzoom })),
 }, null, 1) + "\n");
 console.log(`landuse kinds: ${Object.keys(landuse).length}, fill colors: ${fillColors.length}, line classes: ${lines.length}`);

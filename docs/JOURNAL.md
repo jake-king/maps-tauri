@@ -592,3 +592,41 @@ Problems on the way:
 - **A multi-edit script half-applied.** The asserting edit helper refused an edit whose target text
   had changed, as intended, but the edits before it in the same script were already written, so
   one build had a subset of the changes. Measurements from that build are not used.
+
+## Labels, and a zoom-out limit
+
+**Zoom-out limit.** The lowest zoom is now the one at which the world exactly fills the window
+(`worldFitZoom`), and the center is clamped so the view never passes the world's edge
+(`clampCamera`, tested). Fully zoomed out the snapshot shows the whole world edge to edge, the
+coarse world tiles filling in through the empty-tile fallback. Found on the way: a snapshot at
+`MAPS_SNAPSHOT_ZOOM=0` silently used the default view, because 0 is falsy.
+
+**Labels.** MapLibre draws text with signed-distance-field glyphs in WebGL: a glyph atlas, shaping,
+placement along curves, days of work. v1 splits it differently:
+- Rust chooses the labels while meshing (mesh format v3 adds a label block): place names at their
+  points (kind, the data's `min_zoom`, its `sort_key` as priority), and for each road name the
+  longest straight segment in the tile, its midpoint and angle (turned to read left to right).
+  Only anchors inside the tile's own extent, so neighbouring tiles do not send the same label.
+  About 78 labels and 2.4 KB per zoom-14 tile.
+- The frontend (`labels.js`) decides what shows: by zoom, a street name only where its straight run
+  is longer than the text, only whole labels on screen, and greedy collision in priority order
+  (kind first, then labels placed last frame so they do not flicker, then the data's priority) over
+  a grid. It draws on a 2D canvas over the map with the browser's text rendering, which gives full
+  Unicode shaping. Colors and halos come from the Protomaps flavor through the palette generator.
+  Only tiles drawn as themselves contribute labels, so a label never jumps when a stand-in is
+  replaced.
+
+Tests: the label block on the wire in Rust (UTF-8 cut on a character boundary) and its round trip
+in JavaScript; collision (rank order, touching edges, overlaps across grid cells and in lower grid
+rows, rotated boxes); 5 planted bugs in the collision code caught, one only after its test was
+fixed (my first "lower row" test overlapped in the candidate's first row, so it could not tell).
+
+Snapshots at zoom 15 and 12 show street names along their roads, district names in capitals, and
+city names, with no overlaps. Cost on the pan benchmark: render CPU 1.6 ms a frame (p95 3) against
+0.5 without labels, of which labels 0.9 ms for about 19 labels; worst 10 ms on the first pass,
+before the text-width cache fills; about 20 MB more memory (the label canvas). MapLibre with its
+labels: 4.7 ms. Zoom benchmark: 1 frame with 0.7% background zooming out, on both archives (it had
+been 0 on West LA before labels; at noise level, but not identical).
+
+Not in v1: road labels along curves, highway shields, POI icons and names, water labels, and the
+search box in native mode.

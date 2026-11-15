@@ -117,26 +117,51 @@ export function interpolate(stops, base, z) {
 }
 
 /**
- * The mesh wire format's header (crates/vtile/src/mesh.rs, version 2): counts, index widths and the
+ * The mesh wire format's header (crates/vtile/src/mesh.rs, version 3): counts, index widths and the
  * byte offset of each block. Throws on a wrong magic or version, or a size that does not add up.
  */
 export function parseMeshHeader(buf) {
   const v = new DataView(buf);
-  if (buf.byteLength < 28) throw new Error("mesh: shorter than its header");
+  if (buf.byteLength < 36) throw new Error("mesh: shorter than its header");
   const magic = String.fromCharCode(v.getUint8(0), v.getUint8(1), v.getUint8(2), v.getUint8(3));
   if (magic !== "MESH") throw new Error(`mesh: bad magic ${magic}`);
   const version = v.getUint32(4, true);
-  if (version !== 2) throw new Error(`mesh: version ${version}, expected 2`);
+  if (version !== 3) throw new Error(`mesh: version ${version}, expected 3`);
   const flags = v.getUint32(8, true);
-  const [fillV, fillI, lineV, lineI] = [12, 16, 20, 24].map((o) => v.getUint32(o, true));
+  const [fillV, fillI, lineV, lineI, labelN, labelBytes] = [12, 16, 20, 24, 28, 32].map((o) => v.getUint32(o, true));
   const pad4 = (n) => (n + 3) & ~3;
   const fillWide = (flags & 1) !== 0;
   const lineWide = (flags & 2) !== 0;
-  const fillVerts = 28;
+  const fillVerts = 36;
   const fillIdx = fillVerts + pad4(fillV * 6);
   const lineVerts = fillIdx + pad4(fillI * (fillWide ? 4 : 2));
   const lineIdx = lineVerts + lineV * 8;
-  const end = lineIdx + pad4(lineI * (lineWide ? 4 : 2));
+  const labels = lineIdx + pad4(lineI * (lineWide ? 4 : 2));
+  const end = labels + labelBytes;
   if (end !== buf.byteLength) throw new Error(`mesh: ${buf.byteLength} bytes, header says ${end}`);
-  return { fillV, fillI, lineV, lineI, fillWide, lineWide, fillVerts, fillIdx, lineVerts, lineIdx };
+  return { fillV, fillI, lineV, lineI, labelN, fillWide, lineWide, fillVerts, fillIdx, lineVerts, lineIdx, labels };
+}
+
+const utf8 = new TextDecoder();
+
+/** The label block: `[{ x, y, angle, run, kind, minZoom, priority, text }]`, x/y/run in tile units. */
+export function parseLabels(buf, h) {
+  const v = new DataView(buf);
+  const out = new Array(h.labelN);
+  let o = h.labels;
+  for (let i = 0; i < h.labelN; i++) {
+    const len = v.getUint8(o + 14);
+    out[i] = {
+      x: v.getInt16(o, true),
+      y: v.getInt16(o + 2, true),
+      angle: v.getInt16(o + 4, true) / 10000,
+      run: v.getUint16(o + 6, true),
+      kind: v.getUint8(o + 8),
+      minZoom: v.getUint8(o + 9),
+      priority: v.getInt32(o + 10, true),
+      text: utf8.decode(new Uint8Array(buf, o + 15, len)),
+    };
+    o += 15 + len;
+  }
+  return out;
 }

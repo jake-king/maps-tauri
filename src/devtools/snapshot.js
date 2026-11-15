@@ -21,7 +21,10 @@ export async function snapshot(map, name, view = SNAPSHOT_VIEW) {
       const c = document.createElement("canvas");
       c.width = w;
       c.height = h;
-      c.getContext("2d").putImageData(new ImageData(flipped, w, h), 0, 0);
+      const ctx = c.getContext("2d");
+      ctx.putImageData(new ImageData(flipped, w, h), 0, 0);
+      // the native renderer draws labels on a 2D canvas over the map: put them in the picture too
+      if (map.labelLayer?.canvas) ctx.drawImage(map.labelLayer.canvas, 0, 0, w, h);
       resolve(c.toDataURL("image/png"));
     });
     map.triggerRepaint();

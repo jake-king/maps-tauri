@@ -36,7 +36,7 @@ export function lawnmower(b, rows = ROWS, inset = 0.15) {
 }
 
 async function pass(map, stats, path) {
-  const rec = { frame: [], render: [], missing: 0, rendered: 0, fetch: [], load: [], visible: [], tiles: new Set(),
+  const rec = { frame: [], render: [], labelMs: [], labels: [], missing: 0, rendered: 0, fetch: [], load: [], visible: [], tiles: new Set(),
                 grayFrames: 0, grayTiles: 0, neededTiles: 0,
                 pix: { frames: 0, area: [], both: 0, tileOnly: 0, pixelOnly: 0 } };
   const onLoading = (e) => e.tile && e.sourceId === "protomaps" && rec.tiles.add(e.tile.tileID.key);
@@ -47,6 +47,10 @@ async function pass(map, stats, path) {
       if (v.rendered) {
         rec.rendered += 1;
         rec.render.push(v.renderMs);
+        if (map.lastDrawn?.labelMs !== undefined) {
+          rec.labelMs.push(map.lastDrawn.labelMs);
+          rec.labels.push(map.lastDrawn.labels);
+        }
         if (v.missing) rec.missing += 1;
         if (v.gray > 0) rec.grayFrames += 1;
         rec.grayTiles += v.gray;
@@ -119,6 +123,7 @@ async function pass(map, stats, path) {
     // the native renderer: how long each tile was on screen before it could be drawn (0 = ready in time)
     visible_wait: rec.visible.length ? { ...summary(rec.visible), not_ready: rec.visible.filter((v) => v > 0).length } : null,
     mesh_cache: backend.mesh_cache ?? null,
+    label_draw: rec.labelMs.length ? { ...summary(rec.labelMs), labels_avg: r1(avg(rec.labels)) } : null,
     tiles_loaded: rec.load.length,
     unique_tiles: rec.tiles.size,
     cache_max: map.style?.tileManagers?.protomaps?._outOfViewCache?.max ?? null,

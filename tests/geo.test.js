@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { lngLatToWorld, worldToLngLat, Camera, visibleTiles, ringTiles, tileRect, ancestor, interpolate, parseMeshHeader, tileZoom, worldFitZoom, clampCamera } from "../src/rust-renderer/geo.js";
+import { lngLatToWorld, worldToLngLat, Camera, visibleTiles, ringTiles, tileRect, ancestor, interpolate, parseMeshHeader, parseLabels, tileZoom, worldFitZoom, clampCamera } from "../src/rust-renderer/geo.js";
 
 const close = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} vs ${b}`);
 
@@ -102,22 +102,38 @@ test("exponential interpolation matches MapLibre's formula", () => {
   close(interpolate([[0, 0], [10, 10]], 1, 2.5), 2.5);
 });
 
-function meshBuffer(fillV, fillI, lineV, lineI, flags = 0) {
+function meshBuffer(fillV, fillI, lineV, lineI, flags = 0, labels = []) {
   const pad4 = (n) => (n + 3) & ~3;
   const iw = (wide) => (wide ? 4 : 2);
-  const size = 28 + pad4(fillV * 6) + pad4(fillI * iw(flags & 1)) + lineV * 8 + pad4(lineI * iw(flags & 2));
-  const b = new ArrayBuffer(size);
+  const enc = new TextEncoder();
+  const texts = labels.map((l) => enc.encode(l.text));
+  const labelBytes = pad4(texts.reduce((a, t) => a + 15 + t.length, 0));
+  const labelAt = 36 + pad4(fillV * 6) + pad4(fillI * iw(flags & 1)) + lineV * 8 + pad4(lineI * iw(flags & 2));
+  const b = new ArrayBuffer(labelAt + labelBytes);
   const v = new DataView(b);
   "MESH".split("").forEach((c, i) => v.setUint8(i, c.charCodeAt(0)));
-  [2, flags, fillV, fillI, lineV, lineI].forEach((n, i) => v.setUint32(4 + 4 * i, n, true));
+  [3, flags, fillV, fillI, lineV, lineI, labels.length, labelBytes].forEach((n, i) => v.setUint32(4 + 4 * i, n, true));
+  let o = labelAt;
+  labels.forEach((l, i) => {
+    v.setInt16(o, l.x, true);
+    v.setInt16(o + 2, l.y, true);
+    v.setInt16(o + 4, Math.round(l.angle * 10000), true);
+    v.setUint16(o + 6, l.run, true);
+    v.setUint8(o + 8, l.kind);
+    v.setUint8(o + 9, l.minZoom);
+    v.setInt32(o + 10, l.priority, true);
+    v.setUint8(o + 14, texts[i].length);
+    new Uint8Array(b, o + 15, texts[i].length).set(texts[i]);
+    o += 15 + texts[i].length;
+  });
   return b;
 }
 
 test("mesh header: offsets follow the wire format, padding included", () => {
   const h = parseMeshHeader(meshBuffer(3, 3, 4, 6));
-  assert.deepEqual([h.fillVerts, h.fillIdx, h.lineVerts, h.lineIdx], [28, 48, 56, 88]);
+  assert.deepEqual([h.fillVerts, h.fillIdx, h.lineVerts, h.lineIdx, h.labels], [36, 56, 64, 96, 108]);
   const w = parseMeshHeader(meshBuffer(1, 3, 2, 3, 3));
-  assert.deepEqual([w.fillWide, w.lineWide, w.fillIdx, w.lineVerts, w.lineIdx], [true, true, 36, 48, 64]);
+  assert.deepEqual([w.fillWide, w.lineWide, w.fillIdx, w.lineVerts, w.lineIdx], [true, true, 44, 56, 72]);
 });
 
 test("mesh header refuses bad input", () => {
@@ -126,7 +142,18 @@ test("mesh header refuses bad input", () => {
   new DataView(b).setUint8(0, 88);
   assert.throws(() => parseMeshHeader(b), /magic/);
   const c = meshBuffer(1, 0, 0, 0);
-  new DataView(c).setUint32(4, 1, true);
+  new DataView(c).setUint32(4, 2, true);
   assert.throws(() => parseMeshHeader(c), /version/);
-  assert.throws(() => parseMeshHeader(meshBuffer(1, 0, 0, 0).slice(0, 32)), /header says/);
+  assert.throws(() => parseMeshHeader(meshBuffer(1, 0, 0, 0).slice(0, 40)), /header says/);
+});
+
+test("labels round-trip through the label block, UTF-8 included", () => {
+  const labels = [
+    { x: 10, y: -2, angle: 0.5, run: 300, kind: 4, minZoom: 12, priority: -7, text: "Ocean Ave" },
+    { x: 1, y: 2, angle: 0, run: 0, kind: 0, minZoom: 8, priority: 3, text: "Zürich" },
+  ];
+  const b = meshBuffer(3, 3, 2, 3, 0, labels);
+  const h = parseMeshHeader(b);
+  assert.equal(h.labelN, 2);
+  assert.deepEqual(parseLabels(b, h), labels);
 });

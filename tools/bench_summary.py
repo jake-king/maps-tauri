@@ -32,6 +32,9 @@ def main():
               f" (avg {v['load']['avg']} ms) | unique {v['unique_tiles']} | cache max {v['cache_max']}"
               f" | dropped frames {v['dropped']}/{v['frames']['n']} (+{v['jitter_only']} within timer rounding)"
               f" | mem {v['memory_mb']} MB")
+        ld = v.get("label_draw")
+        if ld:
+            print(f"     render CPU avg {v['render']['avg']} ms p95 {v['render']['p95']} | of which labels avg {ld['avg']} ms p95 {ld['p95']} worst {ld['worst']}, {ld['labels_avg']} labels/frame")
         w = v.get("visible_wait")
         if w:
             mc = v.get("mesh_cache") or {}

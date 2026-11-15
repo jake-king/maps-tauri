@@ -47,6 +47,7 @@ const map = new RustMap({
   cacheSize: CACHE_TILES,
   fallback: !flags.noFallback,
   prefetchRing: flags.prefetchRing ?? 1,
+  labels: !flags.noLabels,
 });
 map.onVisibleWait = (ms) => stats.tap?.("visible", ms);
 // pixel check: a magenta background, so any uncovered screen area is countable
