@@ -509,3 +509,35 @@ is visible however slowly a resting CPU builds it.
 
 Problem:
 - zsh again: `B="cmd args"; $B` does not split into words in zsh. A shell function does.
+
+## Prefetch, and a cache that turned out not to be needed
+
+Profiling showed the per-request time is mostly a resting CPU building the mesh. Two ways to take
+it off the critical path, each measured by a new figure: for every tile, how long it was on screen
+before it could be drawn (`visible_wait`; 0 when it was ready in time).
+
+**A prefetch ring.** The renderer also requests the ring of tiles one beyond the view, at a lower
+priority than anything visible (`ringTiles` in geo.js, tested; `MAPS_PREFETCH_RING`). At zoom 15 a
+zoom-14 tile is 1,024 px wide, so at 4,000 px/s the ring gives about 256 ms of lead, against a fetch
+of about 16 ms.
+
+| pan benchmark, first visit | no ring | ring of 1 |
+|---|---|---|
+| tiles not ready when they came into view | 40 of 40 | **0 of 40** |
+| wait while visible, avg / p95 | 15.3 / 27 ms | **0 / 0 ms** |
+| frames drawing a fallback ancestor | 9.3% | **0%** |
+| tiles fetched | 43 | 77 |
+| memory | ~354 MB | ~364 MB (Rust cache off) |
+
+**A Rust mesh cache** (`MeshCache`: an LRU by bytes, `MAPS_MESH_CACHE_MB`, tested). In the
+benchmark it had zero hits: the renderer's GPU-side cache holds every tile, so the Rust cache only
+duplicated it, at about 20 MB. Shrinking the GPU cache to 12 tiles forces re-fetches; there the Rust
+cache halved request time (6.7 against 15.9 ms) but changed nothing visible, because the ring kept
+every tile ahead of the view. A stress run at 16,000 px/s (`MAPS_BENCH_SPEED`; the pan took 2.1 s
+instead of 8, every frame rendered) gave the same: every tile ready, cache or not. So the cache is
+off by default and kept for a case that needs it.
+
+The question was whether a tile's request-to-drawable time could go under 1 ms. Per request, no:
+the webview's IPC alone is several milliseconds, and a resting CPU makes the mesh slower still. But
+the time a user waits for a tile is now 0 ms in every run, because the request happens before the
+tile is visible.

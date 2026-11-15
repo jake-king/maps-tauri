@@ -32,6 +32,11 @@ def main():
               f" (avg {v['load']['avg']} ms) | unique {v['unique_tiles']} | cache max {v['cache_max']}"
               f" | dropped frames {v['dropped']}/{v['frames']['n']} (+{v['jitter_only']} within timer rounding)"
               f" | mem {v['memory_mb']} MB")
+        w = v.get("visible_wait")
+        if w:
+            mc = v.get("mesh_cache") or {}
+            print(f"     visible wait: {w['n']} tiles, {w['not_ready']} not ready when visible; wait avg {w['avg']} ms, p95 {w['p95']}, worst {w['worst']}"
+                  f" | Rust mesh cache: {mc.get('hits', 0)} hits / {mc.get('misses', 0)} misses, {mc.get('entries', 0)} meshes, {mc.get('bytes', 0) / 1048576:.1f} MB")
         s = v.get("stages")
         if s:
             print(f"     handler stages, ms/request: wait {s['wait']}, read {s['read']}, decode {s['decode']}, mesh {s['mesh']},"

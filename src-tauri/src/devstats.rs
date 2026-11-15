@@ -100,6 +100,7 @@ pub struct StageWindow {
     /// requests running at once, seen by each request as it starts: sum (for the mean) and max
     pub inflight_sum: u64,
     pub inflight_max: u64,
+    pub cache_hits: u64,
 }
 
 #[derive(Default)]
@@ -121,6 +122,7 @@ impl StageTimes {
         w.copy_ms += ms(s.copy);
         w.inflight_sum += inflight;
         w.inflight_max = w.inflight_max.max(inflight);
+        w.cache_hits += u64::from(s.cache_hit);
     }
     pub fn take(&self) -> StageWindow {
         std::mem::take(&mut *self.inner.lock().expect("stage lock"))

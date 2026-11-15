@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { lngLatToWorld, worldToLngLat, Camera, visibleTiles, tileRect, ancestor, interpolate, parseMeshHeader, tileZoom } from "../src/rust-renderer/geo.js";
+import { lngLatToWorld, worldToLngLat, Camera, visibleTiles, ringTiles, tileRect, ancestor, interpolate, parseMeshHeader, tileZoom } from "../src/rust-renderer/geo.js";
 
 const close = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} vs ${b}`);
 
@@ -46,6 +46,20 @@ test("visible tiles: the right zoom, the whole view, nearest first", () => {
   const deep = visibleTiles(new Camera(cam.cx, cam.cy, 17.2, 1200, 800), 0, 14);
   assert.ok(deep.every(([z]) => z === 14) && deep.length <= 4);
   assert.equal(tileZoom(3.9, 0, 14), 3);
+});
+
+test("the prefetch ring: the tiles around the view, none of the visible ones", () => {
+  const cam = new Camera(...lngLatToWorld(-118.45, 34.025), 14.3, 1200, 800);
+  const vis = visibleTiles(cam, 0, 14).map((t) => t.join());
+  const ring = ringTiles(cam, 0, 14, 1);
+  const xs = visibleTiles(cam, 0, 14).map((t) => t[1]), ys = visibleTiles(cam, 0, 14).map((t) => t[2]);
+  const w = Math.max(...xs) - Math.min(...xs) + 1, h = Math.max(...ys) - Math.min(...ys) + 1;
+  assert.equal(ring.length, (w + 2) * (h + 2) - w * h);
+  assert.ok(ring.every((t) => !vis.includes(t.join())));
+  assert.ok(ring.every(([z, x, y]) => z === 14 && x >= Math.min(...xs) - 1 && x <= Math.max(...xs) + 1 && y >= Math.min(...ys) - 1 && y <= Math.max(...ys) + 1));
+  assert.deepEqual(ringTiles(cam, 0, 14, 0), []);
+  // at the edge of the world the ring is clipped, not negative
+  assert.ok(ringTiles(new Camera(0.0001, 0.0001, 3, 100, 100), 0, 14, 1).every(([, x, y]) => x >= 0 && y >= 0));
 });
 
 test("a z14 tile is 512 px at zoom 14 and 1024 at zoom 15", () => {

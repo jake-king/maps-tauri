@@ -8,7 +8,7 @@
 // painter.context.gl, project/unproject, jumpTo/easeTo, areTilesLoaded), so F4, F6 and the pixel
 // check measure both renderers the same way.
 
-import { Camera, lngLatToWorld, worldToLngLat, visibleTiles, tileRect, ancestor, interpolate, parseMeshHeader } from "./geo.js";
+import { Camera, lngLatToWorld, worldToLngLat, visibleTiles, ringTiles, tileRect, ancestor, interpolate, parseMeshHeader } from "./geo.js";
 import palette from "./palette.json";
 
 const EXTENT = 4096;
@@ -74,7 +74,8 @@ function program(gl, vs, fs) {
 const rgbaF = (c) => [c[0] / 255, c[1] / 255, c[2] / 255, c[3] / 255];
 
 export class RustMap {
-  constructor({ container, baseUrl, center, zoom, minZoom = 0, maxZoom = 14, cacheSize = 240, background, fallback = true }) {
+  constructor({ container, baseUrl, center, zoom, minZoom = 0, maxZoom = 14, cacheSize = 240, background, fallback = true, prefetchRing = 1 }) {
+    this.prefetchRing = prefetchRing; // tiles beyond the view to fetch ahead (0: off)
     this.fallback = fallback; // draw a loaded ancestor for a tile still loading
     this.baseUrl = baseUrl;
     this.minZ = minZoom;
@@ -236,6 +237,7 @@ export class RustMap {
     let t = this.tiles.get(key);
     if (t) {
       t.lastUsed = this.frame;
+      if (t.state === "queued" && priority < t.priority) t.priority = priority; // a ring tile became visible
       return t;
     }
     t = { key, z, x, y, state: "queued", lastUsed: this.frame, priority };
@@ -268,6 +270,11 @@ export class RustMap {
         this.onFetched?.(performance.now() - t0);
         this.upload(t, buf); // the ArrayBuffer is dropped after this: only the GPU copy remains
         t.state = "loaded";
+      }
+      // the wait a user saw: from the moment the tile was needed on screen to now
+      if (t.neededAt !== undefined && !t.waitReported) {
+        t.waitReported = true;
+        this.onVisibleWait?.(performance.now() - t.neededAt);
       }
     } catch (e) {
       t.state = "error";
@@ -383,10 +390,24 @@ export class RustMap {
 
     const needed = this.needed();
     const keep = new Set();
+    const nowMs = performance.now();
     needed.forEach(([z, x, y], i) => {
-      keep.add(this.request(z, x, y, i).key);
+      const t = this.request(z, x, y, i);
+      keep.add(t.key);
+      if (t.neededAt === undefined) {
+        // first frame this tile is on screen: if it is ready, the user waited 0 ms for it
+        t.neededAt = nowMs;
+        if (t.state === "loaded" || t.state === "empty") {
+          t.waitReported = true;
+          this.onVisibleWait?.(0);
+        }
+      }
       const [pz, px, py] = ancestor(z, x, y, Math.max(this.minZ, z - FALLBACK_DEPTH));
       keep.add(this.request(pz, px, py, 1000 + i).key);
+    });
+    // prefetch: the ring just beyond the view, after everything visible and its fallbacks
+    ringTiles(this.cam, this.minZ, this.maxZ, this.prefetchRing).forEach(([z, x, y], i) => {
+      keep.add(this.request(z, x, y, 2000 + i).key);
     });
     this.pump();
     this.evict(keep);

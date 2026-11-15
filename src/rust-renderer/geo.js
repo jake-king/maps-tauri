@@ -51,6 +51,30 @@ export function visibleTiles(cam, minZ, maxZ) {
   return out;
 }
 
+/**
+ * The ring of tiles `margin` tiles beyond the view at the same zoom (not the visible ones), nearest
+ * the center first: what to fetch before it scrolls into view.
+ */
+export function ringTiles(cam, minZ, maxZ, margin = 1) {
+  if (margin <= 0) return [];
+  const z = tileZoom(cam.zoom, minZ, maxZ);
+  const n = 2 ** z;
+  const [x0, y0] = cam.screenToWorld(0, 0);
+  const [x1, y1] = cam.screenToWorld(cam.w, cam.h);
+  const vx0 = Math.floor(x0 * n), vy0 = Math.floor(y0 * n), vx1 = Math.floor(x1 * n), vy1 = Math.floor(y1 * n);
+  const out = [];
+  for (let y = Math.max(0, vy0 - margin); y <= Math.min(n - 1, vy1 + margin); y++) {
+    for (let x = Math.max(0, vx0 - margin); x <= Math.min(n - 1, vx1 + margin); x++) {
+      if (x >= vx0 && x <= vx1 && y >= vy0 && y <= vy1) continue;
+      out.push([z, x, y]);
+    }
+  }
+  const cx = cam.cx * n - 0.5;
+  const cy = cam.cy * n - 0.5;
+  out.sort((a, b) => (a[1] - cx) ** 2 + (a[2] - cy) ** 2 - ((b[1] - cx) ** 2 + (b[2] - cy) ** 2));
+  return out;
+}
+
 /** A tile's rectangle on screen, CSS px: `{ x, y, w, h }`. */
 export function tileRect(cam, z, x, y) {
   const n = 2 ** z;

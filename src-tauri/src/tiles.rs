@@ -95,6 +95,76 @@ pub fn parse_mesh_path(path: &str) -> Option<(u8, u32, u32)> {
     Some((z, x, y))
 }
 
+/// Serialized meshes by tile, least recently used evicted first, bounded by bytes. A hit skips read,
+/// decode and mesh: the work a resting CPU does slowly (see the journal's profiling entry).
+pub struct MeshCache {
+    budget: usize,
+    inner: std::sync::Mutex<MeshCacheInner>,
+}
+
+#[derive(Default)]
+struct MeshCacheInner {
+    map: std::collections::HashMap<(u8, u32, u32), (std::sync::Arc<Vec<u8>>, u64)>,
+    bytes: usize,
+    tick: u64,
+    hits: u64,
+    misses: u64,
+}
+
+impl MeshCache {
+    pub fn new(budget_bytes: usize) -> Self {
+        MeshCache { budget: budget_bytes, inner: Default::default() }
+    }
+
+    pub fn get(&self, k: (u8, u32, u32)) -> Option<std::sync::Arc<Vec<u8>>> {
+        let mut c = self.inner.lock().expect("mesh cache lock");
+        c.tick += 1;
+        let tick = c.tick;
+        match c.map.get_mut(&k) {
+            Some(e) => {
+                e.1 = tick;
+                let v = e.0.clone();
+                c.hits += 1;
+                Some(v)
+            }
+            None => {
+                c.misses += 1;
+                None
+            }
+        }
+    }
+
+    /// Insert, then evict least recently used entries until within budget. A mesh larger than the
+    /// whole budget is not kept.
+    pub fn put(&self, k: (u8, u32, u32), v: std::sync::Arc<Vec<u8>>) {
+        if v.len() > self.budget {
+            return;
+        }
+        let mut c = self.inner.lock().expect("mesh cache lock");
+        c.tick += 1;
+        let tick = c.tick;
+        if let Some((old, _)) = c.map.insert(k, (v.clone(), tick)) {
+            c.bytes -= old.len();
+        }
+        c.bytes += v.len();
+        while c.bytes > self.budget {
+            let Some((&victim, _)) = c.map.iter().min_by_key(|(_, (_, t))| *t) else { break };
+            if let Some((old, _)) = c.map.remove(&victim) {
+                c.bytes -= old.len();
+            }
+        }
+    }
+
+    /// (entries, bytes, hits, misses); hits and misses reset on read.
+    pub fn take_stats(&self) -> (usize, usize, u64, u64) {
+        let mut c = self.inner.lock().expect("mesh cache lock");
+        let out = (c.map.len(), c.bytes, c.hits, c.misses);
+        c.hits = 0;
+        c.misses = 0;
+        out
+    }
+}
+
 /// How long each stage of one mesh request took.
 #[derive(Default, Debug, Clone, Copy)]
 pub struct MeshStages {
@@ -103,15 +173,35 @@ pub struct MeshStages {
     pub mesh: std::time::Duration,
     pub serialize: std::time::Duration,
     pub copy: std::time::Duration,
+    pub cache_hit: bool,
 }
 
-/// The native renderer's tiles: decoded and meshed in Rust, sent as the mesh wire format
-/// (crates/vtile/src/mesh.rs). 204 when the archive has no such tile.
-pub fn handle_mesh(archive: &vtile::pmtiles::Archive, z: u8, x: u32, y: u32) -> Response<Vec<u8>> {
-    handle_mesh_timed(archive, z, x, y).0
+/// The native renderer's tiles, through the cache: decoded and meshed in Rust, sent as the mesh wire
+/// format (crates/vtile/src/mesh.rs); 204 when the archive has no such tile. A hit is copied out of
+/// the cache, a miss is built and kept.
+pub fn handle_mesh_cached(archive: &vtile::pmtiles::Archive, cache: &MeshCache, z: u8, x: u32, y: u32) -> (Response<Vec<u8>>, MeshStages) {
+    let t0 = std::time::Instant::now();
+    if let Some(bytes) = cache.get((z, x, y)) {
+        let body = bytes.as_ref().clone();
+        let st = MeshStages { copy: t0.elapsed(), cache_hit: true, ..Default::default() };
+        return (mesh_response(body), st);
+    }
+    let (res, st) = handle_mesh_timed(archive, z, x, y);
+    if res.status() == StatusCode::OK {
+        cache.put((z, x, y), std::sync::Arc::new(res.body().clone()));
+    }
+    (res, st)
 }
 
-/// [`handle_mesh`], with the time each stage took.
+fn mesh_response(body: Vec<u8>) -> Response<Vec<u8>> {
+    respond(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::CONTENT_LENGTH, body.len())
+        .body(body)
+        .expect("valid response")
+}
+
+/// Build one tile's mesh response, with the time each stage took.
 pub fn handle_mesh_timed(archive: &vtile::pmtiles::Archive, z: u8, x: u32, y: u32) -> (Response<Vec<u8>>, MeshStages) {
     use std::time::Instant;
     let mut st = MeshStages::default();
@@ -138,12 +228,7 @@ pub fn handle_mesh_timed(archive: &vtile::pmtiles::Archive, z: u8, x: u32, y: u3
         st.copy = t4.elapsed();
         body
     });
-    let res = respond(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/octet-stream")
-        .header(header::CONTENT_LENGTH, body.len())
-        .body(body)
-        .expect("valid response");
-    (res, st)
+    (mesh_response(body), st)
 }
 
 /// Answer one request. Runs on a worker thread, never the UI thread.
@@ -217,6 +302,26 @@ mod tests {
         let big = MAX_RANGE * 2;
         assert_eq!(parse_range(Some(&format!("bytes=0-{}", MAX_RANGE)), big), Range::Unsatisfiable);
         assert_eq!(parse_range(Some(&format!("bytes=0-{}", MAX_RANGE - 1)), big), Range::Bytes(0, MAX_RANGE - 1));
+    }
+
+    #[test]
+    fn mesh_cache_evicts_least_recently_used_within_budget() {
+        let c = MeshCache::new(100);
+        let v = |n: usize| std::sync::Arc::new(vec![0u8; n]);
+        c.put((1, 0, 0), v(40));
+        c.put((1, 0, 1), v(40));
+        assert!(c.get((1, 0, 0)).is_some()); // (1,0,0) is now the most recent
+        c.put((1, 1, 0), v(40)); // 120 > 100: evicts the least recent, (1,0,1)
+        assert!(c.get((1, 0, 1)).is_none());
+        assert!(c.get((1, 0, 0)).is_some() && c.get((1, 1, 0)).is_some());
+        c.put((1, 1, 1), v(500)); // bigger than the budget: not kept, nothing evicted
+        assert!(c.get((1, 1, 1)).is_none());
+        let (n, bytes, hits, misses) = c.take_stats();
+        assert_eq!((n, bytes), (2, 80));
+        assert_eq!((hits, misses), (3, 2));
+        assert_eq!(c.take_stats().2, 0, "hit counts reset on read");
+        c.put((1, 0, 0), v(10)); // replacing an entry adjusts the byte count
+        assert_eq!(c.take_stats().1, 50);
     }
 
     #[test]

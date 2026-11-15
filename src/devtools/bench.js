@@ -5,7 +5,10 @@
 import { invoke } from "@tauri-apps/api/core";
 
 const ZOOM = 15;
-const SPEED_PX_S = 4000; // a fast hand pan
+let SPEED_PX_S = 4000; // a fast hand pan; MAPS_BENCH_SPEED overrides it (a stress test)
+export const setBenchSpeed = (v) => {
+  if (v > 0) SPEED_PX_S = v;
+};
 const ROWS = 4;
 
 const pct = (xs, p) => {
@@ -33,7 +36,7 @@ export function lawnmower(b, rows = ROWS, inset = 0.15) {
 }
 
 async function pass(map, stats, path) {
-  const rec = { frame: [], render: [], missing: 0, rendered: 0, fetch: [], load: [], tiles: new Set(),
+  const rec = { frame: [], render: [], missing: 0, rendered: 0, fetch: [], load: [], visible: [], tiles: new Set(),
                 grayFrames: 0, grayTiles: 0, neededTiles: 0,
                 pix: { frames: 0, area: [], both: 0, tileOnly: 0, pixelOnly: 0 } };
   const onLoading = (e) => e.tile && e.sourceId === "protomaps" && rec.tiles.add(e.tile.tileID.key);
@@ -113,6 +116,9 @@ async function pass(map, stats, path) {
     // render loop stalled (as it did when a listener threw), and every figure above is suspect
     rendered_ratio: r1(rec.rendered / Math.max(1, rec.frame.length)),
     listener_errors: map.listenerErrors ?? 0,
+    // the native renderer: how long each tile was on screen before it could be drawn (0 = ready in time)
+    visible_wait: rec.visible.length ? { ...summary(rec.visible), not_ready: rec.visible.filter((v) => v > 0).length } : null,
+    mesh_cache: backend.mesh_cache ?? null,
     tiles_loaded: rec.load.length,
     unique_tiles: rec.tiles.size,
     cache_max: map.style?.tileManagers?.protomaps?._outOfViewCache?.max ?? null,

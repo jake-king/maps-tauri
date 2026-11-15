@@ -40,11 +40,14 @@ fn search(query: String, limit: Option<usize>, db: tauri::State<'_, Gazetteer>) 
 fn dev_stats(
     tiles: tauri::State<'_, Arc<devstats::TileTimes>>,
     stages: tauri::State<'_, Arc<devstats::StageTimes>>,
+    cache: tauri::State<'_, Arc<tiles::MeshCache>>,
 ) -> serde_json::Value {
+    let (entries, bytes, hits, misses) = cache.take_stats();
     serde_json::json!({
         "memory": devstats::process_tree_memory(),
         "tiles": tiles.take(),
         "stages": stages.take(),
+        "mesh_cache": { "entries": entries, "bytes": bytes, "hits": hits, "misses": misses },
     })
 }
 
@@ -70,6 +73,10 @@ fn dev_flags() -> serde_json::Value {
         "renderer": std::env::var("MAPS_RENDERER").ok(),
         // MAPS_NO_FALLBACK=1: the native renderer draws nothing for a tile still loading (a control)
         "noFallback": std::env::var("MAPS_NO_FALLBACK").is_ok_and(|v| v == "1"),
+        // MAPS_PREFETCH_RING=<n>: tiles beyond the view the native renderer fetches ahead (default 1)
+        "prefetchRing": num("MAPS_PREFETCH_RING"),
+        // MAPS_BENCH_SPEED=<px/s>: the pan benchmark's speed (default 4000), for stress runs
+        "benchSpeed": num("MAPS_BENCH_SPEED"),
         // MAPS_SNAPSHOT=<name>: settle at a fixed view, save the frame as logs/snapshot-<name>.png, exit
         "snapshot": std::env::var("MAPS_SNAPSHOT").ok(),
         // MAPS_EMPTY_STYLE=1: a background layer only, no source, tiles or fonts (a memory control)
@@ -167,6 +174,14 @@ pub fn run() {
     let tile_times = Arc::new(devstats::TileTimes::default());
     let handler_times = tile_times.clone();
     let stage_times = Arc::new(devstats::StageTimes::default());
+    // The Rust mesh cache, MAPS_MESH_CACHE_MB (default 0: off). With the renderer's prefetch ring
+    // every tile was ready before it was visible in every benchmark run, up to 16,000 px/s, with or
+    // without this cache; it cost ~20 MB and halved only requests already ahead of the view
+    // (bench/2026-11-15-{nc-ring1,small-gpu-rust*,fast-rust*}.json). Kept for cases prefetch cannot
+    // cover, off until one is measured.
+    let cache_mb: usize = std::env::var("MAPS_MESH_CACHE_MB").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let mesh_cache = Arc::new(tiles::MeshCache::new(cache_mb << 20));
+    let handler_cache = mesh_cache.clone();
     let handler_stages = stage_times.clone();
     let log_tiles = std::env::var("MAPS_LOG_TILES").is_ok_and(|v| v == "1");
     // A control for the benchmark's gray-box measure: slow every tile response down on purpose.
@@ -178,6 +193,7 @@ pub fn run() {
         .manage(gazetteer)
         .manage(tile_times)
         .manage(stage_times)
+        .manage(mesh_cache)
         // Asynchronous so a file read never runs on the UI thread: the handler hands the request
         // to a blocking-pool thread and answers through the responder when the read is done.
         .register_asynchronous_uri_scheme_protocol("tiles", move |_ctx, request, responder| {
@@ -185,6 +201,7 @@ pub fn run() {
             let times = handler_times.clone();
             let archive = archive.clone();
             let stages = handler_stages.clone();
+            let cache = handler_cache.clone();
             let queued = Instant::now();
             tauri::async_runtime::spawn_blocking(move || {
                 use std::sync::atomic::Ordering;
@@ -196,7 +213,7 @@ pub fn run() {
                 let t0 = Instant::now();
                 let res = match (tiles::parse_mesh_path(request.uri().path()), archive.as_ref()) {
                     (Some((z, x, y)), Some(a)) => {
-                        let (res, st) = tiles::handle_mesh_timed(a, z, x, y);
+                        let (res, st) = tiles::handle_mesh_cached(a, &cache, z, x, y);
                         stages.record(wait, &st, inflight);
                         res
                     }

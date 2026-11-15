@@ -1,0 +1,211 @@
+{
+ "blocks": [
+  {
+   "bytes": 64016,
+   "label": "GPU buffers",
+   "note": "52"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU textures",
+   "note": "0"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU renderbuffers",
+   "note": "0"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU shader programs",
+   "note": "2 linked (driver memory, not counted)"
+  },
+  {
+   "bytes": 0,
+   "label": "tiles, CPU arrays",
+   "note": "0+0"
+  },
+  {
+   "bytes": 64020,
+   "label": "mesh cache (GPU copies)",
+   "note": "13 tiles"
+  }
+ ],
+ "cache_tiles": 12,
+ "cold": {
+  "cache_max": null,
+  "dropped": 0,
+  "fetch": {
+   "avg": 11.1,
+   "n": 103,
+   "p95": 26,
+   "worst": 31
+  },
+  "frames": {
+   "avg": 16.6,
+   "n": 485,
+   "p95": 18,
+   "worst": 21
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 54,
+  "listener_errors": 0,
+  "load": {
+   "avg": 11.4,
+   "n": 103,
+   "p95": 26,
+   "worst": 31
+  },
+  "memory_mb": 360,
+  "mesh_cache": {
+   "bytes": 26377072,
+   "entries": 104,
+   "hits": 26,
+   "misses": 77
+  },
+  "missing_frames": 0,
+  "missing_pct": 0,
+  "moving_s": 8,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 484,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 0.6,
+   "n": 484,
+   "p95": 1,
+   "worst": 3
+  },
+  "rendered": 484,
+  "rendered_ratio": 1,
+  "serve": {
+   "avg": 7.4,
+   "bytes": 26676976,
+   "n": 103,
+   "worst": 25.8
+  },
+  "settle_ms": 0,
+  "stages": {
+   "copy": 0.11,
+   "decode": 0.74,
+   "inflight_avg": 1.96,
+   "inflight_max": 5,
+   "mesh": 5.06,
+   "n": 103,
+   "read": 1.06,
+   "serialize": 0.22,
+   "wait": 0.03
+  },
+  "tiles_loaded": 103,
+  "unique_tiles": 86,
+  "visible_wait": {
+   "avg": 0,
+   "n": 40,
+   "not_ready": 0,
+   "p95": 0,
+   "worst": 0
+  }
+ },
+ "cores": 8,
+ "pixel_check": false,
+ "pixel_selftest_outside_pct": null,
+ "prefetch_ring": 1,
+ "renderer": "rust",
+ "speed_px_s": 4000,
+ "warm": {
+  "cache_max": null,
+  "dropped": 0,
+  "fetch": {
+   "avg": 6.4,
+   "n": 103,
+   "p95": 13,
+   "worst": 21
+  },
+  "frames": {
+   "avg": 16.6,
+   "n": 487,
+   "p95": 18,
+   "worst": 23
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 60,
+  "listener_errors": 0,
+  "load": {
+   "avg": 6.7,
+   "n": 103,
+   "p95": 13,
+   "worst": 22
+  },
+  "memory_mb": 364,
+  "mesh_cache": {
+   "bytes": 26377072,
+   "entries": 104,
+   "hits": 103,
+   "misses": 0
+  },
+  "missing_frames": 0,
+  "missing_pct": 0,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 486,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 0.7,
+   "n": 486,
+   "p95": 1,
+   "worst": 3
+  },
+  "rendered": 486,
+  "rendered_ratio": 1,
+  "serve": {
+   "avg": 0.1,
+   "bytes": 26676976,
+   "n": 103,
+   "worst": 1
+  },
+  "settle_ms": 0,
+  "stages": {
+   "copy": 0.1,
+   "decode": 0,
+   "inflight_avg": 1.3,
+   "inflight_max": 3,
+   "mesh": 0,
+   "n": 103,
+   "read": 0,
+   "serialize": 0,
+   "wait": 0.03
+  },
+  "tiles_loaded": 103,
+  "unique_tiles": 86,
+  "visible_wait": {
+   "avg": 0,
+   "n": 40,
+   "not_ready": 0,
+   "p95": 0,
+   "worst": 0
+  }
+ },
+ "zoom": 15,
+ "label": "small-gpu-rust32 (release)"
+}

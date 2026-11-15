@@ -5,7 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { RustMap } from "./renderer.js";
 import { createStats, instrument, pollBackend, createOverlay } from "../devtools/overlay.js";
-import { runBench, runSoak } from "../devtools/bench.js";
+import { runBench, runSoak, setBenchSpeed } from "../devtools/bench.js";
 import { GpuLedger, installGpuLedger } from "../devtools/gpumem.js";
 import { blockRows } from "../devtools/blocks.js";
 import { snapshot } from "../devtools/snapshot.js";
@@ -31,6 +31,7 @@ if (flags.memprobe === "blank") {
   await new Promise(() => {});
 }
 
+setBenchSpeed(flags.benchSpeed ?? 0);
 const info = await invoke("archive_info");
 const bounds = { minLon: info.minLon, minLat: info.minLat, maxLon: info.maxLon, maxLat: info.maxLat };
 const TILES = navigator.userAgent.includes("Windows") ? "http://tiles.localhost" : "tiles://localhost";
@@ -45,7 +46,9 @@ const map = new RustMap({
   maxZoom: info.maxZoom,
   cacheSize: CACHE_TILES,
   fallback: !flags.noFallback,
+  prefetchRing: flags.prefetchRing ?? 1,
 });
+map.onVisibleWait = (ms) => stats.tap?.("visible", ms);
 // pixel check: a magenta background, so any uncovered screen area is countable
 if (flags.pixelCheck) map.setBackground([1, 0, 1, 1]);
 
@@ -88,7 +91,7 @@ const bench = async () => {
   const result = await runBench(map, stats, bounds, { pixelCheck: flags.pixelCheck });
   benching = false;
   Object.assign(result, {
-    renderer: "rust", cache_tiles: CACHE_TILES, cores: navigator.hardwareConcurrency,
+    renderer: "rust", cache_tiles: CACHE_TILES, cores: navigator.hardwareConcurrency, prefetch_ring: flags.prefetchRing ?? 1,
     pixel_check: !!flags.pixelCheck, blocks: rows(map),
   });
   invoke("bench_done", { result });
