@@ -106,16 +106,34 @@ fn bench_done(result: serde_json::Value, app: tauri::AppHandle) {
     }
 }
 
+/// The archive the native renderer reads, and where it came from ("remote" or "local").
+struct ArchiveState(Arc<Option<vtile::pmtiles::Archive>>, &'static str);
+
 /// The archive's bounds, center and zoom range, read by vtile from its header: what the native
 /// renderer needs to place its camera, without loading a JavaScript tile library.
 #[tauri::command]
-fn archive_info() -> Result<serde_json::Value, String> {
-    let a = vtile::pmtiles::Archive::open(&data_dir().join(archive_name())).map_err(|e| e.to_string())?;
+fn archive_info(state: tauri::State<'_, ArchiveState>) -> Result<serde_json::Value, String> {
+    let a = state.0.as_ref().as_ref().ok_or("no archive could be opened")?;
     let h = &a.header;
     Ok(serde_json::json!({
         "minZoom": h.min_zoom, "maxZoom": h.max_zoom,
         "minLon": h.bounds[0], "minLat": h.bounds[1], "maxLon": h.bounds[2], "maxLat": h.bounds[3],
+        "source": state.1,
     }))
+}
+
+/// The remote planet, if one is configured and not switched off: `MAPS_ARCHIVE_URL`, else the URL in
+/// the gitignored `data/remote.url` (so a LAN hostname stays out of the repository).
+/// `MAPS_LOCAL_ONLY=1` switches it off (the benchmark scripts set it).
+fn remote_url() -> Option<String> {
+    if std::env::var("MAPS_LOCAL_ONLY").is_ok_and(|v| v == "1") {
+        return None;
+    }
+    std::env::var("MAPS_ARCHIVE_URL")
+        .ok()
+        .or_else(|| std::fs::read_to_string(data_dir().join("remote.url")).ok())
+        .map(|s| s.trim().to_owned())
+        .filter(|s| s.starts_with("https://") || s.starts_with("http://"))
 }
 
 /// Saves a frame the frontend captured (a PNG data URL) as logs/snapshot-<name>.png, for looking at
@@ -194,7 +212,21 @@ pub fn run() {
     // The native renderer reads the same archive through vtile; opened once, read with pread from
     // any thread.
     let archive_file = archive_name();
-    let archive = Arc::new(vtile::pmtiles::Archive::open(&data.join(&archive_file)).ok());
+    // The native renderer reads the remote planet when one is configured and reachable, else the
+    // local extract. The MapLibre app always reads the local file through tiles://basemap.pmtiles.
+    let (archive, source) = match remote_url().map(|u| vtile::pmtiles::Archive::open_url(&u)) {
+        Some(Ok(a)) => {
+            println!("[archive] remote planet, zooms {}-{}", a.header.min_zoom, a.header.max_zoom);
+            (Some(a), "remote")
+        }
+        other => {
+            if let Some(Err(e)) = other {
+                eprintln!("[archive] remote planet unreachable ({e}); using the local extract");
+            }
+            (vtile::pmtiles::Archive::open(&data.join(&archive_file)).ok(), "local")
+        }
+    };
+    let archive = Arc::new(archive);
     let tile_times = Arc::new(devstats::TileTimes::default());
     let handler_times = tile_times.clone();
     let stage_times = Arc::new(devstats::StageTimes::default());
@@ -215,6 +247,7 @@ pub fn run() {
     );
     tauri::Builder::default()
         .manage(gazetteer)
+        .manage(ArchiveState(archive.clone(), source))
         .manage(tile_times)
         .manage(stage_times)
         .manage(mesh_cache)

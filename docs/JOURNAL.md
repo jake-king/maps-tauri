@@ -727,3 +727,29 @@ await. This is the trap recorded from the homelab map viewer ("an inserted await
 follows it; MapLibre never replays load"), reintroduced here. Fixed twice over: all startup awaits
 happen before the map exists, and `RustMap.whenIdle()` resolves at once when the map is already idle,
 so a late listener cannot miss it. 0 failures in 25 runs after the fix (about 1 in 5 before).
+
+## The whole world: reading the planet over the LAN
+
+Street detail existed only inside the extracts. The homelab's map service has the full planet
+(PMTiles v3, gzip, zooms 0-15, 1.43 billion addressed tiles, 128 GB) with Range support, so the
+Rust reader now reads it in place: `Archive::open_url` (vtile feature `http`, with `ureq` and rustls:
+HTTPS is not a primitive worth hand-rolling) issues one Range request per directory or tile over a
+reused connection, refuses anything but a 206 of the exact length, and caches leaf directories (a
+planet's directory is split into many; each costs a round trip).
+
+Checked before building: the format and zoom range (`go-pmtiles show` on the URL), the certificate
+(Let's Encrypt, trusted by the standard roots), and latency: 34 ms median per request with a new TLS
+connection each time, 12 ms over a reused one.
+
+Check after: every one of the 772 tiles of the West LA extract, read again from the planet, is
+byte-identical (the extract was cut from it). A remote read takes 9.7 ms median, 12.8 p90, 40 worst;
+779 round trips for 772 tiles, so the leaf cache held.
+
+The app reads the planet when `MAPS_ARCHIVE_URL` or the gitignored `data/remote.url` names it (the
+LAN hostname stays out of the repository), falls back to the local extract if it cannot be reached,
+and reports which it uses. A world-sized archive starts the camera at Santa Monica. The benchmark
+scripts set `MAPS_LOCAL_ONLY=1`, so their numbers stay comparable. Snapshots of Paris at zoom 15 and
+Tokyo at zoom 14 show full street detail, curved names, POIs, and Japanese text shaped by the
+browser. The MapLibre app still reads the local file.
+
+The search index is worldwide (13.46M places); with the planet, the map now is too.

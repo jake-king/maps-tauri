@@ -7,6 +7,15 @@ description = "PMTiles v3 reading and Mapbox Vector Tile decoding for the native
 [dependencies]
 earcutr = "0.5"
 flate2 = "1"
+ureq = { version = "3", default-features = false, features = ["rustls"], optional = true }
 
 [dev-dependencies]
 serde_json = "1"
+
+[features]
+# read an archive over HTTP(S) Range requests (Archive::open_url)
+http = ["dep:ureq"]
+
+[[example]]
+name = "remote_diff"
+required-features = ["http"]

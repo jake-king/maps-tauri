@@ -5,6 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # benchmarks run on the small reference cutout unless told otherwise, so results stay comparable
 export MAPS_ARCHIVE=${MAPS_ARCHIVE:-basemap.pmtiles}
+export MAPS_LOCAL_ONLY=${MAPS_LOCAL_ONLY:-1} # never the remote planet unless asked
 stage=${1:?blank or idle}
 log="logs/memprobe-$stage.log"
 MAPS_BENCH=1 MAPS_MEMPROBE=$stage systemd-run --user --scope -q -p MemoryMax=10G timeout 60 ./target/release/maps-tauri >"$log" 2>&1 || true

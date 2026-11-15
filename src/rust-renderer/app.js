@@ -42,10 +42,12 @@ const bounds = { minLon: info.minLon, minLat: info.minLat, maxLon: info.maxLon, 
 const TILES = navigator.userAgent.includes("Windows") ? "http://tiles.localhost" : "tiles://localhost";
 const CACHE_TILES = flags.cacheZoomLevels ? flags.cacheZoomLevels * 12 : 240; // same tile budget as MapLibre's 20 levels
 
+// A world-sized archive (the remote planet) starts at Santa Monica, not mid-Atlantic.
+const worldSized = bounds.maxLon - bounds.minLon > 90;
 const map = new RustMap({
   container: "map",
   baseUrl: TILES,
-  center: [(bounds.minLon + bounds.maxLon) / 2, (bounds.minLat + bounds.maxLat) / 2],
+  center: worldSized ? [-118.4912, 34.0105] : [(bounds.minLon + bounds.maxLon) / 2, (bounds.minLat + bounds.maxLat) / 2],
   zoom: 12,
   minZoom: info.minZoom,
   maxZoom: info.maxZoom,
@@ -113,7 +115,7 @@ window.addEventListener("keydown", (e) => {
 });
 
 map.whenIdle().then(async () => {
-  say(`native renderer · ${map.cacheStats().loaded} tiles · z${map.getZoom().toFixed(1)}`);
+  say(`native renderer · ${info.source} archive, zooms ${info.minZoom}-${info.maxZoom} · ${map.cacheStats().loaded} tiles · z${map.getZoom().toFixed(1)}`);
   if (flags.search) {
     // MAPS_SEARCH=<query>: type it, take the first result, settle, snapshot the result
     const names = await search.run(flags.search);

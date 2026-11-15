@@ -25,6 +25,9 @@ if [[ ! -d public/assets/fonts ]]; then
   cp -r "$root/sprites/v4" public/assets/sprites/v4
 fi
 
+# the planet the native renderer reads over the LAN (data/ is gitignored: the hostname stays local)
+[[ -s data/remote.url ]] || echo "$SRC/tiles/basemap.pmtiles" > data/remote.url
+
 if [[ ${1:-} == --gazetteer && ! -s data/geonames.db ]]; then
   curl -fS -o data/geonames.db.part "$SRC/gazetteer/geonames.db" && mv data/geonames.db.part data/geonames.db
 fi

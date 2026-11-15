@@ -2,10 +2,12 @@
 //! Directories are varint-encoded and (here) gzip-compressed; tiles are addressed by a Hilbert-curve
 //! tile id. Spec: https://github.com/protomaps/PMTiles/blob/main/spec/v3/spec.md
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read};
 use std::os::unix::fs::FileExt;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use flate2::read::GzDecoder;
 
@@ -149,49 +151,119 @@ pub fn gunzip(b: &[u8], out: &mut Vec<u8>) -> io::Result<()> {
     Ok(())
 }
 
+/// Where an archive's bytes come from: a local file (pread), or a URL (HTTP Range requests over one
+/// reused connection pool).
+enum Source {
+    File(File),
+    #[cfg(feature = "http")]
+    Http { agent: ureq::Agent, url: String },
+}
+
+impl Source {
+    fn read(&self, offset: u64, len: usize) -> io::Result<Vec<u8>> {
+        match self {
+            Source::File(f) => {
+                let mut buf = vec![0u8; len];
+                f.read_exact_at(&mut buf, offset)?;
+                Ok(buf)
+            }
+            #[cfg(feature = "http")]
+            Source::Http { agent, url } => {
+                if len == 0 {
+                    return Ok(Vec::new());
+                }
+                let range = format!("bytes={}-{}", offset, offset + len as u64 - 1);
+                let mut res = agent.get(url).header("Range", &range).call().map_err(io::Error::other)?;
+                if res.status().as_u16() != 206 {
+                    // a 200 here would be the whole planet: refuse rather than read it
+                    return Err(bad(&format!("expected 206 Partial Content for {range}, got {}", res.status())));
+                }
+                let buf = res.body_mut().with_config().limit(64 << 20).read_to_vec().map_err(io::Error::other)?;
+                if buf.len() != len {
+                    return Err(bad(&format!("asked for {len} bytes at {offset}, got {}", buf.len())));
+                }
+                Ok(buf)
+            }
+        }
+    }
+}
+
+/// Leaf directories read so far, by (offset, length). A planet archive has many; each costs a round
+/// trip over the network, so a region's leaf is fetched once and kept.
+const LEAF_CACHE: usize = 512;
+
 pub struct Archive {
-    file: File,
+    source: Source,
     pub header: Header,
     root: Vec<Entry>,
+    leaves: Mutex<HashMap<(u64, u64), Arc<Vec<Entry>>>>,
+    /// round trips made (header/root, leaves, tiles): for measuring a remote archive
+    pub reads: std::sync::atomic::AtomicU64,
 }
 
 impl Archive {
     pub fn open(path: &Path) -> io::Result<Self> {
-        let file = File::open(path)?;
-        let mut head = vec![0u8; 127];
-        file.read_exact_at(&mut head, 0)?;
+        Self::from_source(Source::File(File::open(path)?))
+    }
+
+    /// An archive served over HTTP(S) with Range support, e.g. a planet on the LAN.
+    #[cfg(feature = "http")]
+    pub fn open_url(url: &str) -> io::Result<Self> {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(10)))
+            .http_status_as_error(false) // a non-206 is reported by Source::read
+            .build()
+            .into();
+        Self::from_source(Source::Http { agent, url: url.to_owned() })
+    }
+
+    fn from_source(source: Source) -> io::Result<Self> {
+        let head = source.read(0, 127)?;
         let header = parse_header(&head)?;
         if header.internal_compression != 2 || header.tile_compression != 2 {
             return Err(bad("this reader handles gzip-compressed archives only"));
         }
-        let root = Self::read_dir(&file, header.root_offset, header.root_length)?;
-        Ok(Archive { file, header, root })
+        let root = Self::read_dir(&source, header.root_offset, header.root_length)?;
+        Ok(Archive { source, header, root, leaves: Mutex::new(HashMap::new()), reads: Default::default() })
     }
 
-    fn read_dir(file: &File, offset: u64, length: u64) -> io::Result<Vec<Entry>> {
-        let mut raw = vec![0u8; length as usize];
-        file.read_exact_at(&mut raw, offset)?;
+    fn read_dir(source: &Source, offset: u64, length: u64) -> io::Result<Vec<Entry>> {
+        let raw = source.read(offset, length as usize)?;
         let mut dec = Vec::new();
         gunzip(&raw, &mut dec)?;
         parse_directory(&dec)
     }
 
+    fn leaf(&self, offset: u64, length: u64) -> io::Result<Arc<Vec<Entry>>> {
+        if let Some(l) = self.leaves.lock().expect("leaf cache").get(&(offset, length)) {
+            return Ok(l.clone());
+        }
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = Arc::new(Self::read_dir(&self.source, self.header.leaf_offset + offset, length)?);
+        let mut c = self.leaves.lock().expect("leaf cache");
+        if c.len() >= LEAF_CACHE {
+            c.clear(); // crude, but bounded: refill on demand
+        }
+        c.insert((offset, length), dir.clone());
+        Ok(dir)
+    }
+
     /// The decompressed tile at z/x/y, or None if the archive does not have it.
     pub fn tile(&self, z: u8, x: u32, y: u32) -> io::Result<Option<Vec<u8>>> {
         let id = zxy_to_tile_id(z, x, y);
-        let mut dir = std::borrow::Cow::Borrowed(&self.root);
+        let mut leaf: Option<Arc<Vec<Entry>>> = None;
         for _depth in 0..4 {
-            let Some(e) = find(&dir, id) else { return Ok(None) };
+            let dir: &[Entry] = leaf.as_deref().map_or(&self.root, |v| v);
+            let Some(e) = find(dir, id) else { return Ok(None) };
             if e.run_length == 0 {
-                let leaf = Self::read_dir(&self.file, self.header.leaf_offset + e.offset, u64::from(e.length))?;
-                dir = std::borrow::Cow::Owned(leaf);
+                leaf = Some(self.leaf(e.offset, u64::from(e.length))?);
                 continue;
             }
             if id >= e.tile_id + u64::from(e.run_length) {
                 return Ok(None);
             }
-            let mut raw = vec![0u8; e.length as usize];
-            self.file.read_exact_at(&mut raw, self.header.tile_data_offset + e.offset)?;
+            self.reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let raw = self.source.read(self.header.tile_data_offset + e.offset, e.length as usize)?;
             let mut out = Vec::new();
             gunzip(&raw, &mut out)?;
             return Ok(Some(out));
@@ -206,7 +278,7 @@ impl Archive {
         while let Some(dir) = stack.pop() {
             for e in dir {
                 if e.run_length == 0 {
-                    stack.push(Self::read_dir(&self.file, self.header.leaf_offset + e.offset, u64::from(e.length))?);
+                    stack.push(Self::read_dir(&self.source, self.header.leaf_offset + e.offset, u64::from(e.length))?);
                 } else {
                     for id in e.tile_id..e.tile_id + u64::from(e.run_length) {
                         out.push(tile_id_to_zxy(id));

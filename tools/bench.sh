@@ -10,6 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # benchmarks run on the small reference cutout unless told otherwise, so results stay comparable
 export MAPS_ARCHIVE=${MAPS_ARCHIVE:-basemap.pmtiles}
+export MAPS_LOCAL_ONLY=${MAPS_LOCAL_ONLY:-1} # never the remote planet unless asked
 label=${1:-run}
 out="bench/$(date +%F)-$label.json"
 log="logs/bench-$label.log"
