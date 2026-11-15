@@ -630,3 +630,37 @@ been 0 on West LA before labels; at noise level, but not identical).
 
 Not in v1: road labels along curves, highway shields, POI icons and names, water labels, and the
 search box in native mode.
+
+## Polish: search, the pier, points of interest, shields, water names
+
+**A search box for the native renderer** (`search.js`). MapLibre's geocoder widget depends on
+MapLibre, so the native app has its own: debounced, 8 results, keyboard navigation. Coordinates are
+answered in the frontend by the WASM build of `crates/coords`; names go to the Rust `search`
+command. A chosen result flies the map there and drops a marker. `MAPS_SEARCH=<query>` runs it end
+to end and snapshots the result, with the box and marker painted in from their DOM state (readPixels
+cannot see HTML). A typed coordinate lands exactly under the marker. "santa monica pier" lands about
+a kilometre inland: GeoNames itself records the pier at exactly 34.0, -118.5. That is the data, and
+the MapLibre app uses the same index.
+
+**The pier.** It was drawn as an outline because the mesher drew all landuse before water, and the
+Protomaps style draws the pier layer (and pedestrian areas and dams) after water: the ocean polygon
+painted over it. The palette generator now records which landuse kinds the style puts above water,
+and the mesher draws those after the water polygons.
+
+**Points of interest, shields and water names** (mesh format v4: each label also carries an icon
+index and a color index). All rules come from the style through the generator: 36 POI kinds (icon
+named after the kind, `station` uses `train_station`, `townhall` has no sprite in this sheet so it
+is text only, as in MapLibre), text colors by kind group; shields from a road's network and the
+length of its route number (US:I, NL:S-road, else the generic shield); water names in blue italic
+along streams and rivers from zoom 13, at the point or polygon center for seas and lakes. The
+frontend loads the same sprite sheet MapLibre uses and places by MapLibre's order: places, POIs,
+major roads and shields, water, minor streets. A POI's name sits right of its icon, or left if right
+collides (`placeLabels` now takes alternative positions; tested).
+
+The snapshot at the pier at zoom 15 now carries what MapLibre's does, apart from styling details:
+POIs with icons, route shields for 1, 10 and 66, Kenter Creek in blue italic, street and district
+names, nothing overlapping.
+
+Problem: the palette generator built the style without a language, and Protomaps adds label layers
+only when given one, so the POI, water and shield label layers were missing from its lookup. It
+crashed rather than producing an empty table, which is the better way to fail.

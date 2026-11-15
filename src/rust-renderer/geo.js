@@ -117,7 +117,7 @@ export function interpolate(stops, base, z) {
 }
 
 /**
- * The mesh wire format's header (crates/vtile/src/mesh.rs, version 3): counts, index widths and the
+ * The mesh wire format's header (crates/vtile/src/mesh.rs, version 4): counts, index widths and the
  * byte offset of each block. Throws on a wrong magic or version, or a size that does not add up.
  */
 export function parseMeshHeader(buf) {
@@ -126,7 +126,7 @@ export function parseMeshHeader(buf) {
   const magic = String.fromCharCode(v.getUint8(0), v.getUint8(1), v.getUint8(2), v.getUint8(3));
   if (magic !== "MESH") throw new Error(`mesh: bad magic ${magic}`);
   const version = v.getUint32(4, true);
-  if (version !== 3) throw new Error(`mesh: version ${version}, expected 3`);
+  if (version !== 4) throw new Error(`mesh: version ${version}, expected 4`);
   const flags = v.getUint32(8, true);
   const [fillV, fillI, lineV, lineI, labelN, labelBytes] = [12, 16, 20, 24, 28, 32].map((o) => v.getUint32(o, true));
   const pad4 = (n) => (n + 3) & ~3;
@@ -144,13 +144,14 @@ export function parseMeshHeader(buf) {
 
 const utf8 = new TextDecoder();
 
-/** The label block: `[{ x, y, angle, run, kind, minZoom, priority, text }]`, x/y/run in tile units. */
+/** The label block: `[{ x, y, angle, run, kind, minZoom, icon, color, priority, text }]`, x/y/run in
+ *  tile units; icon is a sprite index + 1 (0: none). */
 export function parseLabels(buf, h) {
   const v = new DataView(buf);
   const out = new Array(h.labelN);
   let o = h.labels;
   for (let i = 0; i < h.labelN; i++) {
-    const len = v.getUint8(o + 14);
+    const len = v.getUint8(o + 16);
     out[i] = {
       x: v.getInt16(o, true),
       y: v.getInt16(o + 2, true),
@@ -158,10 +159,12 @@ export function parseLabels(buf, h) {
       run: v.getUint16(o + 6, true),
       kind: v.getUint8(o + 8),
       minZoom: v.getUint8(o + 9),
-      priority: v.getInt32(o + 10, true),
-      text: utf8.decode(new Uint8Array(buf, o + 15, len)),
+      icon: v.getUint8(o + 10),
+      color: v.getUint8(o + 11),
+      priority: v.getInt32(o + 12, true),
+      text: utf8.decode(new Uint8Array(buf, o + 17, len)),
     };
-    o += 15 + len;
+    o += 17 + len;
   }
   return out;
 }

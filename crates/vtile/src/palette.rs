@@ -74,6 +74,63 @@ pub fn landuse_above_water(kind: &str) -> bool {
     matches!(kind, "pedestrian" | "dam" | "pier")
 }
 
+/// POI kinds the style labels: (icon index + 1, or 0 when the sprite sheet has none; text color
+/// index into palette.json's label_colors).
+pub fn poi(kind: &str) -> Option<(u8, u8)> {
+    match kind {
+        "beach" => Some((1, 0)),
+        "forest" => Some((2, 0)),
+        "marina" => Some((3, 0)),
+        "park" => Some((4, 0)),
+        "peak" => Some((5, 0)),
+        "zoo" => Some((6, 0)),
+        "garden" => Some((7, 0)),
+        "bench" => Some((8, 0)),
+        "aerodrome" => Some((9, 1)),
+        "station" => Some((10, 1)),
+        "bus_stop" => Some((11, 1)),
+        "ferry_terminal" => Some((12, 1)),
+        "stadium" => Some((13, 2)),
+        "university" => Some((14, 2)),
+        "library" => Some((15, 2)),
+        "school" => Some((16, 2)),
+        "animal" => Some((17, 2)),
+        "toilets" => Some((18, 2)),
+        "drinking_water" => Some((19, 2)),
+        "post_office" => Some((20, 2)),
+        "building" => Some((21, 2)),
+        "townhall" => Some((0, 2)),
+        "restaurant" => Some((22, 3)),
+        "fast_food" => Some((23, 3)),
+        "cafe" => Some((24, 3)),
+        "bar" => Some((25, 3)),
+        "supermarket" => Some((26, 4)),
+        "convenience" => Some((27, 4)),
+        "books" => Some((28, 4)),
+        "beauty" => Some((29, 4)),
+        "electronics" => Some((30, 4)),
+        "clothes" => Some((31, 4)),
+        "attraction" => Some((32, 5)),
+        "museum" => Some((33, 5)),
+        "theatre" => Some((34, 5)),
+        "artwork" => Some((35, 5)),
+        _ => None,
+    }
+}
+
+/// The shield sprite (index + 1) for a road's network and route-number length (1..=5).
+pub fn shield_icon(network: &str, len: usize) -> u8 {
+    let row: [u8; 5] = match network {
+        "US:I" => [36, 37, 38, 39, 40],
+        "NL:S-road" => [41, 42, 43, 44, 45],
+        _ => [46, 47, 48, 49, 50],
+    };
+    if (1..=5).contains(&len) { row[len - 1] } else { 0 }
+}
+
+pub const WATER_LABEL_COLOR: u8 = 6;
+pub const SHIELD_TEXT_COLOR: u8 = 7;
+
 /// Line classes in draw order. The class number is written into each line vertex; the frontend
 /// turns it into a width for the current zoom (src/rust-renderer/palette.json).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -99,6 +99,7 @@ export class RustMap {
     this.canvas = canvas;
     this.labelLayer = new LabelLayer(parent); // a 2D canvas over the map
     this.labelLayer.visible = labels;
+    this.labelLayer.onSprites = () => this.triggerRepaint(); // icons arrive after the first frames
     const gl = canvas.getContext("webgl2", { antialias: true, premultipliedAlpha: true });
     if (!gl) throw new Error("WebGL2 unavailable");
     this.gl = gl;

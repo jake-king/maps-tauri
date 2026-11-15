@@ -4,12 +4,14 @@
 //   crates/vtile/src/palette.rs   fill colors by landuse kind, line classes (colors)
 //   src/rust-renderer/palette.json  line width stops per class (the shader scales widths by zoom)
 // Usage: node tools/gen_palette.mjs   (rerun after changing the basemaps version)
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { layers, namedFlavor } from "@protomaps/basemaps";
 
 const flavor = namedFlavor("light");
 const ls = layers("protomaps", flavor, {});
 const byId = Object.fromEntries(ls.map((l) => [l.id, l]));
+// label layers exist only when the style is built with a language
+const labelById = Object.fromEntries(layers("protomaps", flavor, { lang: "en" }).map((l) => [l.id, l]));
 
 function rgba(c) {
   if (typeof c !== "string") throw new Error(`not a literal color: ${JSON.stringify(c)}`);
@@ -82,6 +84,43 @@ const lines = LINES.map(([name, id], i) => {
   };
 });
 
+// Icons: the sprites the POI and shield layers use, by name; a label carries index+1 (0: none).
+const sprites = JSON.parse(readFileSync("public/assets/sprites/v4/light.json", "utf8"));
+const poiLayer = labelById["pois"];
+const poiKinds = poiLayer.filter[1][2][1];
+const poiIcon = (k) => (k === "station" ? "train_station" : k);
+const icons = [];
+const iconIndex = (name) => {
+  if (!(name in sprites)) return 0;
+  let i = icons.indexOf(name);
+  if (i < 0) i = icons.push(name) - 1;
+  return i + 1;
+};
+// POI text colors: the layer's `case` over kind groups, last value the default
+const poiColor = {};
+{
+  const tc = poiLayer.paint["text-color"];
+  for (let i = 1; i + 1 < tc.length; i += 2) for (const k of tc[i][2][1]) poiColor[k] ??= tc[i + 1];
+  for (const k of poiKinds) poiColor[k] ??= tc[tc.length - 1];
+}
+// extra label colors (index into `label_colors`), shared by POI groups, water and shields
+const labelColors = [];
+const labelColorIndex = (c) => {
+  const k = c.join();
+  let i = labelColors.findIndex((x) => x.join() === k);
+  if (i < 0) i = labelColors.push(c) - 1;
+  return i;
+};
+const poiRows = poiKinds.map((k) => [k, iconIndex(poiIcon(k)), labelColorIndex(rgba(poiColor[k]))]);
+const SHIELD_NETS = [["US:I", "US:I"], ["NL:S-road", "NL:S-road"]];
+const shieldIcons = {};
+for (const [net, prefix] of [...SHIELD_NETS, ["*", "generic_shield"]]) {
+  shieldIcons[net] = [1, 2, 3, 4, 5].map((n) => iconIndex(`${prefix}-${n}char`));
+}
+const waterColor = labelColorIndex(rgba(labelById["water_waterway_label"].paint["text-color"]));
+const waterHalo = rgba(labelById["water_waterway_label"].paint["text-halo-color"]);
+const shieldTextColor = labelColorIndex(rgba(labelById["roads_shields"].paint["text-color"]));
+
 const fill = (id) => withOpacity(rgba(byId[id].paint["fill-color"]), opacityOf(byId[id], "fill-opacity"));
 const rs = (c) => `[${c.join(", ")}]`;
 // Fill colors are indexed: a vertex carries a u8 palette index, the shader looks the color up.
@@ -122,6 +161,27 @@ pub fn landuse_above_water(kind: &str) -> bool {
     matches!(kind, ${[...aboveWater].map((k) => JSON.stringify(k)).join(" | ") || '""'})
 }
 
+/// POI kinds the style labels: (icon index + 1, or 0 when the sprite sheet has none; text color
+/// index into palette.json's label_colors).
+pub fn poi(kind: &str) -> Option<(u8, u8)> {
+    match kind {
+${poiRows.map(([k, i, c]) => `        ${JSON.stringify(k)} => Some((${i}, ${c})),`).join("\n")}
+        _ => None,
+    }
+}
+
+/// The shield sprite (index + 1) for a road's network and route-number length (1..=5).
+pub fn shield_icon(network: &str, len: usize) -> u8 {
+    let row: [u8; 5] = match network {
+${SHIELD_NETS.map(([n]) => `        ${JSON.stringify(n)} => [${shieldIcons[n].join(", ")}],`).join("\n")}
+        _ => [${shieldIcons["*"].join(", ")}],
+    };
+    if (1..=5).contains(&len) { row[len - 1] } else { 0 }
+}
+
+pub const WATER_LABEL_COLOR: u8 = ${waterColor};
+pub const SHIELD_TEXT_COLOR: u8 = ${shieldTextColor};
+
 /// Line classes in draw order. The class number is written into each line vertex; the frontend
 /// turns it into a width for the current zoom (src/rust-renderer/palette.json).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,6 +203,9 @@ writeFileSync("src/rust-renderer/palette.json", JSON.stringify({
   generated_by: "tools/gen_palette.mjs",
   background: rgba(flavor.background),
   fill_colors: fillColors,
+  icons,
+  label_colors: labelColors,
+  water_halo: waterHalo,
   // label colors and halos, by the renderer's LabelKind order: city, suburb, neighbourhood, highway,
   // major road, minor road
   labels: [
@@ -151,4 +214,4 @@ writeFileSync("src/rust-renderer/palette.json", JSON.stringify({
   ].map(([c, h]) => ({ color: rgba(flavor[c]), halo: rgba(flavor[h]) })),
   lines: lines.map(({ name, id, class: c, color, width, minzoom }) => ({ name, id, class: c, color, width, minzoom })),
 }, null, 1) + "\n");
-console.log(`landuse kinds: ${Object.keys(landuse).length}, fill colors: ${fillColors.length}, line classes: ${lines.length}`);
+console.log(`landuse kinds: ${Object.keys(landuse).length}, fill colors: ${fillColors.length}, line classes: ${lines.length}, icons: ${icons.length}, POI kinds: ${poiRows.length} (${poiRows.filter((r) => !r[1]).map((r) => r[0]).join(", ")} without a sprite)`);

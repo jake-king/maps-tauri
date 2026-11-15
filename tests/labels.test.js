@@ -39,6 +39,16 @@ test("overlaps are found in lower grid rows, not only the first", () => {
   assert.deepEqual(kept.map((c) => c.key), ["bottom"]);
 });
 
+test("a label with options takes the first that fits", () => {
+  const kept = placeLabels([
+    { key: "blocker", rank: [0], box: box(100, 0, 200, 10) },
+    { key: "poi", rank: [1], options: [{ box: box(150, 0, 190, 10), side: "right" }, { box: box(40, 0, 90, 10), side: "left" }] },
+    { key: "stuck", rank: [2], options: [{ box: box(110, 0, 120, 10) }, { box: box(45, 2, 60, 8) }] },
+  ]);
+  assert.deepEqual(kept.map((c) => c.key), ["blocker", "poi"]);
+  assert.equal(kept[1].chosen.side, "left");
+});
+
 test("a rotated box is the bounding box of the turned rectangle", () => {
   const b = rotatedBox(0, 0, 100, 10, Math.PI / 2, 0);
   assert.ok(Math.abs(b.x1 - 5) < 1e-9 && Math.abs(b.y1 - 50) < 1e-9);

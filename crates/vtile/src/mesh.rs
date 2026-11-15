@@ -2,14 +2,15 @@
 //! with extrusion vectors). Colors and line classes live in the vertices, so the renderer draws a
 //! whole tile in two calls: guile-2d's "one draw call per sheet".
 //!
-//! Wire format of [`Mesh::to_bytes`], version 3 (little-endian, every block padded to 4 bytes):
+//! Wire format of [`Mesh::to_bytes`], version 4 (little-endian, every block padded to 4 bytes):
 //!   u32 magic "MESH", u32 version, u32 flags (bit 0: fill indices are u32, bit 1: line indices
 //!   are u32; otherwise u16), u32 fill vertex count, u32 fill index count, u32 line vertex count,
 //!   u32 line index count, u32 label count, u32 label block bytes,
 //!   fill vertices (6 B: i16 x, i16 y, u8 color index, u8 pad), fill indices,
 //!   line vertices (8 B: i16 x, i16 y, i8 ex, i8 ey, u8 class, u8 pad), line indices,
 //!   labels, each: i16 x, i16 y, i16 angle (radians x 10000), u16 run (tile units of straight line
-//!   the text may sit on; 0 for a point), u8 kind (LabelKind), u8 min zoom, i32 priority (lower
+//!   the text may sit on; 0 for a point), u8 kind (LabelKind), u8 min zoom, u8 icon (sprite index
+//!   + 1, 0 for none), u8 color (label color index, POIs/water/shields), i32 priority (lower
 //!   first), u8 text length, UTF-8 text; the block padded to 4.
 //! x, y are tile coordinates (extent 4096). (ex, ey) / 32 is the unit extrusion; the shader scales
 //! it by the class's half width in pixels for the current zoom. Colors are looked up in the
@@ -20,7 +21,7 @@ use crate::mvt::{self, Layer};
 use crate::palette::{self, LineClass};
 
 pub const MAGIC: u32 = u32::from_le_bytes(*b"MESH");
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 /// Extrusion is stored as i8: the unit vector times 32, so a miter of up to MITER_LIMIT (2) fits.
 pub const EXTRUDE_SCALE: f64 = 32.0;
 /// Miter joins longer than this (in half widths) are clamped, so sharp corners do not spike.
@@ -52,6 +53,9 @@ pub enum LabelKind {
     RoadHighway = 3,
     RoadMajor = 4,
     RoadMinor = 5,
+    Poi = 6,
+    Water = 7,
+    Shield = 8,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -64,6 +68,10 @@ pub struct Label {
     pub run: u16,
     pub kind: LabelKind,
     pub min_zoom: u8,
+    /// sprite index + 1 (0: no icon)
+    pub icon: u8,
+    /// label color index (for kinds whose color varies: POIs, water, shields)
+    pub color: u8,
     pub priority: i32,
     pub text: String,
 }
@@ -87,7 +95,7 @@ impl Mesh {
     }
 
     fn label_block_len(&self) -> usize {
-        let raw: usize = self.labels.iter().map(|l| 15 + l.text.len().min(255)).sum();
+        let raw: usize = self.labels.iter().map(|l| 17 + l.text.len().min(255)).sum();
         (raw + 3) & !3
     }
 
@@ -150,7 +158,7 @@ impl Mesh {
             out.extend_from_slice(&l.y.to_le_bytes());
             out.extend_from_slice(&((l.angle * 10000.0).round() as i16).to_le_bytes());
             out.extend_from_slice(&l.run.to_le_bytes());
-            out.extend_from_slice(&[l.kind as u8, l.min_zoom]);
+            out.extend_from_slice(&[l.kind as u8, l.min_zoom, l.icon, l.color]);
             out.extend_from_slice(&l.priority.to_le_bytes());
             out.push(text.len() as u8);
             out.extend_from_slice(text);
@@ -421,6 +429,7 @@ impl Mesher {
                 self.mesh.labels.push(Label {
                     x: to_i16(p[0]), y: to_i16(p[1]), angle: 0.0, run: 0, kind,
                     min_zoom: num(l, f, "min_zoom").unwrap_or(0.0).clamp(0.0, 24.0) as u8,
+                    icon: 0, color: 0,
                     priority: num(l, f, "sort_key").unwrap_or(0.0).clamp(i32::MIN as f64, i32::MAX as f64) as i32,
                     text,
                 });
@@ -461,6 +470,7 @@ impl Mesher {
                             x: to_i16(mid[0]), y: to_i16(mid[1]), angle: angle as f32,
                             run: len.min(f64::from(u16::MAX)) as u16, kind,
                             min_zoom: num(l, f, "min_zoom").unwrap_or(0.0).clamp(0.0, 24.0) as u8,
+                            icon: 0, color: 0,
                             priority: 1_000_000 - num(l, f, "sort_rank").unwrap_or(0.0) as i32,
                             text: text.clone(),
                         };
@@ -471,6 +481,110 @@ impl Mesher {
             let mut roads: Vec<Label> = best.into_values().map(|(_, l)| l).collect();
             roads.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.text.cmp(&b.text))); // stable output
             self.mesh.labels.extend(roads);
+
+            // shields: one per route number per tile, upright, on that route's longest segment
+            let mut shields: std::collections::HashMap<String, (f64, Label)> = Default::default();
+            for f in &l.features {
+                let Some(st) = l.prop(f, "shield_text").and_then(|v| v.as_str()) else { continue };
+                let kind = l.prop(f, "kind").and_then(|v| v.as_str());
+                if !matches!(kind, Some("highway" | "major_road")) || st.chars().count() > 5 {
+                    continue;
+                }
+                let net = l.prop(f, "network").and_then(|v| v.as_str()).unwrap_or("");
+                let icon = palette::shield_icon(net, st.chars().count());
+                mvt::geometry(&f.geometry, &mut self.rings);
+                for r in &self.rings {
+                    for w in r.windows(2) {
+                        let mid = [(w[0][0] + w[1][0]) / 2, (w[0][1] + w[1][1]) / 2];
+                        if !inside(mid, l.extent) {
+                            continue;
+                        }
+                        let len = f64::from(w[1][0] - w[0][0]).hypot(f64::from(w[1][1] - w[0][1]));
+                        let key = format!("{net}|{st}");
+                        if shields.get(&key).is_some_and(|(bl, _)| *bl >= len) {
+                            continue;
+                        }
+                        shields.insert(key, (len, Label {
+                            x: to_i16(mid[0]), y: to_i16(mid[1]), angle: 0.0, run: 0, kind: LabelKind::Shield,
+                            min_zoom: num(l, f, "min_zoom").unwrap_or(0.0).clamp(0.0, 24.0) as u8,
+                            icon, color: palette::SHIELD_TEXT_COLOR,
+                            priority: if kind == Some("highway") { 0 } else { 1 },
+                            text: st.to_owned(),
+                        }));
+                    }
+                }
+            }
+            let mut shields: Vec<Label> = shields.into_values().map(|(_, l)| l).collect();
+            shields.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.text.cmp(&b.text)));
+            self.mesh.labels.extend(shields);
+        }
+        if let Some(l) = layers.iter().find(|l| l.name == "pois") {
+            for f in &l.features {
+                let Some(text) = name(l, f) else { continue };
+                let Some((icon, color)) = l.prop(f, "kind").and_then(|v| v.as_str()).and_then(palette::poi) else { continue };
+                mvt::geometry(&f.geometry, &mut self.rings);
+                let Some(&p) = self.rings.first().and_then(|r| r.first()) else { continue };
+                if !inside(p, l.extent) {
+                    continue;
+                }
+                let min_zoom = num(l, f, "min_zoom").unwrap_or(0.0).clamp(0.0, 24.0) as u8;
+                self.mesh.labels.push(Label {
+                    x: to_i16(p[0]), y: to_i16(p[1]), angle: 0.0, run: 0, kind: LabelKind::Poi,
+                    min_zoom, icon, color, priority: i32::from(min_zoom), text,
+                });
+            }
+        }
+        if let Some(l) = layers.iter().find(|l| l.name == "water") {
+            let mut best: std::collections::HashMap<String, (f64, Label)> = Default::default();
+            for f in &l.features {
+                let Some(text) = name(l, f) else { continue };
+                let min_zoom = num(l, f, "min_zoom").unwrap_or(0.0).clamp(0.0, 24.0) as u8;
+                let kind = l.prop(f, "kind").and_then(|v| v.as_str()).unwrap_or("");
+                mvt::geometry(&f.geometry, &mut self.rings);
+                let mk = |x: i32, y: i32, angle: f64, run: f64, prio: i32| Label {
+                    x: to_i16(x), y: to_i16(y), angle: angle as f32, run: run.min(f64::from(u16::MAX)) as u16,
+                    kind: LabelKind::Water, min_zoom, icon: 0, color: palette::WATER_LABEL_COLOR, priority: prio, text: text.clone(),
+                };
+                match (f.geom_type, kind) {
+                    // rivers and streams: along their longest straight segment, like streets
+                    (2, "river" | "stream") => {
+                        for r in &self.rings {
+                            for w in r.windows(2) {
+                                let mid = [(w[0][0] + w[1][0]) / 2, (w[0][1] + w[1][1]) / 2];
+                                if !inside(mid, l.extent) {
+                                    continue;
+                                }
+                                let (dx, dy) = (f64::from(w[1][0] - w[0][0]), f64::from(w[1][1] - w[0][1]));
+                                let len = dx.hypot(dy);
+                                if best.get(&text).is_some_and(|(bl, _)| *bl >= len) {
+                                    continue;
+                                }
+                                let mut a = dy.atan2(dx);
+                                if a > std::f64::consts::FRAC_PI_2 {
+                                    a -= std::f64::consts::PI;
+                                } else if a <= -std::f64::consts::FRAC_PI_2 {
+                                    a += std::f64::consts::PI;
+                                }
+                                best.insert(text.clone(), (len, mk(mid[0], mid[1], a, len, 2)));
+                            }
+                        }
+                    }
+                    // seas, oceans, bays, lakes: at the point, or the middle of the outer ring
+                    (1, _) | (3, _) if matches!(kind, "sea" | "ocean" | "bay" | "strait" | "lake" | "water") => {
+                        let Some(r) = self.rings.first() else { continue };
+                        let (sx, sy) = r.iter().fold((0i64, 0i64), |(a, b), p| (a + i64::from(p[0]), b + i64::from(p[1])));
+                        let n = r.len().max(1) as i64;
+                        let c = [(sx / n) as i32, (sy / n) as i32];
+                        if inside(c, l.extent) && !best.contains_key(&text) {
+                            best.insert(text.clone(), (f64::MAX, mk(c[0], c[1], 0.0, 0.0, if kind == "ocean" { 0 } else { 1 })));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let mut water: Vec<Label> = best.into_values().map(|(_, l)| l).collect();
+            water.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.text.cmp(&b.text)));
+            self.mesh.labels.extend(water);
         }
     }
 }
@@ -574,7 +688,7 @@ mod tests {
         m.mesh.to_bytes(&mut out);
         assert_eq!(out.len(), m.mesh.byte_len());
         assert_eq!(&out[0..4], b"MESH");
-        assert_eq!(u32_at(&out, 4), 3);
+        assert_eq!(u32_at(&out, 4), 4);
         assert_eq!(u32_at(&out, 8), 0, "both index blocks u16");
         assert_eq!([u32_at(&out, 12), u32_at(&out, 16), u32_at(&out, 20), u32_at(&out, 24)], [3, 3, 4, 6]);
         assert_eq!([u32_at(&out, 28), u32_at(&out, 32)], [0, 0], "no labels");
@@ -589,23 +703,23 @@ mod tests {
     #[test]
     fn labels_on_the_wire() {
         let mut m = Mesh::default();
-        m.labels.push(Label { x: 10, y: -2, angle: 0.5, run: 300, kind: LabelKind::RoadMajor, min_zoom: 12, priority: -7, text: "Ocean Ave".into() });
-        m.labels.push(Label { x: 1, y: 2, angle: 0.0, run: 0, kind: LabelKind::City, min_zoom: 8, priority: 3, text: "Zürich".into() });
+        m.labels.push(Label { x: 10, y: -2, angle: 0.5, run: 300, kind: LabelKind::RoadMajor, min_zoom: 12, icon: 3, color: 4, priority: -7, text: "Ocean Ave".into() });
+        m.labels.push(Label { x: 1, y: 2, angle: 0.0, run: 0, kind: LabelKind::City, min_zoom: 8, icon: 0, color: 0, priority: 3, text: "Zürich".into() });
         let mut out = Vec::new();
         m.to_bytes(&mut out);
         assert_eq!(out.len(), m.byte_len());
         assert_eq!(u32_at(&out, 28), 2);
         let block = u32_at(&out, 32) as usize;
-        assert_eq!(block, (15 + 9 + 15 + 7 + 3) & !3, "Zürich is 7 bytes of UTF-8");
+        assert_eq!(block, (17 + 9 + 17 + 7 + 3) & !3, "Zürich is 7 bytes of UTF-8");
         let b = &out[36..];
         assert_eq!(i16::from_le_bytes([b[0], b[1]]), 10);
         assert_eq!(i16::from_le_bytes([b[2], b[3]]), -2);
         assert_eq!(i16::from_le_bytes([b[4], b[5]]), 5000);
         assert_eq!(u16::from_le_bytes([b[6], b[7]]), 300);
-        assert_eq!((b[8], b[9]), (LabelKind::RoadMajor as u8, 12));
-        assert_eq!(i32::from_le_bytes(b[10..14].try_into().unwrap()), -7);
-        assert_eq!(b[14], 9);
-        assert_eq!(&b[15..24], b"Ocean Ave");
+        assert_eq!((b[8], b[9], b[10], b[11]), (LabelKind::RoadMajor as u8, 12, 3, 4));
+        assert_eq!(i32::from_le_bytes(b[12..16].try_into().unwrap()), -7);
+        assert_eq!(b[16], 9);
+        assert_eq!(&b[17..26], b"Ocean Ave");
     }
 
     #[test]

@@ -107,12 +107,12 @@ function meshBuffer(fillV, fillI, lineV, lineI, flags = 0, labels = []) {
   const iw = (wide) => (wide ? 4 : 2);
   const enc = new TextEncoder();
   const texts = labels.map((l) => enc.encode(l.text));
-  const labelBytes = pad4(texts.reduce((a, t) => a + 15 + t.length, 0));
+  const labelBytes = pad4(texts.reduce((a, t) => a + 17 + t.length, 0));
   const labelAt = 36 + pad4(fillV * 6) + pad4(fillI * iw(flags & 1)) + lineV * 8 + pad4(lineI * iw(flags & 2));
   const b = new ArrayBuffer(labelAt + labelBytes);
   const v = new DataView(b);
   "MESH".split("").forEach((c, i) => v.setUint8(i, c.charCodeAt(0)));
-  [3, flags, fillV, fillI, lineV, lineI, labels.length, labelBytes].forEach((n, i) => v.setUint32(4 + 4 * i, n, true));
+  [4, flags, fillV, fillI, lineV, lineI, labels.length, labelBytes].forEach((n, i) => v.setUint32(4 + 4 * i, n, true));
   let o = labelAt;
   labels.forEach((l, i) => {
     v.setInt16(o, l.x, true);
@@ -121,10 +121,12 @@ function meshBuffer(fillV, fillI, lineV, lineI, flags = 0, labels = []) {
     v.setUint16(o + 6, l.run, true);
     v.setUint8(o + 8, l.kind);
     v.setUint8(o + 9, l.minZoom);
-    v.setInt32(o + 10, l.priority, true);
-    v.setUint8(o + 14, texts[i].length);
-    new Uint8Array(b, o + 15, texts[i].length).set(texts[i]);
-    o += 15 + texts[i].length;
+    v.setUint8(o + 10, l.icon);
+    v.setUint8(o + 11, l.color);
+    v.setInt32(o + 12, l.priority, true);
+    v.setUint8(o + 16, texts[i].length);
+    new Uint8Array(b, o + 17, texts[i].length).set(texts[i]);
+    o += 17 + texts[i].length;
   });
   return b;
 }
@@ -142,15 +144,15 @@ test("mesh header refuses bad input", () => {
   new DataView(b).setUint8(0, 88);
   assert.throws(() => parseMeshHeader(b), /magic/);
   const c = meshBuffer(1, 0, 0, 0);
-  new DataView(c).setUint32(4, 2, true);
+  new DataView(c).setUint32(4, 3, true);
   assert.throws(() => parseMeshHeader(c), /version/);
   assert.throws(() => parseMeshHeader(meshBuffer(1, 0, 0, 0).slice(0, 40)), /header says/);
 });
 
 test("labels round-trip through the label block, UTF-8 included", () => {
   const labels = [
-    { x: 10, y: -2, angle: 0.5, run: 300, kind: 4, minZoom: 12, priority: -7, text: "Ocean Ave" },
-    { x: 1, y: 2, angle: 0, run: 0, kind: 0, minZoom: 8, priority: 3, text: "Zürich" },
+    { x: 10, y: -2, angle: 0.5, run: 300, kind: 4, minZoom: 12, icon: 3, color: 4, priority: -7, text: "Ocean Ave" },
+    { x: 1, y: 2, angle: 0, run: 0, kind: 0, minZoom: 8, icon: 0, color: 0, priority: 3, text: "Zürich" },
   ];
   const b = meshBuffer(3, 3, 2, 3, 0, labels);
   const h = parseMeshHeader(b);
