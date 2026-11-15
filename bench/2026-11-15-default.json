@@ -1,0 +1,90 @@
+{
+ "cache_zoom_levels": 5,
+ "cold": {
+  "cache_max": 60,
+  "fetch": {
+   "avg": 3.3,
+   "n": 161,
+   "p95": 9,
+   "worst": 22
+  },
+  "frames": {
+   "avg": 16.6,
+   "n": 485,
+   "p95": 19,
+   "worst": 40
+  },
+  "load": {
+   "avg": 32.1,
+   "n": 159,
+   "p95": 61,
+   "worst": 71
+  },
+  "memory_mb": 849,
+  "missing_frames": 150,
+  "missing_pct": 30.9,
+  "moving_s": 8.1,
+  "over_budget": 87,
+  "render": {
+   "avg": 4.7,
+   "n": 485,
+   "p95": 9,
+   "worst": 13
+  },
+  "rendered": 485,
+  "serve": {
+   "avg": 0.1,
+   "bytes": 7108961,
+   "n": 161,
+   "worst": 0.4
+  },
+  "settle_ms": 0,
+  "tiles_loaded": 159,
+  "unique_tiles": 161
+ },
+ "speed_px_s": 4000,
+ "warm": {
+  "cache_max": 60,
+  "fetch": {
+   "avg": 2.6,
+   "n": 161,
+   "p95": 7,
+   "worst": 14
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 486,
+   "p95": 19,
+   "worst": 44
+  },
+  "load": {
+   "avg": 27.3,
+   "n": 161,
+   "p95": 44,
+   "worst": 67
+  },
+  "memory_mb": 969,
+  "missing_frames": 144,
+  "missing_pct": 29.6,
+  "moving_s": 8.1,
+  "over_budget": 82,
+  "render": {
+   "avg": 4.9,
+   "n": 486,
+   "p95": 9,
+   "worst": 15
+  },
+  "rendered": 486,
+  "serve": {
+   "avg": 0.1,
+   "bytes": 6940769,
+   "n": 149,
+   "worst": 0.5
+  },
+  "settle_ms": 0,
+  "tiles_loaded": 161,
+  "unique_tiles": 161
+ },
+ "zoom": 15,
+ "label": "default"
+}

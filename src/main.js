@@ -45,7 +45,15 @@ const style = {
 };
 
 const header = await archive.getHeader();
+const flags = await invoke("dev_flags");
+// MapLibre keeps tiles that leave the view in a cache of about (tiles across + 1) x (tiles down + 1)
+// x maxTileCacheZoomLevels. Its default of 5 is 60 tiles for a 1200x800 window: a pan out and
+// back re-decodes everything. Note maxTileCacheSize can only LOWER that figure (it is a Math.min).
+// Measured with the pan benchmark: 5 and 10 levels reload all 161 tiles on a revisit (30% of
+// frames drawn with tiles missing); 20 and 40 reload 3 (0%), with no measurable memory cost.
+const CACHE_ZOOM_LEVELS = flags.cacheZoomLevels ?? 20; // bench/2026-11-15-cache*.json
 const map = new maplibregl.Map({
+  maxTileCacheZoomLevels: CACHE_ZOOM_LEVELS,
   container: "map",
   style,
   center: [header.centerLon, header.centerLat],
@@ -76,6 +84,7 @@ const bench = async () => {
   benching = true;
   say("benchmark running…");
   const result = await runBench(map, stats, bounds);
+  result.cache_zoom_levels = CACHE_ZOOM_LEVELS;
   benching = false;
   invoke("bench_done", { result });
   const c = result.cold;
@@ -89,7 +98,7 @@ window.addEventListener("keydown", (e) => {
     bench();
   }
 });
-invoke("dev_flags").then((f) => f.bench && map.once("idle", bench));
+if (flags.bench) map.once("idle", bench);
 map.once("idle", () => {
   const roads = map.querySourceFeatures("protomaps", { sourceLayer: "roads" }).length;
   const places = map.querySourceFeatures("protomaps", { sourceLayer: "places" }).length;

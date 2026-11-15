@@ -44,11 +44,16 @@ fn dev_stats(tiles: tauri::State<'_, Arc<devstats::TileTimes>>) -> serde_json::V
     })
 }
 
-/// Development switches from the environment. `MAPS_BENCH=1` runs the scripted pan benchmark at
-/// startup and reports its result to stdout.
+/// Development switches from the environment, so a benchmark can compare settings without code
+/// edits. `MAPS_BENCH=1` runs the pan benchmark at startup; `MAPS_CACHE_ZOOMS=<n>` overrides
+/// MapLibre's maxTileCacheZoomLevels (the frontend's default when unset).
 #[tauri::command]
 fn dev_flags() -> serde_json::Value {
-    serde_json::json!({ "bench": std::env::var("MAPS_BENCH").is_ok_and(|v| v == "1") })
+    let num = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u32>().ok());
+    serde_json::json!({
+        "bench": std::env::var("MAPS_BENCH").is_ok_and(|v| v == "1"),
+        "cacheZoomLevels": num("MAPS_CACHE_ZOOMS"),
+    })
 }
 
 /// The benchmark's result: printed as one `[bench]` JSON line, and under `MAPS_BENCH=1` the app

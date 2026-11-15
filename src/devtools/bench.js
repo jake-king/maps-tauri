@@ -33,7 +33,9 @@ export function lawnmower(b, rows = ROWS, inset = 0.15) {
 }
 
 async function pass(map, stats, path) {
-  const rec = { frame: [], render: [], missing: 0, rendered: 0, fetch: [], load: [] };
+  const rec = { frame: [], render: [], missing: 0, rendered: 0, fetch: [], load: [], tiles: new Set() };
+  const onLoading = (e) => e.tile && e.sourceId === "protomaps" && rec.tiles.add(e.tile.tileID.key);
+  map.on("dataloading", onLoading);
   stats.tap = (kind, v) => {
     if (kind === "frame") {
       rec.frame.push(v.interval);
@@ -57,6 +59,7 @@ async function pass(map, stats, path) {
   if (!map.areTilesLoaded()) await once(map, "idle");
   const settleMs = performance.now() - t0 - movingMs;
   stats.tap = null;
+  map.off("dataloading", onLoading);
   const backend = await invoke("dev_stats");
   const t = backend.tiles;
   return {
@@ -71,6 +74,9 @@ async function pass(map, stats, path) {
     fetch: summary(rec.fetch),
     load: summary(rec.load),
     serve: { n: t.requests, avg: r1(t.requests ? t.total_ms / t.requests : 0), worst: r1(t.worst_ms), bytes: t.bytes },
+    tiles_loaded: rec.load.length,
+    unique_tiles: rec.tiles.size,
+    cache_max: map.style?.tileManagers?.protomaps?._outOfViewCache?.max ?? null,
     memory_mb: Math.round(backend.memory.reduce((a, m) => a + m.pss_kb, 0) / 1024),
   };
 }
