@@ -15,32 +15,61 @@ export function worldToLngLat(x, y) {
 }
 
 /** A camera: world center, fractional zoom, viewport size in CSS pixels. */
+/**
+ * A camera: world center, fractional zoom, viewport size in CSS pixels, and a bearing in radians (the
+ * direction the top of the screen faces, clockwise from north, as MapLibre's bearing). World to
+ * screen is: offset from the center, scale, turn by -bearing about the screen center.
+ */
 export class Camera {
-  constructor(cx, cy, zoom, w, h) {
-    Object.assign(this, { cx, cy, zoom, w, h });
+  constructor(cx, cy, zoom, w, h, bearing = 0) {
+    Object.assign(this, { cx, cy, zoom, w, h, bearing });
   }
   get scale() {
     return TILE_PX * 2 ** this.zoom; // CSS px per world unit
   }
+  /** A world point as unrotated pixels from the screen center (the frame tiles are drawn in). */
+  mapPx(x, y) {
+    return [(x - this.cx) * this.scale, (y - this.cy) * this.scale];
+  }
   worldToScreen(x, y) {
-    return [(x - this.cx) * this.scale + this.w / 2, (y - this.cy) * this.scale + this.h / 2];
+    const [dx, dy] = this.mapPx(x, y);
+    const c = Math.cos(this.bearing), s = Math.sin(this.bearing);
+    return [dx * c + dy * s + this.w / 2, -dx * s + dy * c + this.h / 2];
   }
   screenToWorld(px, py) {
-    return [this.cx + (px - this.w / 2) / this.scale, this.cy + (py - this.h / 2) / this.scale];
+    const dx = px - this.w / 2, dy = py - this.h / 2;
+    const c = Math.cos(this.bearing), s = Math.sin(this.bearing);
+    return [this.cx + (dx * c - dy * s) / this.scale, this.cy + (dx * s + dy * c) / this.scale];
+  }
+  /** The view's corners in world coordinates (top left, top right, bottom right, bottom left),
+   *  grown by `pad` screen pixels on every side. */
+  viewQuad(pad = 0) {
+    return [[-pad, -pad], [this.w + pad, -pad], [this.w + pad, this.h + pad], [-pad, this.h + pad]].map(([x, y]) => this.screenToWorld(x, y));
   }
 }
 
-/** The lowest zoom at which the world (512 px at zoom 0) still fills a w x h viewport. */
-export const worldFitZoom = (w, h) => Math.max(0, Math.log2(Math.max(w, h) / TILE_PX));
+/** Half the world-axis extent of a w x h view turned by `bearing`, in screen pixels: [x, y]. */
+const turnedExtent = (w, h, bearing) => {
+  const c = Math.abs(Math.cos(bearing)), s = Math.abs(Math.sin(bearing));
+  return [(w * c + h * s) / 2, (w * s + h * c) / 2];
+};
+
+/** The lowest zoom at which the world (512 px at zoom 0) still fills a w x h viewport turned by
+ *  `bearing`. */
+export const worldFitZoom = (w, h, bearing = 0) => {
+  const [ex, ey] = turnedExtent(w, h, bearing);
+  return Math.max(0, Math.log2((2 * Math.max(ex, ey)) / TILE_PX));
+};
 
 /**
- * Keep a camera on the world: zoom no lower than worldFitZoom, and the center where no edge of the
- * view passes the world's edge (no wrap-around). Returns the camera, adjusted in place.
+ * Keep a camera on the world: zoom no lower than worldFitZoom, and the center where no corner of the
+ * (possibly turned) view passes the world's edge (no wrap-around). Returns the camera, adjusted in place.
  */
 export function clampCamera(cam, maxZoom = 22) {
-  cam.zoom = Math.min(maxZoom, Math.max(worldFitZoom(cam.w, cam.h), cam.zoom));
-  const hw = cam.w / 2 / cam.scale;
-  const hh = cam.h / 2 / cam.scale;
+  cam.zoom = Math.min(maxZoom, Math.max(worldFitZoom(cam.w, cam.h, cam.bearing), cam.zoom));
+  const [ex, ey] = turnedExtent(cam.w, cam.h, cam.bearing);
+  const hw = ex / cam.scale;
+  const hh = ey / cam.scale;
   cam.cx = Math.min(1 - hw, Math.max(hw, cam.cx));
   cam.cy = Math.min(1 - hh, Math.max(hh, cam.cy));
   return cam;
@@ -49,40 +78,42 @@ export function clampCamera(cam, maxZoom = 22) {
 /** The zoom of the tiles a camera draws: floor(zoom), clamped to the archive's range. */
 export const tileZoom = (zoom, minZ, maxZ) => Math.max(minZ, Math.min(maxZ, Math.floor(zoom)));
 
-/** Tiles `[z, x, y]` covering the view, nearest the center first (the order to request them). */
-export function visibleTiles(cam, minZ, maxZ) {
-  const z = tileZoom(cam.zoom, minZ, maxZ);
-  const n = 2 ** z;
-  const [x0, y0] = cam.screenToWorld(0, 0);
-  const [x1, y1] = cam.screenToWorld(cam.w, cam.h);
-  const tx0 = Math.max(0, Math.floor(x0 * n));
-  const ty0 = Math.max(0, Math.floor(y0 * n));
-  const tx1 = Math.min(n - 1, Math.floor(x1 * n));
-  const ty1 = Math.min(n - 1, Math.floor(y1 * n));
-  const out = [];
-  for (let y = ty0; y <= ty1; y++) for (let x = tx0; x <= tx1; x++) out.push([z, x, y]);
-  const cx = cam.cx * n - 0.5;
-  const cy = cam.cy * n - 0.5;
-  out.sort((a, b) => (a[1] - cx) ** 2 + (a[2] - cy) ** 2 - ((b[1] - cx) ** 2 + (b[2] - cy) ** 2));
-  return out;
+/** Does the convex quad `q` (4 points) overlap the axis-aligned box [x0, x1] x [y0, y1]? (Separating
+ *  axes: the box's two, and the quad's edge normals.) Touching edges do not count. */
+export function quadIntersectsRect(q, x0, y0, x1, y1) {
+  const box = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  const axes = [[1, 0], [0, 1]];
+  for (let i = 0; i < 4; i++) {
+    const [a, b] = [q[i], q[(i + 1) % 4]];
+    axes.push([a[1] - b[1], b[0] - a[0]]);
+  }
+  for (const [ax, ay] of axes) {
+    let qmin = Infinity, qmax = -Infinity, bmin = Infinity, bmax = -Infinity;
+    for (const [x, y] of q) {
+      const d = x * ax + y * ay;
+      qmin = Math.min(qmin, d);
+      qmax = Math.max(qmax, d);
+    }
+    for (const [x, y] of box) {
+      const d = x * ax + y * ay;
+      bmin = Math.min(bmin, d);
+      bmax = Math.max(bmax, d);
+    }
+    if (qmax <= bmin || bmax <= qmin) return false;
+  }
+  return true;
 }
 
-/**
- * The ring of tiles `margin` tiles beyond the view at the same zoom (not the visible ones), nearest
- * the center first: what to fetch before it scrolls into view.
- */
-export function ringTiles(cam, minZ, maxZ, margin = 1) {
-  if (margin <= 0) return [];
-  const z = tileZoom(cam.zoom, minZ, maxZ);
+/** Tiles at zoom z overlapping the world quad `q`, nearest the camera's center first. */
+function tilesInQuad(cam, z, q) {
   const n = 2 ** z;
-  const [x0, y0] = cam.screenToWorld(0, 0);
-  const [x1, y1] = cam.screenToWorld(cam.w, cam.h);
-  const vx0 = Math.floor(x0 * n), vy0 = Math.floor(y0 * n), vx1 = Math.floor(x1 * n), vy1 = Math.floor(y1 * n);
+  const xs = q.map((p) => p[0]), ys = q.map((p) => p[1]);
+  const tx0 = Math.max(0, Math.floor(Math.min(...xs) * n)), tx1 = Math.min(n - 1, Math.floor(Math.max(...xs) * n));
+  const ty0 = Math.max(0, Math.floor(Math.min(...ys) * n)), ty1 = Math.min(n - 1, Math.floor(Math.max(...ys) * n));
   const out = [];
-  for (let y = Math.max(0, vy0 - margin); y <= Math.min(n - 1, vy1 + margin); y++) {
-    for (let x = Math.max(0, vx0 - margin); x <= Math.min(n - 1, vx1 + margin); x++) {
-      if (x >= vx0 && x <= vx1 && y >= vy0 && y <= vy1) continue;
-      out.push([z, x, y]);
+  for (let y = ty0; y <= ty1; y++) {
+    for (let x = tx0; x <= tx1; x++) {
+      if (quadIntersectsRect(q, x / n, y / n, (x + 1) / n, (y + 1) / n)) out.push([z, x, y]);
     }
   }
   const cx = cam.cx * n - 0.5;
@@ -91,12 +122,31 @@ export function ringTiles(cam, minZ, maxZ, margin = 1) {
   return out;
 }
 
-/** A tile's rectangle on screen, CSS px: `{ x, y, w, h }`. */
+/** Tiles `[z, x, y]` covering the (possibly turned) view, nearest the center first (the order to
+ *  request them). Only tiles that actually overlap the view, not its bounding box. */
+export function visibleTiles(cam, minZ, maxZ) {
+  return tilesInQuad(cam, tileZoom(cam.zoom, minZ, maxZ), cam.viewQuad());
+}
+
+/**
+ * The ring of tiles about `margin` tiles beyond the view at the same zoom (not the visible ones),
+ * nearest the center first: what to fetch before it scrolls into view.
+ */
+export function ringTiles(cam, minZ, maxZ, margin = 1) {
+  if (margin <= 0) return [];
+  const z = tileZoom(cam.zoom, minZ, maxZ);
+  const tilePx = cam.scale / 2 ** z;
+  const visible = new Set(visibleTiles(cam, minZ, maxZ).map((t) => t.join()));
+  return tilesInQuad(cam, z, cam.viewQuad(margin * tilePx)).filter((t) => !visible.has(t.join()));
+}
+
+/** A tile's square in the unrotated frame, CSS px, relative to the screen's top left as if the
+ *  bearing were 0: `{ x, y, w, h }`. The renderer turns this frame about the screen center. */
 export function tileRect(cam, z, x, y) {
   const n = 2 ** z;
-  const [sx, sy] = cam.worldToScreen(x / n, y / n);
+  const [mx, my] = cam.mapPx(x / n, y / n);
   const size = cam.scale / n;
-  return { x: sx, y: sy, w: size, h: size };
+  return { x: mx + cam.w / 2, y: my + cam.h / 2, w: size, h: size };
 }
 
 /** The ancestor of z/x/y at zoom `pz` (pz <= z). */

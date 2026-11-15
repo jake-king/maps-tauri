@@ -19,13 +19,15 @@ const FALLBACK_DEPTH = 3; // also request each needed tile's ancestor this many 
 const FILL_VS = `#version 300 es
 in vec2 a_pos;
 in float a_color;
-uniform vec2 u_origin;   // tile's top-left, device px
+uniform vec2 u_origin;   // tile's top-left, device px from the screen center, unrotated
 uniform float u_scale;   // device px per tile unit
 uniform vec2 u_viewport; // device px
+uniform vec2 u_rot;      // cos and sin of the bearing
 uniform vec4 u_colors[32];
 out vec4 v_color;
 void main() {
-  vec2 px = u_origin + a_pos * u_scale;
+  vec2 m = u_origin + a_pos * u_scale;
+  vec2 px = u_viewport * 0.5 + vec2(m.x * u_rot.x + m.y * u_rot.y, -m.x * u_rot.y + m.y * u_rot.x);
   vec2 clip = px / u_viewport * 2.0 - 1.0;
   gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
   v_color = u_colors[int(a_color + 0.5)];
@@ -37,12 +39,15 @@ in float a_class;
 uniform vec2 u_origin;
 uniform float u_scale;
 uniform vec2 u_viewport;
+uniform vec2 u_rot;
 uniform float u_halfwidth[16]; // device px, for the current zoom
 uniform vec4 u_colors[16];
 out vec4 v_color;
 void main() {
   int c = int(a_class + 0.5);
-  vec2 px = u_origin + a_pos * u_scale + (a_ext / 32.0) * u_halfwidth[c];
+  // extrude in the map's frame (the normal turns with the line), then turn the whole
+  vec2 m = u_origin + a_pos * u_scale + (a_ext / 32.0) * u_halfwidth[c];
+  vec2 px = u_viewport * 0.5 + vec2(m.x * u_rot.x + m.y * u_rot.y, -m.x * u_rot.y + m.y * u_rot.x);
   vec2 clip = px / u_viewport * 2.0 - 1.0;
   gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
   v_color = u_halfwidth[c] > 0.0 ? u_colors[c] : vec4(0.0);
@@ -100,7 +105,9 @@ export class RustMap {
     this.labelLayer = new LabelLayer(parent); // a 2D canvas over the map
     this.labelLayer.visible = labels;
     this.labelLayer.onSprites = () => this.triggerRepaint(); // icons arrive after the first frames
-    const gl = canvas.getContext("webgl2", { antialias: true, premultipliedAlpha: true });
+    // a stencil buffer: each tile is clipped to its own square through it (scissor rectangles cannot
+    // clip a turned map)
+    const gl = canvas.getContext("webgl2", { antialias: true, premultipliedAlpha: true, stencil: true });
     if (!gl) throw new Error("WebGL2 unavailable");
     this.gl = gl;
     this.painter = { context: { gl } }; // what the dev tools read
@@ -112,6 +119,21 @@ export class RustMap {
     this.lineColors = new Float32Array(16 * 4);
     palette.lines.forEach((l) => this.lineColors.set(rgbaF(l.color), l.class * 4));
     this.halfWidths = new Float32Array(16);
+    // a whole tile's square, in the fill vertex format: drawn into the stencil to clip a tile to it
+    this.quadVao = gl.createVertexArray();
+    gl.bindVertexArray(this.quadVao);
+    const q = new Int16Array([0, 0, 0, 4096, 0, 0, 4096, 4096, 0, 0, 4096, 0]); // x, y, color+pad
+    const qb = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, qb);
+    gl.bufferData(gl.ARRAY_BUFFER, q, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(this.fill.a("a_pos"));
+    gl.vertexAttribPointer(this.fill.a("a_pos"), 2, gl.SHORT, false, 6, 0);
+    gl.enableVertexAttribArray(this.fill.a("a_color"));
+    gl.vertexAttribPointer(this.fill.a("a_color"), 1, gl.UNSIGNED_BYTE, false, 6, 4);
+    const qi = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, qi);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array([0, 1, 2, 0, 2, 3]), gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
 
     const [cx, cy] = lngLatToWorld(center[0], center[1]);
     this.cam = new Camera(cx, cy, zoom, 1, 1);
@@ -170,6 +192,10 @@ export class RustMap {
   getZoom() {
     return this.cam.zoom;
   }
+  /** Degrees clockwise from north, as MapLibre's getBearing. */
+  getBearing() {
+    return (this.cam.bearing * 180) / Math.PI;
+  }
   getCenter() {
     const [lng, lat] = worldToLngLat(this.cam.cx, this.cam.cy);
     return { lng, lat };
@@ -184,16 +210,23 @@ export class RustMap {
     const [lng, lat] = worldToLngLat(...this.cam.screenToWorld(px, py));
     return { lng, lat };
   }
-  jumpTo({ center, zoom }) {
+  jumpTo({ center, zoom, bearing }) {
     this.anim = null;
     if (center) [this.cam.cx, this.cam.cy] = lngLatToWorld(...(Array.isArray(center) ? center : [center.lng, center.lat]));
     if (zoom !== undefined) this.cam.zoom = zoom;
+    if (bearing !== undefined) this.cam.bearing = (bearing * Math.PI) / 180;
     this.triggerRepaint();
     this.fire("moveend");
   }
-  easeTo({ center, zoom, duration = 300, easing = (t) => t }) {
+  easeTo({ center, zoom, bearing, duration = 300, easing = (t) => t }) {
     const [tx, ty] = center ? lngLatToWorld(...(Array.isArray(center) ? center : [center.lng, center.lat])) : [this.cam.cx, this.cam.cy];
-    this.anim = { from: [this.cam.cx, this.cam.cy, this.cam.zoom], to: [tx, ty, zoom ?? this.cam.zoom], t0: performance.now(), duration, easing };
+    // bearing the short way round: from 350 to 10 degrees turns 20, not 340
+    let tb = bearing === undefined ? this.cam.bearing : (bearing * Math.PI) / 180;
+    tb = this.cam.bearing + Math.atan2(Math.sin(tb - this.cam.bearing), Math.cos(tb - this.cam.bearing));
+    this.anim = {
+      from: [this.cam.cx, this.cam.cy, this.cam.zoom, this.cam.bearing], to: [tx, ty, zoom ?? this.cam.zoom, tb],
+      t0: performance.now(), duration, easing,
+    };
     this.triggerRepaint();
   }
   triggerRepaint() {
@@ -368,22 +401,45 @@ export class RustMap {
   }
 
   // --- drawing ---
-  drawTile(t, rect) {
+  /** Origin (device px from the screen center, unrotated) and scale (device px per tile unit) of
+   *  tile z/x/y in the current frame. */
+  tileFrame(z, x, y) {
+    const n = 2 ** z;
+    const [mx, my] = this.cam.mapPx(x / n, y / n);
+    return { origin: [mx * this.dpr, my * this.dpr], scale: (this.cam.scale / n) * this.dpr / EXTENT };
+  }
+
+  setFrameUniforms(prog, f) {
     const gl = this.gl;
-    const d = this.dpr;
-    const own = tileRect(this.cam, t.z, t.x, t.y);
-    const origin = [own.x * d, own.y * d];
-    const scale = (own.w * d) / EXTENT;
-    // clip to the NEEDED tile's rectangle (scissor's origin is bottom-left)
-    const x0 = Math.floor(rect.x * d), y0 = Math.floor(rect.y * d);
-    const x1 = Math.ceil((rect.x + rect.w) * d), y1 = Math.ceil((rect.y + rect.h) * d);
-    gl.scissor(x0, this.canvas.height - y1, x1 - x0, y1 - y0);
+    gl.useProgram(prog.p);
+    gl.uniform2f(prog.u.u_origin, f.origin[0], f.origin[1]);
+    gl.uniform1f(prog.u.u_scale, f.scale);
+    gl.uniform2f(prog.u.u_viewport, this.canvas.width, this.canvas.height);
+    gl.uniform2f(prog.u.u_rot, Math.cos(this.cam.bearing), Math.sin(this.cam.bearing));
+  }
+
+  /** Mark needed tile z/x/y's square in the stencil with `id`; following draws with stencil test
+   *  EQUAL id land only inside it, whatever the bearing. */
+  clipTo(z, x, y, id) {
+    const gl = this.gl;
+    gl.stencilFunc(gl.ALWAYS, id, 0xff);
+    gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
+    gl.colorMask(false, false, false, false);
+    this.setFrameUniforms(this.fill, this.tileFrame(z, x, y));
+    gl.uniform4fv(this.fill.u.u_colors, this.fillColors);
+    gl.bindVertexArray(this.quadVao);
+    gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+    gl.colorMask(true, true, true, true);
+    gl.stencilFunc(gl.EQUAL, id, 0xff);
+    gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+  }
+
+  drawTile(t) {
+    const gl = this.gl;
+    const frame = this.tileFrame(t.z, t.x, t.y);
     for (const [prog, vao, count, type] of [[this.fill, t.fillVao, t.fillCount, t.fillType], [this.line, t.lineVao, t.lineCount, t.lineType]]) {
       if (!count) continue;
-      gl.useProgram(prog.p);
-      gl.uniform2f(prog.u.u_origin, origin[0], origin[1]);
-      gl.uniform1f(prog.u.u_scale, scale);
-      gl.uniform2f(prog.u.u_viewport, this.canvas.width, this.canvas.height);
+      this.setFrameUniforms(prog, frame);
       if (prog === this.fill) gl.uniform4fv(prog.u.u_colors, this.fillColors);
       else {
         gl.uniform4fv(prog.u.u_colors, this.lineColors);
@@ -405,6 +461,7 @@ export class RustMap {
       this.cam.cx = a.from[0] + (a.to[0] - a.from[0]) * e;
       this.cam.cy = a.from[1] + (a.to[1] - a.from[1]) * e;
       this.cam.zoom = a.from[2] + (a.to[2] - a.from[2]) * e;
+      this.cam.bearing = a.from[3] + (a.to[3] - a.from[3]) * e;
       if (k >= 1) {
         this.anim = null;
         this.fire("moveend");
@@ -475,12 +532,13 @@ export class RustMap {
 
     const gl = this.gl;
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    gl.disable(gl.SCISSOR_TEST);
     gl.clearColor(...this.background);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.clearStencil(0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    gl.enable(gl.SCISSOR_TEST);
+    gl.enable(gl.STENCIL_TEST);
+    let stencilId = 0;
     const drawn = { self: 0, ancestor: 0, children: 0, none: 0 };
     const labelTiles = []; // tiles drawn as themselves: only they contribute labels
     if (this.tilesVisible) {
@@ -488,6 +546,12 @@ export class RustMap {
         let how = "none";
         const rect = tileRect(this.cam, z, x, y);
         const own = this.tiles.get(`${z}/${x}/${y}`);
+        // this needed tile's square in the stencil (ids 1..255; the stencil is cleared to reuse them)
+        if (++stencilId > 255) {
+          gl.clear(gl.STENCIL_BUFFER_BIT);
+          stencilId = 1;
+        }
+        this.clipTo(z, x, y, stencilId);
         // Zooming out, the more detailed tiles already loaded beat a coarse ancestor: if all four
         // children of a tile still loading are loaded (or known empty), draw them, each clipped to
         // its own quarter.
@@ -497,7 +561,7 @@ export class RustMap {
             for (const k of kids) {
               if (k.state !== "loaded") continue;
               k.lastUsed = this.frame;
-              this.drawTile(k, tileRect(this.cam, k.z, k.x, k.y));
+              this.drawTile(k);
             }
             drawn.children += 1;
             continue;
@@ -508,7 +572,7 @@ export class RustMap {
           const t = this.tiles.get(`${az}/${ax}/${ay}`);
           if (t?.state === "loaded") {
             t.lastUsed = this.frame;
-            this.drawTile(t, rect);
+            this.drawTile(t);
             how = pz === z ? "self" : "ancestor";
             if (pz === z) labelTiles.push({ tile: t, rect });
             break;
@@ -526,10 +590,16 @@ export class RustMap {
     /** How the last frame's needed tiles were drawn: by themselves, by their four loaded children,
      *  by a fallback ancestor, or not at all. Anything but `self` means tiles still loading. */
     this.lastDrawn = drawn;
-    gl.disable(gl.SCISSOR_TEST);
+    gl.disable(gl.STENCIL_TEST);
     gl.bindVertexArray(null);
     const lt0 = performance.now();
-    this.labelLayer.draw(labelTiles, zoom, this.dpr, this.cam.w, this.cam.h);
+    // labels in true screen positions: a tile point -> world -> screen, through the turned camera
+    const cam = this.cam;
+    const project = (t, tx, ty) => {
+      const n = 2 ** t.z;
+      return cam.worldToScreen((t.x + tx / EXTENT) / n, (t.y + ty / EXTENT) / n);
+    };
+    this.labelLayer.draw(labelTiles, zoom, this.dpr, cam.w, cam.h, project, cam.bearing);
     drawn.labels = this.labelLayer.count;
     drawn.labelMs = performance.now() - lt0;
     drawn.labelMisses = this.labelLayer.frameMisses;
@@ -542,19 +612,27 @@ export class RustMap {
     }
   }
 
-  // --- input: drag to pan, wheel to zoom about the cursor ---
+  // --- input: drag to pan, right-drag to rotate (MapLibre's gesture), wheel to zoom about the cursor
   bindInput() {
     let drag = null;
+    this.canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     this.canvas.addEventListener("mousedown", (e) => {
-      drag = { x: e.clientX, y: e.clientY };
+      drag = { x: e.clientX, y: e.clientY, rotate: e.button === 2 };
       this.anim = null;
     });
     window.addEventListener("mousemove", (e) => {
       if (!drag) return;
-      const s = this.cam.scale;
-      this.cam.cx -= (e.clientX - drag.x) / s;
-      this.cam.cy -= (e.clientY - drag.y) / s;
-      drag = { x: e.clientX, y: e.clientY };
+      if (drag.rotate) {
+        this.cam.bearing += ((e.clientX - drag.x) * 0.5 * Math.PI) / 180; // half a degree a pixel
+      } else {
+        // the world distance between the two cursor positions, so a drag follows the cursor at any bearing
+        const r = this.canvas.getBoundingClientRect();
+        const [ax, ay] = this.cam.screenToWorld(drag.x - r.left, drag.y - r.top);
+        const [bx, by] = this.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top);
+        this.cam.cx -= bx - ax;
+        this.cam.cy -= by - ay;
+      }
+      drag = { ...drag, x: e.clientX, y: e.clientY };
       this.triggerRepaint();
     });
     window.addEventListener("mouseup", () => {

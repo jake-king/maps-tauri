@@ -112,6 +112,20 @@ export function layoutOnPath(pts, advances, { maxAngle = Math.PI / 4, pad = 8, a
   }
 }
 
+/**
+ * The on-screen angle of a straight label with the map turned by `bearing` (radians). A label along
+ * a straight run turns with the map and is then kept readable left to right, in (-pi/2, pi/2]; a
+ * point label (a place, an area: no run) stays level with the screen, as MapLibre keeps it.
+ */
+export function screenAngle(l, bearing) {
+  if (!l.run) return 0;
+  let a = l.angle - bearing;
+  a = Math.atan2(Math.sin(a), Math.cos(a));
+  if (a > Math.PI / 2) a -= Math.PI;
+  else if (a <= -Math.PI / 2) a += Math.PI;
+  return a;
+}
+
 /** The axis-aligned box of a w x h rectangle centred at (x, y) and turned by `angle`, padded. */
 export function rotatedBox(x, y, w, h, angle, pad = 2) {
   const c = Math.abs(Math.cos(angle));
@@ -226,7 +240,7 @@ export class LabelLayer {
    * frame, with their on-screen rectangles (CSS px). Stand-in tiles contribute no labels, so a label
    * never jumps when the real tile arrives.
    */
-  draw(tiles, zoom, dpr, w, h) {
+  draw(tiles, zoom, dpr, w, h, project = null, bearing = 0) {
     const ctx = this.ctx;
     if (this.canvas.width !== Math.round(w * dpr) || this.canvas.height !== Math.round(h * dpr)) {
       this.canvas.width = Math.round(w * dpr);
@@ -238,12 +252,12 @@ export class LabelLayer {
     const cands = [];
     for (const { tile, rect } of tiles) {
       if (!tile.labels) continue;
-      const scale = rect.w / 4096;
+      const scale = rect.w / 4096; // screen px per tile unit (a turn does not change it)
+      const toScreen = project ? (px, py) => project(tile, px, py) : (px, py) => [rect.x + px * scale, rect.y + py * scale];
       for (const l of tile.labels) {
         const st = STYLE[l.kind];
         if (!st || zoom < Math.max(l.minZoom, st.minZ)) continue;
-        const x = rect.x + l.x * scale;
-        const y = rect.y + l.y * scale;
+        const [x, y] = toScreen(l.x, l.y);
         if (x < -100 || y < -50 || x > w + 100 || y > h + 50) continue;
         if (l.kind === KIND.Water && l.run && zoom < 13) continue; // streams and rivers from 13
         const text = st.upper ? l.text.toUpperCase() : l.text;
@@ -275,7 +289,9 @@ export class LabelLayer {
           if (options.length) cands.push({ ...base, icon, iw, ih, options });
         } else if (l.path) {
           // along its path: one box per character, so a curve does not claim a whole rectangle
-          const pts = l.path.map(([px, py]) => [rect.x + px * scale, rect.y + py * scale]);
+          const pts = l.path.map(([px, py]) => toScreen(px, py));
+          // turned with the map, a path may now run right to left on screen: read it the other way
+          if (pts[pts.length - 1][0] < pts[0][0]) pts.reverse();
           const chars = [...text];
           const lay = layoutOnPath(pts, chars.map((ch) => this.width(font, ch)), { anchors: [0.5, 0.35, 0.65, 0.2, 0.8] });
           if (!lay) continue;
@@ -284,8 +300,9 @@ export class LabelLayer {
             : lay.glyphs.map((g, i) => rotatedBox(g.x, g.y, this.width(font, chars[i]), th, g.angle, 1));
           if (boxes.every(onScreen)) cands.push({ ...base, boxes, chars, lay });
         } else {
-          const box = rotatedBox(x, y, tw, th, l.angle);
-          if (onScreen(box)) cands.push({ ...base, box });
+          const a = screenAngle(l, bearing);
+          const box = rotatedBox(x, y, tw, th, a);
+          if (onScreen(box)) cands.push({ ...base, angle: a, box });
         }
       }
     }

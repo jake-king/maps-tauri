@@ -753,3 +753,45 @@ Tokyo at zoom 14 show full street detail, curved names, POIs, and Japanese text 
 browser. The MapLibre app still reads the local file.
 
 The search index is worldwide (13.46M places); with the planet, the map now is too.
+
+## Optimization pass: one gate, less code, and rotation
+
+**A single gate.** `tools/check.sh` (`npm run check`) runs every check the project has, in one
+place: rustfmt, clippy with warnings as errors, ESLint (recommended rules plus unused variables,
+strict equality, prefer-const), ruff check and format, shellcheck, a check that the generated palette
+matches its generator, the Rust and JS unit tests, the decoder diff against @mapbox/vector-tile, a
+time-limited mesh of every West LA tile (the canyon-road loop would now fail it), and search parity
+with the production server. Each check was shown to fail on a planted violation before its pass was
+trusted. Turning it on found 142 formatting diffs, 16 clippy findings and 7 ruff findings, all fixed.
+
+**Dead code removed:** unused generated colours; the MapLibre prefetch, fade and warm-up switches
+(experiments that changed nothing); a first-sprite diagnostic; exports used only inside their module;
+the MapLibre app's startup search self-check (search parity covers it). The two apps had each wired
+the dev tools (benchmark, memory probe, snapshot, coverage, overlay) their own way; that now lives
+once in `src/devtools/harness.js`, and every mode was re-run in both apps.
+
+**Rotation.** The native renderer had no bearing; MapLibre has one, so the stress benchmark could not
+compare them. The camera now carries a bearing, and everything that asked "which tiles are on
+screen" takes the rotated view as a quadrilateral (a separating-axis test against each tile's
+square). The shaders rotate about the screen centre. Per-tile clipping was a scissor rectangle, which
+cannot be rotated, so it is now the stencil buffer: each tile writes its square, then draws only
+where the stencil matches. Right-drag rotates; `easeTo` takes the shortest way round.
+
+Labels: positions go through the same projection as the geometry; a curved name whose path now runs
+right to left is read the other way; a straight street name turns with the map and is then flipped to
+read left to right. The first 90 degree snapshot showed place and area names standing on end. MapLibre
+keeps point labels level with the screen, so now only labels with a run turn; the rule is a pure
+function with a test, which fails when the rule is removed.
+
+How I checked it did not change the unrotated map: the pre-rotation commit built in a second
+worktree, the same snapshot from both. Labels off, 0 of 960,000 pixels differ, so stencil clipping
+covers exactly what the scissor did. Labels on, 1.88% differed, which looked like a label bug. A diff
+image coloured by version showed every POI name centred in the old build and beside its icon in the
+new one: the old build had no icons at all. `public/assets` (the sprites) is gitignored, so a fresh
+worktree lacks it. With it linked in, 0 pixels differ. The lesson for comparisons across
+checkouts: list the ignored inputs (`git status --ignored`) before trusting a difference.
+
+At 30 degrees the native map matches MapLibre's geometry. Pan benchmark, render time per frame
+2.4 ms cold and 2.9 warm against 3.2 and 3.0 before: the stencil costs nothing measurable. The zoom
+benchmark shows one or two frames with up to 3% background zooming out from 15 to 10; the
+pre-rotation build does the same, so it is older than this work, and left for the stress benchmark.

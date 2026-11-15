@@ -77,6 +77,8 @@ fn dev_flags() -> serde_json::Value {
         // MAPS_SNAPSHOT=<name>: settle at a fixed view, save the frame as logs/snapshot-<name>.png, exit
         "snapshot": std::env::var("MAPS_SNAPSHOT").ok(),
         "snapshotZoom": std::env::var("MAPS_SNAPSHOT_ZOOM").ok().and_then(|v| v.parse::<f64>().ok()),
+        // MAPS_SNAPSHOT_BEARING=<degrees clockwise from north>
+        "snapshotBearing": std::env::var("MAPS_SNAPSHOT_BEARING").ok().and_then(|v| v.parse::<f64>().ok()),
         // MAPS_SNAPSHOT_CENTER=lng,lat
         "snapshotCenter": std::env::var("MAPS_SNAPSHOT_CENTER").ok().and_then(|v| {
             let mut it = v.split(',').map(|x| x.trim().parse::<f64>());

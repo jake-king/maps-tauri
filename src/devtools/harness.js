@@ -94,7 +94,9 @@ export function startDevtools({ map, flags, renderer, bounds, rows, describe = (
       return invoke("bench_done", { result: { zoom_bench: true, renderer, ...result } });
     }
     if (flags.snapshot) {
-      const view = flags.snapshotZoom != null ? { center: flags.snapshotCenter ?? PIER, zoom: flags.snapshotZoom } : undefined;
+      const view = flags.snapshotZoom != null || flags.snapshotBearing != null
+        ? { center: flags.snapshotCenter ?? PIER, zoom: flags.snapshotZoom ?? 15, bearing: flags.snapshotBearing ?? 0 }
+        : undefined;
       const path = await snapshot(map, flags.snapshot, view);
       return invoke("bench_done", { result: { snapshot: path, renderer } });
     }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { placeLabels, rotatedBox, layoutOnPath } from "../src/rust-renderer/labels.js";
+import { placeLabels, rotatedBox, layoutOnPath, screenAngle } from "../src/rust-renderer/labels.js";
 
 const box = (x0, y0, x1, y1) => ({ x0, y0, x1, y1 });
 
@@ -89,4 +89,18 @@ test("a rotated box is the bounding box of the turned rectangle", () => {
   assert.ok(Math.abs(b.x1 - 5) < 1e-9 && Math.abs(b.y1 - 50) < 1e-9);
   const d = rotatedBox(0, 0, 100, 0, Math.PI / 4, 0);
   assert.ok(Math.abs(d.x1 - 50 * Math.SQRT1_2) < 1e-9);
+});
+
+test("screenAngle: a point label stays level however the map turns", () => {
+  for (const b of [0, 0.5, Math.PI / 2, Math.PI, -2]) assert.equal(screenAngle({ run: 0, angle: 0 }, b), 0);
+});
+
+test("screenAngle: a run label turns with the map and stays readable left to right", () => {
+  const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} vs ${b}`);
+  near(screenAngle({ run: 300, angle: 0.3 }, 0), 0.3); // unturned: the tile's own angle
+  near(screenAngle({ run: 300, angle: 0.3 }, 0.5), -0.2); // turned 0.5 clockwise: 0.3 - 0.5
+  near(screenAngle({ run: 300, angle: 0 }, Math.PI), 0); // turned upside down: flipped back
+  near(screenAngle({ run: 300, angle: 1.2 }, -0.6), 1.8 - Math.PI); // past vertical: flipped
+  near(screenAngle({ run: 300, angle: 0 }, Math.PI / 2), Math.PI / 2); // vertical: one fixed reading
+  near(screenAngle({ run: 300, angle: 0 }, -Math.PI / 2), Math.PI / 2);
 });

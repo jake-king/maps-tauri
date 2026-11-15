@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { lngLatToWorld, worldToLngLat, Camera, visibleTiles, ringTiles, tileRect, ancestor, interpolate, parseMeshHeader, parseLabels, tileZoom, worldFitZoom, clampCamera } from "../src/rust-renderer/geo.js";
+import { lngLatToWorld, worldToLngLat, Camera, visibleTiles, ringTiles, tileRect, ancestor, interpolate, parseMeshHeader, parseLabels, tileZoom, worldFitZoom, clampCamera, quadIntersectsRect } from "../src/rust-renderer/geo.js";
 
 const close = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} vs ${b}`);
 
@@ -86,6 +86,57 @@ test("zoom-out cap: the world fills the window and the view never leaves it", ()
   assert.deepEqual([e.cx, e.cy, e.zoom], [0.3, 0.4, 12]);
   // and the cap from above
   assert.equal(clampCamera(new Camera(0.3, 0.4, 30, 100, 100), 22).zoom, 22);
+});
+
+test("bearing: turns the map the way MapLibre does, and screen and world still invert", () => {
+  // bearing 90 degrees: east is up, so a point east of the center is drawn above it
+  const c = new Camera(0.5, 0.5, 10, 1000, 800, Math.PI / 2);
+  const [, y] = c.worldToScreen(0.5 + 100 / c.scale, 0.5);
+  close(y, 400 - 100);
+  const r = new Camera(0.3, 0.4, 12.5, 1200, 800, 0.7);
+  const [wx, wy] = r.screenToWorld(...r.worldToScreen(0.3001, 0.3999));
+  close(wx, 0.3001);
+  close(wy, 0.3999);
+});
+
+test("a turned view: every screen point is covered, and only overlapping tiles are listed", () => {
+  const cam = new Camera(...lngLatToWorld(-118.45, 34.025), 14.3, 1200, 800, Math.PI / 4);
+  const tiles = visibleTiles(cam, 0, 14);
+  for (let px = 0; px <= 1200; px += 100) {
+    for (let py = 0; py <= 800; py += 100) {
+      const [wx, wy] = cam.screenToWorld(Math.min(px, 1199.9), Math.min(py, 799.9));
+      const n = 2 ** 14;
+      assert.ok(tiles.some(([, x, y]) => x === Math.floor(wx * n) && y === Math.floor(wy * n)), `screen ${px},${py} uncovered`);
+    }
+  }
+  // fewer than the turned view's bounding box would hold
+  const q = cam.viewQuad();
+  const n = 2 ** 14;
+  const bw = Math.floor(Math.max(...q.map((p) => p[0])) * n) - Math.floor(Math.min(...q.map((p) => p[0])) * n) + 1;
+  const bh = Math.floor(Math.max(...q.map((p) => p[1])) * n) - Math.floor(Math.min(...q.map((p) => p[1])) * n) + 1;
+  assert.ok(tiles.length < bw * bh, `${tiles.length} vs box ${bw * bh}`);
+  // the ring stays outside the view at any bearing
+  const vis = new Set(tiles.map((t) => t.join()));
+  assert.ok(ringTiles(cam, 0, 14, 1).every((t) => !vis.has(t.join())));
+});
+
+test("quad-rectangle overlap by separating axes", () => {
+  const diamond = [[0.5, 0], [1, 0.5], [0.5, 1], [0, 0.5]];
+  assert.equal(quadIntersectsRect(diamond, 0.4, 0.4, 0.6, 0.6), true);
+  assert.equal(quadIntersectsRect(diamond, 0, 0, 0.2, 0.2), false); // in the box corner the diamond misses
+  assert.equal(quadIntersectsRect(diamond, 1, 0, 2, 1), false); // touching at a point is not overlap
+  assert.equal(quadIntersectsRect([[0, 0], [1, 0], [1, 1], [0, 1]], 0.9, 0.9, 2, 2), true);
+});
+
+test("the zoom-out cap holds at any bearing: no corner of the view leaves the world", () => {
+  for (const b of [0, 0.3, Math.PI / 4, 1.2, Math.PI / 2]) {
+    const c = clampCamera(new Camera(0.02, 0.97, -5, 1200, 800, b));
+    for (const [x, y] of c.viewQuad()) {
+      assert.ok(x >= -1e-9 && x <= 1 + 1e-9 && y >= -1e-9 && y <= 1 + 1e-9, `bearing ${b}: corner ${x},${y}`);
+    }
+  }
+  // turned 45 degrees a 1200 x 800 view needs a bigger world than it does north-up
+  assert.ok(worldFitZoom(1200, 800, Math.PI / 4) > worldFitZoom(1200, 800, 0));
 });
 
 test("ancestors", () => {
