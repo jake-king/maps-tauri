@@ -31,14 +31,18 @@ const opacityOf = (l, key) => (typeof l.paint?.[key] === "number" ? l.paint[key]
 const withOpacity = (c, o) => [c[0], c[1], c[2], Math.round(c[3] * o)];
 
 // landuse kinds -> color: the layer filters say which kinds each landuse_* layer draws; its
-// fill-color is a literal, or (landuse_park) a `case` over kind.
+// fill-color is a literal, or (landuse_park) a `case` over kind. `aboveWater` notes the kinds whose
+// layer the style draws after the water layer (a pier must not be painted over by the ocean).
 const landuse = {};
+const aboveWater = new Set();
+const waterIndex = ls.findIndex((l) => l.id === "water");
 for (const l of ls.filter((x) => x["source-layer"] === "landuse" && x.type === "fill")) {
   const f = l.filter;
   let kinds = [];
   if (f[0] === "in" && f[1] === "kind") kinds = f.slice(2);
   else if (f[0] === "==" && f[1] === "kind") kinds = [f[2]];
   else if (f[0] === "any") for (const g of f.slice(1)) if (g[0] === "in" && g[1] === "kind") kinds.push(...g.slice(2));
+  if (ls.indexOf(l) > waterIndex) for (const k of kinds) aboveWater.add(k);
   const fc = l.paint["fill-color"];
   if (Array.isArray(fc) && fc[0] === "case") {
     for (let i = 1; i + 1 < fc.length; i += 2) {
@@ -111,6 +115,11 @@ pub fn landuse(kind: &str) -> Option<u8> {
 ${Object.entries(landuseIndex).map(([k, i]) => `        ${JSON.stringify(k)} => Some(${i}),`).join("\n")}
         _ => None,
     }
+}
+
+/// Landuse kinds the style draws above water (after the water layer), not below it.
+pub fn landuse_above_water(kind: &str) -> bool {
+    matches!(kind, ${[...aboveWater].map((k) => JSON.stringify(k)).join(" | ") || '""'})
 }
 
 /// Line classes in draw order. The class number is written into each line vertex; the frontend

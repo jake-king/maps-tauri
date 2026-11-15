@@ -69,6 +69,11 @@ pub fn landuse(kind: &str) -> Option<u8> {
     }
 }
 
+/// Landuse kinds the style draws above water (after the water layer), not below it.
+pub fn landuse_above_water(kind: &str) -> bool {
+    matches!(kind, "pedestrian" | "dam" | "pier")
+}
+
 /// Line classes in draw order. The class number is written into each line vertex; the frontend
 /// turns it into a width for the current zoom (src/rust-renderer/palette.json).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

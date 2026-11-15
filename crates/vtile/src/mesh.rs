@@ -332,16 +332,27 @@ impl Mesher {
                 self.fill_feature(f, palette::EARTH);
             }
         }
-        if let Some(l) = layer("landuse") {
-            for f in &l.features {
-                if let Some(c) = kind(l, f).as_deref().and_then(palette::landuse) {
-                    self.fill_feature(f, c);
+        // landuse in the style's order around water: most below it, a few (piers, pedestrian
+        // areas, dams) above it, or the ocean polygon paints over them
+        for above in [false, true] {
+            if above {
+                if let Some(l) = layer("water") {
+                    for f in &l.features {
+                        self.fill_feature(f, palette::WATER);
+                    }
                 }
             }
-        }
-        if let Some(l) = layer("water") {
-            for f in &l.features {
-                self.fill_feature(f, palette::WATER);
+            if let Some(l) = layer("landuse") {
+                for f in &l.features {
+                    let k = kind(l, f);
+                    let Some(k) = k.as_deref() else { continue };
+                    if palette::landuse_above_water(k) != above {
+                        continue;
+                    }
+                    if let Some(c) = palette::landuse(k) {
+                        self.fill_feature(f, c);
+                    }
+                }
             }
         }
         if let Some(l) = layer("buildings") {
