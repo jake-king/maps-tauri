@@ -1,0 +1,132 @@
+{
+ "cache_zoom_levels": 20,
+ "cached_parents": "applied",
+ "cold": {
+  "cache_max": 240,
+  "dropped": 4,
+  "fetch": {
+   "avg": 2.7,
+   "n": 161,
+   "p95": 9,
+   "worst": 16
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 488,
+   "p95": 19,
+   "worst": 31
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 97,
+  "load": {
+   "avg": 34.6,
+   "n": 159,
+   "p95": 61,
+   "worst": 69
+  },
+  "memory_mb": 835,
+  "missing_frames": 165,
+  "missing_pct": 33.8,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 488,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 5.4,
+   "n": 488,
+   "p95": 9,
+   "worst": 15
+  },
+  "rendered": 488,
+  "serve": {
+   "avg": 0.1,
+   "bytes": 7108961,
+   "n": 161,
+   "worst": 0.2
+  },
+  "settle_ms": 0,
+  "tiles_loaded": 159,
+  "unique_tiles": 161
+ },
+ "cores": 8,
+ "fade_ms": 300,
+ "labels": true,
+ "pixel_check": false,
+ "pixel_selftest_outside_pct": null,
+ "prefetch_zoom_delta": 4,
+ "speed_px_s": 4000,
+ "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+ "warm": {
+  "cache_max": 240,
+  "dropped": 2,
+  "fetch": {
+   "avg": 2,
+   "n": 2,
+   "p95": 2,
+   "worst": 2
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 487,
+   "p95": 18,
+   "worst": 50
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 57,
+  "load": {
+   "avg": 10,
+   "n": 2,
+   "p95": 11,
+   "worst": 11
+  },
+  "memory_mb": 828,
+  "missing_frames": 2,
+  "missing_pct": 0.4,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 487,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 5.9,
+   "n": 487,
+   "p95": 9,
+   "worst": 15
+  },
+  "rendered": 487,
+  "serve": {
+   "avg": 0,
+   "bytes": 0,
+   "n": 0,
+   "worst": 0
+  },
+  "settle_ms": 0,
+  "tiles_loaded": 2,
+  "unique_tiles": 2
+ },
+ "warm_zoom": 0,
+ "workers": 3,
+ "zoom": 15,
+ "label": "budget-w3-c20 (release)"
+}

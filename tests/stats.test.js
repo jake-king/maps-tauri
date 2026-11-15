@@ -10,6 +10,18 @@ test("Ring keeps the last n, oldest first, and summarises them", () => {
   assert.deepEqual(r.summary(), { avg: 13 / 3, worst: 9, count: 3 });
 });
 
+test("Ring wraps more than once and stays in order", () => {
+  const r = new Ring(3);
+  for (let v = 1; v <= 8; v++) r.push(v);
+  assert.deepEqual(r.values(), [6, 7, 8]);
+  assert.deepEqual(r.summary(), { avg: 7, worst: 8, count: 3 });
+  const p = new Ring(4);
+  p.push(2);
+  p.push(4);
+  assert.deepEqual(p.values(), [2, 4]); // partly filled: unwritten slots are not samples
+  assert.deepEqual(p.summary(), { avg: 3, worst: 4, count: 2 });
+});
+
 test("Ring's worst is the true maximum, negatives included", () => {
   const r = new Ring(4);
   for (const v of [-3, -1, -2]) r.push(v);

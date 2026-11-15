@@ -257,3 +257,50 @@ turns it off for comparison.
 
 Timing runs show no cost: 5 dropped frames of ~490 and about 800 MB, as before. While a detailed
 tile decodes, the view now shows its parent scaled up, blurry for a frame or two, instead of gray.
+
+## Memory, and what transfers from guile-2d
+
+The app felt heavy next to my guile-2d engine, about 800 MB after a pan. guile-2d works from a
+fixed budget: one block of memory carved up at startup, frame scratch wiped every frame, nothing
+allocated per frame, a profiler counting bytes per block. Its test arenas are kilobytes.
+
+The first step was finding where the 800 MB lives. `MAPS_MEMPROBE=blank|idle` (`tools/memprobe.sh`)
+records memory (PSS) for every process in the app's tree at a stage, then exits:
+
+| stage | total | app process | WebKit network process | WebKit web process |
+|---|---|---|---|---|
+| blank window, MapLibre's code loaded, no map | 293 MB | 96 | 32 | 164 |
+| map at rest after its first load | 599 MB | 101 | 32 | 464 |
+| after the pan benchmark | ~830 MB | | | |
+
+About 290 MB is the floor any Tauri window on WebKitGTK pays before drawing anything, and no
+technique from guile-2d reaches it: SDL and OpenGL are a thin layer, a browser engine is not. The
+rest is the map, all inside the web process.
+
+At rest, each MapLibre worker costs about 45-50 MB (1, 3 and 6 workers: 494, 599 and 694 MB),
+because each is a JavaScript engine of its own, and labels cost about 80 MB. On the pan benchmark:
+
+| workers | tile cache | memory after the pan | gray, first visit / revisit | dropped frames |
+|---|---|---|---|---|
+| 3 (the default here) | 240 tiles | ~830 MB | 0% / 0% | 2-4 |
+| 1 | 240 tiles | ~700 MB | 0% / 0% (pixel check) | 1-2 |
+| 1 | 120 tiles | ~705 MB | 0% / 2.5% | 2-4 |
+| 1 | 60 tiles | ~695 MB | 7.6% / 13.8% (pixel check) | 2-3 |
+
+One worker decodes tiles no slower than three on this workload, so the app now runs one: about
+130 MB saved for nothing measurable. Shrinking the cache saves almost nothing and brings gray boxes
+back, because the parent patch needs parents still in the cache. The cache stays at 240 tiles.
+
+The dev tools themselves broke guile-2d's per-frame rule: the sampler ran every frame with F4
+closed, each ring buffer allocated through `Array.shift()`, and tile coverage was measured on every
+render while tiles loaded. The rings are now one preallocated `Float64Array` each, written in a
+circle (3 more planted bugs, all caught), and nothing runs per frame unless the overlay is open or
+the benchmark is running.
+
+Result: 500 MB at rest instead of 599, about 700 MB after a pan instead of ~830.
+
+Problem:
+- **My first sweep was invalid.** I looped over `"1 20"`-style pairs with `set -- $cfg`, but my
+  shell is zsh, which does not split an unquoted variable into words, so `MAPS_WORKERS` got
+  `"1 20"` (unparseable, so the default) and every run measured the defaults. The giveaway was
+  `cache max 240` in runs meant to have a smaller cache. Rerun with explicit values.

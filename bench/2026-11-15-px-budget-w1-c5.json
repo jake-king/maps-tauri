@@ -1,0 +1,132 @@
+{
+ "cache_zoom_levels": 5,
+ "cached_parents": "applied",
+ "cold": {
+  "cache_max": 60,
+  "dropped": 3,
+  "fetch": {
+   "avg": 3.1,
+   "n": 161,
+   "p95": 10,
+   "worst": 15
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 487,
+   "p95": 18,
+   "worst": 44
+  },
+  "gray_frames": 37,
+  "gray_pct": 7.6,
+  "jitter_only": 95,
+  "load": {
+   "avg": 37.5,
+   "n": 158,
+   "p95": 61,
+   "worst": 71
+  },
+  "memory_mb": 696,
+  "missing_frames": 174,
+  "missing_pct": 35.7,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 37,
+   "area_pct": {
+    "avg": 1.2,
+    "n": 487,
+    "p95": 9.3,
+    "worst": 26
+   },
+   "gray_frames": 76,
+   "gray_pct": 15.6,
+   "pixels_gray_tile_says_clean": 39,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 5.6,
+   "n": 487,
+   "p95": 9,
+   "worst": 16
+  },
+  "rendered": 487,
+  "serve": {
+   "avg": 0.1,
+   "bytes": 7108961,
+   "n": 161,
+   "worst": 0.2
+  },
+  "settle_ms": 0,
+  "tiles_loaded": 158,
+  "unique_tiles": 161
+ },
+ "cores": 8,
+ "fade_ms": 300,
+ "labels": true,
+ "pixel_check": true,
+ "pixel_selftest_outside_pct": 100,
+ "prefetch_zoom_delta": 4,
+ "speed_px_s": 4000,
+ "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+ "warm": {
+  "cache_max": 60,
+  "dropped": 2,
+  "fetch": {
+   "avg": 2.6,
+   "n": 161,
+   "p95": 8,
+   "worst": 24
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 486,
+   "p95": 19,
+   "worst": 35
+  },
+  "gray_frames": 67,
+  "gray_pct": 13.8,
+  "jitter_only": 100,
+  "load": {
+   "avg": 29.6,
+   "n": 158,
+   "p95": 48,
+   "worst": 58
+  },
+  "memory_mb": 676,
+  "missing_frames": 145,
+  "missing_pct": 29.8,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 67,
+   "area_pct": {
+    "avg": 2.5,
+    "n": 486,
+    "p95": 12,
+    "worst": 100
+   },
+   "gray_frames": 145,
+   "gray_pct": 29.8,
+   "pixels_gray_tile_says_clean": 78,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 5.6,
+   "n": 486,
+   "p95": 10,
+   "worst": 15
+  },
+  "rendered": 486,
+  "serve": {
+   "avg": 0.1,
+   "bytes": 6940769,
+   "n": 149,
+   "worst": 0.2
+  },
+  "settle_ms": 0,
+  "tiles_loaded": 158,
+  "unique_tiles": 161
+ },
+ "warm_zoom": 0,
+ "workers": 1,
+ "zoom": 15,
+ "label": "px-budget-w1-c5 (release)"
+}

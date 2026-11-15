@@ -1,26 +1,37 @@
 // Pure pieces of the F4 overlay: rolling windows, summaries and the drawing geometry. Nothing here
 // touches the DOM, the map or the clock, so every function is tested exactly in tests/stats.test.js.
 
-/** A fixed-size window of the last `n` samples, oldest first. */
+/**
+ * A fixed-size window of the last `n` samples. Storage is one Float64Array allocated up front and
+ * written in a circle, so push() allocates nothing: guile-2d's rule that a frame allocates nothing.
+ * values() copies (oldest first) and is for drawing the overlay, not the per-frame path.
+ */
 export class Ring {
   constructor(n) {
     this.n = n;
-    this.buf = [];
+    this.buf = new Float64Array(n);
+    this.head = 0; // next slot to write
+    this.count = 0;
   }
   push(v) {
-    this.buf.push(v);
-    if (this.buf.length > this.n) this.buf.shift();
+    this.buf[this.head] = v;
+    this.head = (this.head + 1) % this.n;
+    if (this.count < this.n) this.count += 1;
   }
   values() {
-    return this.buf.slice();
+    const out = new Array(this.count);
+    const start = (this.head - this.count + this.n) % this.n;
+    for (let i = 0; i < this.count; i++) out[i] = this.buf[(start + i) % this.n];
+    return out;
   }
-  /** `{ avg, worst, count }` over the window; zeros when empty. */
+  /** `{ avg, worst, count }` over the window; zeros when empty. Allocates only the result. */
   summary() {
-    const count = this.buf.length;
+    const count = this.count;
     if (count === 0) return { avg: 0, worst: 0, count: 0 };
     let sum = 0;
     let worst = -Infinity;
-    for (const v of this.buf) {
+    for (let i = 0; i < count; i++) {
+      const v = this.buf[i];
       sum += v;
       if (v > worst) worst = v;
     }

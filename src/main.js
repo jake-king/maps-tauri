@@ -38,6 +38,20 @@ protocol.add(archive);
 
 const flags = await invoke("dev_flags");
 
+// Memory probe: per-process memory at a stage, then exit. "blank" stops here, before any map,
+// source or worker exists (MapLibre's code is loaded, nothing more): the floor every Tauri +
+// WebKitGTK window pays. "idle" measures the map at rest after its first load.
+const memprobe = async (stage) => {
+  await new Promise((r) => setTimeout(r, 3000));
+  const s = await invoke("dev_stats");
+  await invoke("bench_done", { result: { probe: stage, memory: s.memory } });
+};
+if (flags.memprobe === "blank") {
+  say("memory probe: blank");
+  await memprobe("blank");
+  await new Promise(() => {}); // the app exits from bench_done
+}
+
 // Glyphs and sprites are Vite public assets, served from the page's own origin. Plain
 // concatenation: new URL() would percent-encode the {fontstack}/{range} template tokens.
 const style = {
@@ -68,9 +82,12 @@ const header = await archive.getHeader();
 // Measured with the pan benchmark: 5 and 10 levels reload all 161 tiles on a revisit (30% of
 // frames drawn with tiles missing); 20 and 40 reload 3 (0%), with no measurable memory cost.
 const CACHE_ZOOM_LEVELS = flags.cacheZoomLevels ?? 20; // bench/2026-11-15-cache*.json
-// MapLibre runs ONE worker unless it detects Safari (then half the cores, up to 3). Overridable
-// for the benchmark; setWorkerCount must run before the first map is created.
-if (flags.workers) maplibregl.setWorkerCount(flags.workers);
+// MapLibre runs one worker unless it detects Safari, and WebKitGTK's user agent says Safari, so it
+// would run 3. Each worker is a JavaScript engine of its own, about 45-50 MB, and on the pan
+// benchmark 3 workers decoded tiles no faster than 1 (bench/2026-11-15-budget-*.json): 1 worker
+// saves ~130 MB for nothing measurable. MAPS_WORKERS overrides it; setWorkerCount must run before
+// the first map is created.
+maplibregl.setWorkerCount(flags.workers ?? 1);
 const PREFETCH = flags.prefetch ?? 4; // MapLibre's default prefetchZoomDelta
 const map = new maplibregl.Map({
   maxTileCacheZoomLevels: CACHE_ZOOM_LEVELS,
@@ -98,9 +115,13 @@ if (flags.cachedParents) {
 }
 
 // Dev tools: F4 toggles the overlay, F6 runs the pan benchmark (MAPS_BENCH=1 runs it at startup).
-const sample = instrument(map, stats, { pixelCheck: flags.pixelCheck });
-const overlay = createOverlay(stats);
 let benching = false;
+let overlay = null;
+const sample = instrument(map, stats, {
+  pixelCheck: flags.pixelCheck,
+  active: () => benching || (overlay?.isVisible() ?? false),
+});
+overlay = createOverlay(stats);
 const frame = (now) => {
   sample(now);
   overlay.draw();
@@ -167,6 +188,7 @@ window.addEventListener("keydown", (e) => {
   }
 });
 map.once("idle", async () => {
+  if (flags.memprobe === "idle") return memprobe("idle");
   const t0 = performance.now();
   const views = await warmUp(bounds, WARM_ZOOM);
   if (views) invoke("report", { msg: `warm-up: ${views} views at z${WARM_ZOOM} in ${Math.round(performance.now() - t0)} ms` });

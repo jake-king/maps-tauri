@@ -78,7 +78,12 @@ function magentaFraction(gl, buf) {
   return n ? hit / n : 0;
 }
 
+/**
+ * Wire the measurements into the map. Everything per frame runs only while `opts.active()` says
+ * so (the overlay is open or the benchmark is running): closed, the tools cost nothing a frame.
+ */
 export function instrument(map, stats, opts = {}) {
+  const active = opts.active ?? (() => true);
   const pixbuf = { data: new Uint8Array(0) };
   let framePix = 0;
   let renderMs = 0;
@@ -101,6 +106,7 @@ export function instrument(map, stats, opts = {}) {
   // camera moved but before the tile manager caught up, and count gaps a parent would fill.
   let frameCov = null;
   map.on("render", () => {
+    if (!active()) return;
     // read in the render event, before the browser composites the frame, so the buffer is intact
     if (opts.pixelCheck) framePix = Math.max(framePix, magentaFraction(map.painter.context.gl, pixbuf));
     if (map.areTilesLoaded()) return;
@@ -126,6 +132,12 @@ export function instrument(map, stats, opts = {}) {
   let last = performance.now();
   let secondStart = last;
   return function sample(now) {
+    if (!active()) {
+      last = now;
+      renderMs = 0;
+      rendered = false;
+      return;
+    }
     const interval = now - last;
     const missing = rendered && !map.areTilesLoaded();
     const cov = rendered ? frameCov : null;
