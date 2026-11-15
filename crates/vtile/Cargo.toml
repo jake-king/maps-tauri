@@ -5,6 +5,7 @@ edition = "2021"
 description = "PMTiles v3 reading and Mapbox Vector Tile decoding for the native renderer"
 
 [dependencies]
+earcutr = "0.5"
 flate2 = "1"
 
 [dev-dependencies]

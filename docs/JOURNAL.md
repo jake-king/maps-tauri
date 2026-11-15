@@ -377,3 +377,31 @@ Problems:
   the closing segment anyway.
 - `pbf` 5 has no default export (`import { PbfReader }`), and I had first pinned 4.0.1, a different
   major from the 5.1.2 `@mapbox/vector-tile` itself uses.
+
+## R1: meshes in Rust
+
+`crates/vtile/src/mesh.rs` turns a decoded tile into two GPU-ready meshes. Fills: rings grouped
+into polygons with holes by winding (MapLibre's classifyRings), triangulated with `earcutr` (a
+port of the earcut MapLibre uses). Lines: two vertices per point, pushed apart along the miter
+(capped at 2 half widths so sharp corners do not spike), with the width applied in the shader, so a
+mesh never needs rebuilding when the zoom changes. Colors and line classes live in the vertices
+(indexed), so a tile draws in two calls, one for fills and one for lines. Scratch buffers are
+reused from tile to tile.
+
+The palette is generated (`tools/gen_palette.mjs`) from the same Protomaps light style MapLibre
+draws: 18 fill colors (32 landuse kinds share them), 11 line classes with their real zoom width
+stops. Two details of that style: landcover fades to transparent by zoom 7 (so it is skipped), and
+buildings are 50% transparent. v1 simplifies roads: no casings, no tunnel or bridge styling.
+
+Checks: unit tests (ring classification, a square with a hole triangulating to its exact area,
+miters on a straight line, a right angle and a near-reversal, the wire format byte by byte, index
+widening past 65,535 vertices), 7 planted bugs all caught. On the whole archive
+(`examples/meshcheck.rs`): 25,300 of 25,302 polygon features triangulate to exactly their area; two
+are off by up to 0.5%, which earcut does not promise for self-touching polygons. Decode + mesh takes
+1.7 ms a tile.
+
+The first wire format was too big: 415 KB per zoom-14 tile, against about 160 KB of MapLibre GPU
+buffers per tile measured by the GPU ledger. 32-bit indices, full colors in every vertex and 16-bit
+extrusion vectors were the waste. Version 2 uses 16-bit indices (32-bit only past 65,535 vertices,
+which no tile here reaches), palette indices instead of colors, and `i8` extrusion: 6-byte fill and
+8-byte line vertices, 235 KB per zoom-14 tile.
