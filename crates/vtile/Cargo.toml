@@ -1,0 +1,11 @@
+[package]
+name = "vtile"
+version = "0.1.0"
+edition = "2021"
+description = "PMTiles v3 reading and Mapbox Vector Tile decoding for the native renderer"
+
+[dependencies]
+flate2 = "1"
+
+[dev-dependencies]
+serde_json = "1"

@@ -348,3 +348,32 @@ off matters more than its size.
 
 What would lower it: less decoding work per tile (fewer style layers; labels alone are about
 80 MB at rest), or a renderer that does not decode in JavaScript at all. Neither is a setting.
+
+## A renderer that does not decode in JavaScript: R0, reading tiles in Rust
+
+The memory work showed that most of what a pan costs is MapLibre decoding tiles in JavaScript. The
+next step is a second renderer, side by side with MapLibre: Rust reads and decodes the tiles and
+turns them into ready-to-draw triangle buffers, and a small WebGL2 renderer in the webview only
+uploads and draws. JavaScript does no decoding. The webview stays, so the frontend remains web
+code (DX's argument for the iPad), and decoding moves to Rust, where allocation is ours to control.
+The first version draws fills and lines only: labels (shaping, placement, collision) are a large
+share of what MapLibre does and come later, if at all.
+
+`crates/vtile` holds a PMTiles v3 reader and a Mapbox Vector Tile decoder, both hand-rolled (the
+formats are a few pages of spec each); `flate2` does the gzip. Spec examples are unit tests (tile
+ids, varints, directory offsets, the MVT geometry examples, value types).
+
+The real check is a differential test (`tools/mvt_diff.mjs`): every tile in the archive read and
+decoded by two independent pipelines, Rust on one side, pmtiles.js and `@mapbox/vector-tile` (the
+decoder MapLibre 6.7.0 itself uses) on the other, compared layer by layer: features, geometry
+types, rings, vertices, a coordinate checksum, extent and `kind` values. All 142 tiles and 926
+layers are identical. A planted bug (coordinate deltas read without their sign) turns 833 of them
+red.
+
+Problems:
+- **I assumed `@mapbox/vector-tile` leaves polygon rings open.** The first diff agreed on
+  everything except vertex counts, always a few more on the JavaScript side. Its source closes a
+  ring by repeating the first point on ClosePath. The Rust decoder now does the same; outlines need
+  the closing segment anyway.
+- `pbf` 5 has no default export (`import { PbfReader }`), and I had first pinned 4.0.1, a different
+  major from the 5.1.2 `@mapbox/vector-tile` itself uses.
