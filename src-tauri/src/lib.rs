@@ -82,6 +82,8 @@ fn dev_flags() -> serde_json::Value {
         "snapshotZoom": std::env::var("MAPS_SNAPSHOT_ZOOM").ok().and_then(|v| v.parse::<f64>().ok()),
         // MAPS_ZOOM_BENCH=1 (with MAPS_PIXEL_CHECK=1): the zoom out/in benchmark, worst frame saved
         "zoomBench": std::env::var("MAPS_ZOOM_BENCH").is_ok_and(|v| v == "1"),
+        // MAPS_SEARCH=<query>: run the native search box end to end and snapshot the result
+        "search": std::env::var("MAPS_SEARCH").ok(),
         // MAPS_EMPTY_STYLE=1: a background layer only, no source, tiles or fonts (a memory control)
         "emptyStyle": std::env::var("MAPS_EMPTY_STYLE").is_ok_and(|v| v == "1"),
         // on unless MAPS_CACHED_PARENTS=0 (bench/2026-11-15-px-parents*.json)

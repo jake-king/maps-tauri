@@ -9,6 +9,8 @@ import { runBench, runSoak, setBenchSpeed, runZoomBench } from "../devtools/benc
 import { GpuLedger, installGpuLedger } from "../devtools/gpumem.js";
 import { blockRows } from "../devtools/blocks.js";
 import { snapshot } from "../devtools/snapshot.js";
+import { createSearchBox } from "./search.js";
+import initCoords, { coordFeatures } from "../wasm/coords.js";
 
 const status = document.getElementById("status");
 const say = (msg) => {
@@ -50,6 +52,8 @@ const map = new RustMap({
   labels: !flags.noLabels,
 });
 map.onVisibleWait = (ms) => stats.tap?.("visible", ms);
+await initCoords();
+const search = createSearchBox(map, { invoke, coordFeatures, container: document.getElementById("map") });
 // pixel check: a magenta background, so any uncovered screen area is countable
 if (flags.pixelCheck) map.setBackground([1, 0, 1, 1]);
 
@@ -107,6 +111,15 @@ window.addEventListener("keydown", (e) => {
 
 map.once("idle", async () => {
   say(`native renderer · ${map.cacheStats().loaded} tiles · z${map.getZoom().toFixed(1)}`);
+  if (flags.search) {
+    // MAPS_SEARCH=<query>: type it, take the first result, settle, snapshot the result
+    const names = await search.run(flags.search);
+    await new Promise((r) => map.once("moveend", r));
+    if (!map.areTilesLoaded()) await new Promise((r) => map.once("idle", r));
+    await new Promise((r) => setTimeout(r, 200));
+    const path = await snapshot(map, "search", { center: map.getCenter(), zoom: map.getZoom() }, (ctx, dpr) => search.paint(ctx, dpr));
+    return invoke("bench_done", { result: { search: flags.search, results: names, center: map.getCenter(), snapshot: path } });
+  }
   if (flags.zoomBench) {
     benching = true;
     const result = await runZoomBench(map, stats, [-118.4912, 34.0105], "zoombench-rust");

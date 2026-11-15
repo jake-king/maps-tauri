@@ -7,7 +7,9 @@ import { invoke } from "@tauri-apps/api/core";
 /** The fixed view every snapshot uses, so the two renderers can be compared image to image. */
 export const SNAPSHOT_VIEW = { center: [-118.4912, 34.0105], zoom: 15 }; // Santa Monica Pier
 
-export async function snapshot(map, name, view = SNAPSHOT_VIEW) {
+/** `paint(ctx, dpr)` (optional) draws extra state over the picture, e.g. HTML overlays, which
+ *  readPixels cannot see. */
+export async function snapshot(map, name, view = SNAPSHOT_VIEW, paint = null) {
   map.jumpTo(view);
   await new Promise((r) => map.once("idle", r));
   const url = await new Promise((resolve) => {
@@ -25,6 +27,7 @@ export async function snapshot(map, name, view = SNAPSHOT_VIEW) {
       ctx.putImageData(new ImageData(flipped, w, h), 0, 0);
       // the native renderer draws labels on a 2D canvas over the map: put them in the picture too
       if (map.labelLayer?.canvas) ctx.drawImage(map.labelLayer.canvas, 0, 0, w, h);
+      paint?.(ctx, w / (map.getCanvas().clientWidth || w));
       resolve(c.toDataURL("image/png"));
     });
     map.triggerRepaint();
