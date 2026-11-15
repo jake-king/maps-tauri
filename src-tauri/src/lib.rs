@@ -1,8 +1,10 @@
+mod devstats;
 pub mod search;
 mod tiles;
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use rusqlite::Connection;
 use serde_json::Value;
@@ -32,6 +34,33 @@ fn search(query: String, limit: Option<usize>, db: tauri::State<'_, Gazetteer>) 
     }
 }
 
+/// One poll of the F4 overlay's backend numbers: per-process memory and the tile handler's timings
+/// since the previous poll.
+#[tauri::command(async)]
+fn dev_stats(tiles: tauri::State<'_, Arc<devstats::TileTimes>>) -> serde_json::Value {
+    serde_json::json!({
+        "memory": devstats::process_tree_memory(),
+        "tiles": tiles.take(),
+    })
+}
+
+/// Development switches from the environment. `MAPS_BENCH=1` runs the scripted pan benchmark at
+/// startup and reports its result to stdout.
+#[tauri::command]
+fn dev_flags() -> serde_json::Value {
+    serde_json::json!({ "bench": std::env::var("MAPS_BENCH").is_ok_and(|v| v == "1") })
+}
+
+/// The benchmark's result: printed as one `[bench]` JSON line, and under `MAPS_BENCH=1` the app
+/// then exits, so a scripted run ends by itself instead of leaving a window open.
+#[tauri::command]
+fn bench_done(result: serde_json::Value, app: tauri::AppHandle) {
+    println!("[bench] {result}");
+    if std::env::var("MAPS_BENCH").is_ok_and(|v| v == "1") {
+        app.exit(0);
+    }
+}
+
 /// Where the archive and the gazetteer live: `MAPS_DATA`, else the repo's `data/`.
 fn data_dir() -> PathBuf {
     std::env::var_os("MAPS_DATA")
@@ -48,21 +77,30 @@ pub fn run() {
             Gazetteer(None)
         }
     };
+    let tile_times = Arc::new(devstats::TileTimes::default());
+    let handler_times = tile_times.clone();
+    let log_tiles = std::env::var("MAPS_LOG_TILES").is_ok_and(|v| v == "1");
     tauri::Builder::default()
         .manage(gazetteer)
+        .manage(tile_times)
         // Asynchronous so a file read never runs on the UI thread: the handler hands the request
         // to a blocking-pool thread and answers through the responder when the read is done.
         .register_asynchronous_uri_scheme_protocol("tiles", move |_ctx, request, responder| {
             let data = data.clone();
+            let times = handler_times.clone();
             tauri::async_runtime::spawn_blocking(move || {
+                let t0 = Instant::now();
                 let res = tiles::handle(&data, &request);
-                let range = request.headers().get("range").and_then(|v| v.to_str().ok()).unwrap_or("-");
-                println!("[tiles] {} {} range={range} -> {} ({} B)",
-                         request.method(), request.uri().path(), res.status().as_u16(), res.body().len());
+                times.record(t0.elapsed(), res.body().len());
+                if log_tiles {
+                    let range = request.headers().get("range").and_then(|v| v.to_str().ok()).unwrap_or("-");
+                    println!("[tiles] {} {} range={range} -> {} ({} B)",
+                             request.method(), request.uri().path(), res.status().as_u16(), res.body().len());
+                }
                 responder.respond(res);
             });
         })
-        .invoke_handler(tauri::generate_handler![report, search])
+        .invoke_handler(tauri::generate_handler![report, search, dev_stats, dev_flags, bench_done])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

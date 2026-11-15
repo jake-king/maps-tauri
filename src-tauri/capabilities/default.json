@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window may use core APIs and exactly two app commands: report and search.",
+  "description": "The main window may use core APIs and its app commands: report, search, and the F4 overlay's dev_stats, dev_flags and bench_done.",
   "windows": ["main"],
-  "permissions": ["core:default", "allow-report", "allow-search"]
+  "permissions": ["core:default", "allow-report", "allow-search", "allow-dev-stats", "allow-dev-flags", "allow-bench-done"]
 }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-bench-done"
+description = "Enables the bench_done command without any pre-configured scope."
+commands.allow = ["bench_done"]
+
+[[permission]]
+identifier = "deny-bench-done"
+description = "Denies the bench_done command without any pre-configured scope."
+commands.deny = ["bench_done"]

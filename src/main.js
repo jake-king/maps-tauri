@@ -1,11 +1,13 @@
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { Protocol, PMTiles } from "pmtiles";
+import { Protocol, PMTiles, FetchSource } from "pmtiles";
 import { layers, namedFlavor } from "@protomaps/basemaps";
 import { invoke } from "@tauri-apps/api/core";
 import MaplibreGeocoder from "@maplibre/maplibre-gl-geocoder";
 import "@maplibre/maplibre-gl-geocoder/dist/maplibre-gl-geocoder.css";
 import initCoords, { parseCoords, coordFeatures } from "./wasm/coords.js";
+import { TimedSource, createStats, instrument, pollBackend, createOverlay } from "./devtools/overlay.js";
+import { runBench } from "./devtools/bench.js";
 
 const status = document.getElementById("status");
 const say = (msg) => {
@@ -22,7 +24,8 @@ const ARCHIVE = `${TILES}/basemap.pmtiles`;
 
 const protocol = new Protocol();
 maplibregl.addProtocol("pmtiles", protocol.tile);
-const archive = new PMTiles(ARCHIVE);
+const stats = createStats();
+const archive = new PMTiles(new TimedSource(new FetchSource(ARCHIVE), stats));
 protocol.add(archive);
 
 // Glyphs and sprites are Vite public assets, served from the page's own origin. Plain
@@ -53,6 +56,40 @@ map.addControl(new maplibregl.NavigationControl(), "top-right");
 map.addControl(new maplibregl.ScaleControl());
 
 map.on("error", (e) => say(`map error: ${e.error?.message ?? e}`));
+
+// Dev tools: F4 toggles the overlay, F6 runs the pan benchmark (MAPS_BENCH=1 runs it at startup).
+const sample = instrument(map, stats);
+const overlay = createOverlay(stats);
+let benching = false;
+const frame = (now) => {
+  sample(now);
+  overlay.draw();
+  requestAnimationFrame(frame);
+};
+requestAnimationFrame(frame);
+setInterval(() => {
+  if (overlay.isVisible() && !benching) pollBackend(stats);
+}, 1000);
+const bounds = { minLon: header.minLon, minLat: header.minLat, maxLon: header.maxLon, maxLat: header.maxLat };
+const bench = async () => {
+  if (benching) return;
+  benching = true;
+  say("benchmark running…");
+  const result = await runBench(map, stats, bounds);
+  benching = false;
+  invoke("bench_done", { result });
+  const c = result.cold;
+  const w = result.warm;
+  say(`bench: cold ${c.missing_pct}% of frames missing tiles, warm ${w.missing_pct}% · ` +
+      `tile fetch cold avg ${c.fetch.avg} ms`);
+};
+window.addEventListener("keydown", (e) => {
+  if (e.key === "F6") {
+    e.preventDefault();
+    bench();
+  }
+});
+invoke("dev_flags").then((f) => f.bench && map.once("idle", bench));
 map.once("idle", () => {
   const roads = map.querySourceFeatures("protomaps", { sourceLayer: "roads" }).length;
   const places = map.querySourceFeatures("protomaps", { sourceLayer: "places" }).length;

@@ -1,0 +1,83 @@
+{
+ "cold": {
+  "fetch": {
+   "avg": 3.6,
+   "n": 161,
+   "p95": 10,
+   "worst": 14
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 487,
+   "p95": 19,
+   "worst": 43
+  },
+  "load": {
+   "avg": 35.5,
+   "n": 158,
+   "p95": 72,
+   "worst": 90
+  },
+  "memory_mb": 725,
+  "missing_frames": 165,
+  "missing_pct": 33.9,
+  "moving_s": 8.1,
+  "over_budget": 94,
+  "render": {
+   "avg": 5.2,
+   "n": 487,
+   "p95": 10,
+   "worst": 16
+  },
+  "rendered": 487,
+  "serve": {
+   "avg": 0.2,
+   "bytes": 6940769,
+   "n": 149,
+   "worst": 0.5
+  },
+  "settle_ms": 0
+ },
+ "speed_px_s": 4000,
+ "warm": {
+  "fetch": {
+   "avg": 3,
+   "n": 161,
+   "p95": 9,
+   "worst": 16
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 486,
+   "p95": 20,
+   "worst": 42
+  },
+  "load": {
+   "avg": 29.5,
+   "n": 161,
+   "p95": 47,
+   "worst": 57
+  },
+  "memory_mb": 799,
+  "missing_frames": 147,
+  "missing_pct": 30.2,
+  "moving_s": 8.1,
+  "over_budget": 85,
+  "render": {
+   "avg": 5,
+   "n": 486,
+   "p95": 9,
+   "worst": 17
+  },
+  "rendered": 486,
+  "serve": {
+   "avg": 0.2,
+   "bytes": 6940769,
+   "n": 149,
+   "worst": 0.4
+  },
+  "settle_ms": 0
+ },
+ "zoom": 15,
+ "note": "baseline before any tile-loading change; debug build; LA cutout z0-14"
+}

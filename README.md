@@ -30,7 +30,19 @@ Needs `wasm-pack` in `~/.cargo/bin` and `go-pmtiles` in `~/go/bin`.
     npx tauri dev                 # builds the WASM module, then opens the app
     cargo test -p coords          # the parser's test tables, ported from the Python selftest
     npm run diff                  # Rust vs Python over ~190k inputs; exit 0 = no unexplained disagreement
+    npm test                      # the overlay's pure layout and statistics
+    MAPS_BENCH=1 target/debug/maps-tauri   # the pan benchmark against a running `npm run dev`
     tools/search_diff.py          # the whole search path vs serve.py on the real index, feature by feature
+
+## Dev tools
+- **F4**: the profiler overlay. A row per measurement (average, worst over the last 120 frames,
+  a bar against one frame): frame interval, MapLibre's render CPU time, tile fetch round trip
+  through `tiles://`, the Rust handler's own time, and tile request-to-decoded time. Then frames
+  drawn with tiles still missing (the gray boxes), memory per process from `/proc` (WebKitGTK
+  renders in separate processes), and a 120-frame graph with the budget line. Drag it anywhere.
+- **F6**: the pan benchmark, a fixed fast pan at zoom 15 run cold then warm. `MAPS_BENCH=1` runs
+  it at startup, prints one `[bench]` JSON line and exits. Results to compare against live in
+  `bench/`.
 
 ## Known differences from the Python
 The full search path matches `serve.py` exactly: 156 queries, 896 features, identical.
