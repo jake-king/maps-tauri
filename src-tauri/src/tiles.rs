@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 
 use tauri::http::{header, Request, Response, StatusCode};
 
-/// Request path -> file name in the data directory. Nothing else is served.
-const SERVED: &[(&str, &str)] = &[("/basemap.pmtiles", "basemap.pmtiles")];
+/// The one path served; it maps to the archive chosen with MAPS_ARCHIVE. Nothing else is served.
+const SERVED_PATH: &str = "/basemap.pmtiles";
 
 /// Largest single range answered. PMTiles asks for 16 KB headers and directories of a few
 /// hundred KB; a tile is rarely over 1 MB.
@@ -232,17 +232,17 @@ pub fn handle_mesh_timed(archive: &vtile::pmtiles::Archive, z: u8, x: u32, y: u3
 }
 
 /// Answer one request. Runs on a worker thread, never the UI thread.
-pub fn handle(data_dir: &Path, req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
+pub fn handle(data_dir: &Path, archive_name: &str, req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     if req.method() == tauri::http::Method::OPTIONS {
         return respond(StatusCode::NO_CONTENT)
             .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "Range, If-Match")
             .body(Vec::new())
             .expect("static response");
     }
-    let Some((_, name)) = SERVED.iter().find(|(p, _)| *p == req.uri().path()) else {
+    if req.uri().path() != SERVED_PATH {
         return error(StatusCode::NOT_FOUND);
-    };
-    let path: PathBuf = data_dir.join(name);
+    }
+    let path: PathBuf = data_dir.join(archive_name);
     let Ok(mut file) = File::open(&path) else { return error(StatusCode::NOT_FOUND) };
     let Ok(meta) = file.metadata() else { return error(StatusCode::INTERNAL_SERVER_ERROR) };
     let len = meta.len();
@@ -337,7 +337,7 @@ mod tests {
         let dir = std::env::temp_dir();
         for p in ["/../Cargo.toml", "/basemap.pmtiles/..", "/etc/passwd", "/"] {
             let req = Request::builder().uri(format!("tiles://localhost{p}")).body(Vec::new()).unwrap();
-            assert_eq!(handle(&dir, &req).status(), StatusCode::NOT_FOUND, "{p}");
+            assert_eq!(handle(&dir, "basemap.pmtiles", &req).status(), StatusCode::NOT_FOUND, "{p}");
         }
     }
 }

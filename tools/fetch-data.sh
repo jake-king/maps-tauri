@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Fetch the experiment's data from the Datastrike maps service on the LAN (never the internet):
-#   data/basemap.pmtiles   an LA cutout of the planet archive, by HTTP Range (go-pmtiles extract)
+#   data/basemap.pmtiles   a small Santa Monica cutout of the planet archive (the benchmarks' reference)
+#   data/westla.pmtiles    a larger West LA cutout, what the app opens by default
 #   public/assets/         Protomaps glyphs + sprites, from the service's pinned basemaps-assets tarball
 #   data/geonames.db       the production GeoNames FTS5 gazetteer (1.6 GB), only with --gazetteer
 set -euo pipefail
@@ -11,6 +12,8 @@ PMTILES=${PMTILES:-$HOME/go/bin/go-pmtiles}
 mkdir -p data public/assets
 
 [[ -s data/basemap.pmtiles ]] || "$PMTILES" extract "$SRC/tiles/basemap.pmtiles" data/basemap.pmtiles --bbox="$BBOX" --maxzoom=14
+# the larger area the app opens by default: Malibu to downtown, the mountains to LAX (~25 MB)
+[[ -s data/westla.pmtiles ]] || "$PMTILES" extract "$SRC/tiles/basemap.pmtiles" data/westla.pmtiles --bbox=-118.70,33.85,-118.15,34.20 --maxzoom=14
 
 if [[ ! -d public/assets/fonts ]]; then
   tmp=$(mktemp -d -p data); trap 'rm -rf "$tmp"' EXIT

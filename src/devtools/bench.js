@@ -168,6 +168,66 @@ export async function runSoak(map, stats, bounds, passes) {
   return after;
 }
 
+/**
+ * The zoom benchmark: at a fixed center, zoom out 15 -> 10, then in 10 -> 16, each over 1.2 s,
+ * waiting for the map to settle after each leg. With the pixel check it reports, per leg, the
+ * background visible during the motion (avg and worst share of the screen, frames with any) and at
+ * rest after it, and saves the worst frame of the run as logs/snapshot-<name>.png.
+ */
+export async function runZoomBench(map, stats, center, name) {
+  let worst = { f: 0, png: null };
+  stats.onPixels = (f, data, gl) => {
+    if (f <= worst.f) return;
+    const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    const flipped = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) flipped.set(data.subarray((h - 1 - y) * w * 4, (h - y) * w * 4), y * w * 4);
+    worst = { f, w, h, flipped };
+  };
+  const legs = [];
+  map.jumpTo({ center, zoom: 15 });
+  if (!map.areTilesLoaded()) await once(map, "idle");
+  for (const [from, to] of [[15, 10], [10, 16]]) {
+    map.notReady = {};
+    const rec = { area: [], frames: 0, gray: 0, fallback: 0, coarse: 0 };
+    stats.tap = (kind, v) => {
+      if (kind !== "frame" || !v.rendered) return;
+      rec.frames += 1;
+      rec.area.push(v.pixelGray * 100);
+      if (v.pixelGray > 0.001) rec.gray += 1;
+      if (v.missing) rec.fallback += 1;
+      if (map.lastDrawn?.ancestor) rec.coarse += 1; // a coarser stand-in drawn: detail missing
+    };
+    map.easeTo({ center, zoom: to, duration: 1200, easing: (t) => t });
+    await once(map, "moveend");
+    stats.tap = null;
+    if (!map.areTilesLoaded()) await once(map, "idle");
+    // at rest: one more frame, read
+    let rest = 0;
+    stats.tap = (kind, v) => {
+      if (kind === "frame" && v.rendered) rest = Math.max(rest, v.pixelGray * 100);
+    };
+    map.triggerRepaint();
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    stats.tap = null;
+    legs.push({
+      leg: `${from}->${to}`, frames: rec.frames,
+      gray_frames: rec.gray, fallback_frames: rec.fallback, coarse_frames: rec.coarse,
+      not_ready: map.notReady ? { ...map.notReady } : null,
+      area_pct: summary(rec.area), at_rest_pct: r1(rest),
+    });
+  }
+  stats.onPixels = null;
+  let saved = null;
+  if (worst.flipped) {
+    const c = document.createElement("canvas");
+    c.width = worst.w;
+    c.height = worst.h;
+    c.getContext("2d").putImageData(new ImageData(worst.flipped, worst.w, worst.h), 0, 0);
+    saved = await invoke("save_snapshot", { name, dataUrl: c.toDataURL("image/png") });
+  }
+  return { legs, worst_frame_pct: r1(worst.f * 100), worst_frame: saved };
+}
+
 /** Run cold then warm; returns both results. */
 export async function runBench(map, stats, bounds, opts = {}) {
   const outside_pct = opts.pixelCheck ? await pixelSelfTest(map, stats) : null;

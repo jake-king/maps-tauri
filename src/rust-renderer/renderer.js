@@ -8,7 +8,7 @@
 // painter.context.gl, project/unproject, jumpTo/easeTo, areTilesLoaded), so F4, F6 and the pixel
 // check measure both renderers the same way.
 
-import { Camera, lngLatToWorld, worldToLngLat, visibleTiles, ringTiles, tileRect, ancestor, interpolate, parseMeshHeader } from "./geo.js";
+import { Camera, lngLatToWorld, worldToLngLat, visibleTiles, ringTiles, tileRect, ancestor, interpolate, parseMeshHeader, tileZoom } from "./geo.js";
 import palette from "./palette.json";
 
 const EXTENT = 4096;
@@ -213,11 +213,23 @@ export class RustMap {
     this.background = rgba;
     this.triggerRepaint();
   }
-  /** Every tile the current view needs is loaded (or known empty). */
+  /** Every tile the current view needs can be drawn as it will finally look: loaded, or empty
+   *  with its ancestor chain resolved (an ancestor with data loaded, or every ancestor empty).
+   *  Counting an empty tile as done by itself once let a measurement run before the coarse
+   *  stand-in arrived. */
   areTilesLoaded() {
     return this.needed().every(([z, x, y]) => {
       const t = this.tiles.get(`${z}/${x}/${y}`);
-      return t && (t.state === "loaded" || t.state === "empty");
+      if (!t) return false;
+      if (t.state === "loaded") return true;
+      if (t.state !== "empty") return false;
+      for (let az = z - 1; az >= this.minZ; az--) {
+        const [qz, qx, qy] = ancestor(z, x, y, az);
+        const s = this.tiles.get(`${qz}/${qx}/${qy}`)?.state;
+        if (s === "loaded") return true;
+        if (s !== "empty") return false;
+      }
+      return true; // nothing at any zoom: the background is the right answer
     });
   }
   /** Counts and bytes of what the cache holds, for the overlay. */
@@ -392,6 +404,7 @@ export class RustMap {
     const keep = new Set();
     const nowMs = performance.now();
     needed.forEach(([z, x, y], i) => {
+      const before = this.tiles.get(`${z}/${x}/${y}`)?.state ?? "never requested";
       const t = this.request(z, x, y, i);
       keep.add(t.key);
       if (t.neededAt === undefined) {
@@ -400,15 +413,46 @@ export class RustMap {
         if (t.state === "loaded" || t.state === "empty") {
           t.waitReported = true;
           this.onVisibleWait?.(0);
+        } else {
+          // why was it not ready? never requested, still queued (no fetch slot yet), or in flight
+          this.notReady = this.notReady ?? {};
+          this.notReady[before] = (this.notReady[before] ?? 0) + 1;
+          this.notReady.inflightAtTheTime = (this.notReady.inflightAtTheTime ?? 0) + this.inflight;
+          this.notReady.queuedAtTheTime = (this.notReady.queuedAtTheTime ?? 0) + this.queue.length;
         }
       }
       const [pz, px, py] = ancestor(z, x, y, Math.max(this.minZ, z - FALLBACK_DEPTH));
       keep.add(this.request(pz, px, py, 1000 + i).key);
+      // An empty needed tile (outside the cutout at this zoom): walk up its ancestors, past the
+      // empty ones, and request the first not yet tried, so a coarser tile with data is found.
+      // All of them at once, not one round trip per level: low zooms hold only a few tiles.
+      if (t.state === "empty") {
+        for (let az = z - 1; az >= this.minZ; az--) {
+          const [qz, qx, qy] = ancestor(z, x, y, az);
+          const a = this.request(qz, qx, qy, 1500 + i);
+          keep.add(a.key);
+          if (a.state === "loaded") break;
+        }
+      }
     });
     // prefetch: the ring just beyond the view, after everything visible and its fallbacks
     ringTiles(this.cam, this.minZ, this.maxZ, this.prefetchRing).forEach(([z, x, y], i) => {
       keep.add(this.request(z, x, y, 2000 + i).key);
     });
+    // prefetch along a zoom: while the zoom is moving, the view's tiles one tile-zoom ahead in the
+    // direction it is moving, so the next level is ready when the zoom crosses into it
+    const dz = this.cam.zoom - (this.lastZoom ?? this.cam.zoom);
+    this.lastZoom = this.cam.zoom;
+    if (this.prefetchRing && dz !== 0) {
+      const tz = tileZoom(this.cam.zoom, this.minZ, this.maxZ);
+      const nz = Math.max(this.minZ, Math.min(this.maxZ, tz + Math.sign(dz)));
+      if (nz !== tz) {
+        // at exactly zoom nz the view covers the most ground it will at that tile zoom (entering it
+        // zooming in, leaving it zooming out), so this set covers the whole time spent there
+        const ahead = new Camera(this.cam.cx, this.cam.cy, nz, this.cam.w, this.cam.h);
+        visibleTiles(ahead, this.minZ, this.maxZ).forEach(([z, x, y], i) => keep.add(this.request(z, x, y, 1800 + i).key));
+      }
+    }
     this.pump();
     this.evict(keep);
 
@@ -420,11 +464,27 @@ export class RustMap {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.enable(gl.SCISSOR_TEST);
-    const drawn = { self: 0, ancestor: 0, none: 0 };
+    const drawn = { self: 0, ancestor: 0, children: 0, none: 0 };
     if (this.tilesVisible) {
       for (const [z, x, y] of needed) {
         let how = "none";
         const rect = tileRect(this.cam, z, x, y);
+        const own = this.tiles.get(`${z}/${x}/${y}`);
+        // Zooming out, the more detailed tiles already loaded beat a coarse ancestor: if all four
+        // children of a tile still loading are loaded (or known empty), draw them, each clipped to
+        // its own quarter.
+        if (own?.state !== "loaded" && own?.state !== "empty" && z + 1 <= this.maxZ) {
+          const kids = [[0, 0], [1, 0], [0, 1], [1, 1]].map(([dx, dy]) => this.tiles.get(`${z + 1}/${2 * x + dx}/${2 * y + dy}`));
+          if (kids.every((k) => k?.state === "loaded" || k?.state === "empty") && kids.some((k) => k?.state === "loaded")) {
+            for (const k of kids) {
+              if (k.state !== "loaded") continue;
+              k.lastUsed = this.frame;
+              this.drawTile(k, tileRect(this.cam, k.z, k.x, k.y));
+            }
+            drawn.children += 1;
+            continue;
+          }
+        }
         for (let pz = z; pz >= (this.fallback ? Math.max(this.minZ, z - 10) : z); pz--) {
           const [az, ax, ay] = ancestor(z, x, y, pz);
           const t = this.tiles.get(`${az}/${ax}/${ay}`);
@@ -434,16 +494,18 @@ export class RustMap {
             how = pz === z ? "self" : "ancestor";
             break;
           }
-          if (t?.state === "empty" && pz === z) {
-            how = "self"; // no data here: background is correct
-            break;
-          }
+          // An empty tile (the cutout has no tile here at this zoom) is not the end: a coarser
+          // ancestor usually has data for the area, since the archive keeps whole low-zoom tiles.
+          // Keep walking up; only if no ancestor has data is the background correct.
         }
+        // An empty tile (no data at this zoom) drawn by its ancestor, or not at all, is in its final
+        // state: nothing better will load. Only a tile still loading counts as a stand-in.
+        if (own?.state === "empty") how = "self";
         drawn[how] += 1;
       }
     }
-    /** How the last frame's needed tiles were drawn: by themselves, by a fallback ancestor, or not
-     *  at all. A frame with any ancestor or none had tiles still loading. */
+    /** How the last frame's needed tiles were drawn: by themselves, by their four loaded children,
+     *  by a fallback ancestor, or not at all. Anything but `self` means tiles still loading. */
     this.lastDrawn = drawn;
     gl.disable(gl.SCISSOR_TEST);
     gl.bindVertexArray(null);

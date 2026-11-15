@@ -5,7 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { RustMap } from "./renderer.js";
 import { createStats, instrument, pollBackend, createOverlay } from "../devtools/overlay.js";
-import { runBench, runSoak, setBenchSpeed } from "../devtools/bench.js";
+import { runBench, runSoak, setBenchSpeed, runZoomBench } from "../devtools/bench.js";
 import { GpuLedger, installGpuLedger } from "../devtools/gpumem.js";
 import { blockRows } from "../devtools/blocks.js";
 import { snapshot } from "../devtools/snapshot.js";
@@ -106,8 +106,16 @@ window.addEventListener("keydown", (e) => {
 
 map.once("idle", async () => {
   say(`native renderer · ${map.cacheStats().loaded} tiles · z${map.getZoom().toFixed(1)}`);
+  if (flags.zoomBench) {
+    benching = true;
+    const result = await runZoomBench(map, stats, [-118.4912, 34.0105], "zoombench-rust");
+    benching = false;
+    return invoke("bench_done", { result: { zoom_bench: true, renderer: "rust", ...result } });
+  }
   if (flags.snapshot) {
-    const path = await snapshot(map, flags.snapshot);
+    // MAPS_SNAPSHOT_ZOOM picks the zoom; the center stays the pier
+    const view = flags.snapshotZoom ? { center: [-118.4912, 34.0105], zoom: flags.snapshotZoom } : undefined;
+    const path = await snapshot(map, flags.snapshot, view);
     return invoke("bench_done", { result: { snapshot: path, renderer: "rust" } });
   }
   if (flags.memprobe === "idle") return memprobe("idle", map);

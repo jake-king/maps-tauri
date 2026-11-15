@@ -8,7 +8,7 @@ import MaplibreGeocoder from "@maplibre/maplibre-gl-geocoder";
 import "@maplibre/maplibre-gl-geocoder/dist/maplibre-gl-geocoder.css";
 import initCoords, { parseCoords, coordFeatures } from "./wasm/coords.js";
 import { TimedSource, createStats, instrument, pollBackend, createOverlay } from "./devtools/overlay.js";
-import { runBench, runSoak } from "./devtools/bench.js";
+import { runBench, runSoak, runZoomBench } from "./devtools/bench.js";
 import { retainCachedParents } from "./maplibre-patch.js";
 import { GpuLedger, installGpuLedger } from "./devtools/gpumem.js";
 import { snapshot } from "./devtools/snapshot.js";
@@ -207,8 +207,16 @@ window.addEventListener("keydown", (e) => {
   }
 });
 map.once("idle", async () => {
+  if (flags.zoomBench) {
+    benching = true;
+    const result = await runZoomBench(map, stats, [-118.4912, 34.0105], "zoombench-maplibre");
+    benching = false;
+    return invoke("bench_done", { result: { zoom_bench: true, renderer: "maplibre", ...result } });
+  }
   if (flags.snapshot) {
-    const path = await snapshot(map, flags.snapshot);
+    // MAPS_SNAPSHOT_ZOOM picks the zoom; the center stays the pier
+    const view = flags.snapshotZoom ? { center: [-118.4912, 34.0105], zoom: flags.snapshotZoom } : undefined;
+    const path = await snapshot(map, flags.snapshot, view);
     return invoke("bench_done", { result: { snapshot: path, renderer: "maplibre" } });
   }
   if (flags.memprobe === "idle") return memprobe("idle");

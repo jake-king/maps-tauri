@@ -109,7 +109,11 @@ export function instrument(map, stats, opts = {}) {
   map.on("render", () => {
     if (!active()) return;
     // read in the render event, before the browser composites the frame, so the buffer is intact
-    if (opts.pixelCheck) framePix = Math.max(framePix, magentaFraction(map.painter.context.gl, pixbuf));
+    if (opts.pixelCheck) {
+      const f = magentaFraction(map.painter.context.gl, pixbuf);
+      framePix = Math.max(framePix, f);
+      stats.onPixels?.(f, pixbuf.data, map.painter.context.gl);
+    }
     if (map.areTilesLoaded()) return;
     const c = measureCoverage(map);
     if (c && (!frameCov || c.uncovered > frameCov.uncovered)) frameCov = c;
@@ -141,8 +145,8 @@ export function instrument(map, stats, opts = {}) {
     }
     const interval = now - last;
     // The native renderer says how it drew each needed tile; MapLibre is asked areTilesLoaded().
-    const missing = rendered && (map.lastDrawn ? map.lastDrawn.ancestor + map.lastDrawn.none > 0 : !map.areTilesLoaded());
-    const cov = rendered ? (map.lastDrawn ? { uncovered: map.lastDrawn.none, needed: map.lastDrawn.self + map.lastDrawn.ancestor + map.lastDrawn.none } : frameCov) : null;
+    const missing = rendered && (map.lastDrawn ? map.lastDrawn.ancestor + (map.lastDrawn.children ?? 0) + map.lastDrawn.none > 0 : !map.areTilesLoaded());
+    const cov = rendered ? (map.lastDrawn ? { uncovered: map.lastDrawn.none, needed: map.lastDrawn.self + map.lastDrawn.ancestor + (map.lastDrawn.children ?? 0) + map.lastDrawn.none } : frameCov) : null;
     frameCov = null;
     const pixelGray = rendered ? framePix : 0;
     framePix = 0;

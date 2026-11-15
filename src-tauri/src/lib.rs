@@ -79,6 +79,9 @@ fn dev_flags() -> serde_json::Value {
         "benchSpeed": num("MAPS_BENCH_SPEED"),
         // MAPS_SNAPSHOT=<name>: settle at a fixed view, save the frame as logs/snapshot-<name>.png, exit
         "snapshot": std::env::var("MAPS_SNAPSHOT").ok(),
+        "snapshotZoom": std::env::var("MAPS_SNAPSHOT_ZOOM").ok().and_then(|v| v.parse::<f64>().ok()),
+        // MAPS_ZOOM_BENCH=1 (with MAPS_PIXEL_CHECK=1): the zoom out/in benchmark, worst frame saved
+        "zoomBench": std::env::var("MAPS_ZOOM_BENCH").is_ok_and(|v| v == "1"),
         // MAPS_EMPTY_STYLE=1: a background layer only, no source, tiles or fonts (a memory control)
         "emptyStyle": std::env::var("MAPS_EMPTY_STYLE").is_ok_and(|v| v == "1"),
         // on unless MAPS_CACHED_PARENTS=0 (bench/2026-11-15-px-parents*.json)
@@ -100,7 +103,7 @@ fn bench_done(result: serde_json::Value, app: tauri::AppHandle) {
 /// renderer needs to place its camera, without loading a JavaScript tile library.
 #[tauri::command]
 fn archive_info() -> Result<serde_json::Value, String> {
-    let a = vtile::pmtiles::Archive::open(&data_dir().join("basemap.pmtiles")).map_err(|e| e.to_string())?;
+    let a = vtile::pmtiles::Archive::open(&data_dir().join(archive_name())).map_err(|e| e.to_string())?;
     let h = &a.header;
     Ok(serde_json::json!({
         "minZoom": h.min_zoom, "maxZoom": h.max_zoom,
@@ -152,6 +155,19 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// The basemap archive's file name in the data directory: `MAPS_ARCHIVE` (letters, digits, `-`, `_`,
+/// `.` only); else `westla.pmtiles` (Malibu to downtown, for using the app) when present; else
+/// `basemap.pmtiles`, the small Santa Monica cutout. The benchmark scripts pin `basemap.pmtiles`
+/// so their numbers stay comparable over time.
+fn archive_name() -> String {
+    std::env::var("MAPS_ARCHIVE")
+        .ok()
+        .filter(|n| !n.is_empty() && !n.starts_with('.') && n.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)))
+        .unwrap_or_else(|| {
+            if data_dir().join("westla.pmtiles").exists() { "westla.pmtiles" } else { "basemap.pmtiles" }.into()
+        })
+}
+
 /// Where the archive and the gazetteer live: `MAPS_DATA`, else the repo's `data/`.
 fn data_dir() -> PathBuf {
     std::env::var_os("MAPS_DATA")
@@ -170,7 +186,8 @@ pub fn run() {
     };
     // The native renderer reads the same archive through vtile; opened once, read with pread from
     // any thread.
-    let archive = Arc::new(vtile::pmtiles::Archive::open(&data.join("basemap.pmtiles")).ok());
+    let archive_file = archive_name();
+    let archive = Arc::new(vtile::pmtiles::Archive::open(&data.join(&archive_file)).ok());
     let tile_times = Arc::new(devstats::TileTimes::default());
     let handler_times = tile_times.clone();
     let stage_times = Arc::new(devstats::StageTimes::default());
@@ -198,6 +215,7 @@ pub fn run() {
         // to a blocking-pool thread and answers through the responder when the read is done.
         .register_asynchronous_uri_scheme_protocol("tiles", move |_ctx, request, responder| {
             let data = data.clone();
+            let archive_file = archive_file.clone();
             let times = handler_times.clone();
             let archive = archive.clone();
             let stages = handler_stages.clone();
@@ -217,7 +235,7 @@ pub fn run() {
                         stages.record(wait, &st, inflight);
                         res
                     }
-                    _ => tiles::handle(&data, &request),
+                    _ => tiles::handle(&data, &archive_file, &request),
                 };
                 stages.inflight.fetch_sub(1, Ordering::Relaxed);
                 times.record(t0.elapsed(), res.body().len());

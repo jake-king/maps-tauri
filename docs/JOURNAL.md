@@ -541,3 +541,54 @@ The question was whether a tile's request-to-drawable time could go under 1 ms. 
 the webview's IPC alone is several milliseconds, and a resting CPU makes the mesh slower still. But
 the time a user waits for a tile is now 0 ms in every run, because the request happens before the
 tile is visible.
+
+## Zooming: the benchmark that was missing
+
+Using the native renderer by hand showed what no benchmark had: zooming out left large gray areas,
+and zooming in seemed to drop parts of the map as it redrew. Every benchmark so far had panned at a
+fixed zoom, so nothing measured zooming. That was a gap in the tests, not just in the renderer.
+
+`MAPS_ZOOM_BENCH=1` (`tools/zoombench.sh`) zooms out 15 -> 10 and in 10 -> 16 at the pier, 1.2 s
+each, with the pixel check, and saves the worst frame as a PNG. First run, small cutout:
+
+| | native | MapLibre |
+|---|---|---|
+| zoom out: frames with background / worst frame | 17 / 14% | 17 / 28% |
+| zoom in: frames with background / worst frame | 13 / 13% | 5 / 11% |
+| background at rest at zoom 10 | 14.7% | 0% |
+
+The saved worst frames showed the cause: magenta bands at the sides, where the cutout's tiles end.
+The cutout is about 0.2 by 0.15 degrees, so two scroll ticks out the window is mostly outside it.
+Past zoom 10 the archive has no tiles there, and the native renderer drew nothing for an empty tile.
+
+Fixes, each measured:
+1. **An empty tile falls back to a coarser ancestor** (the archive keeps whole low-zoom tiles, so
+   one almost always has data), and the whole ancestor chain of an empty tile is requested at once
+   rather than one round trip per level.
+2. **`areTilesLoaded()` was wrong for empty tiles.** It counted an empty tile as done by itself, so
+   the benchmark measured "at rest" before the coarse stand-in had arrived. An empty tile now counts
+   as done only once an ancestor with data is loaded (or none exists).
+3. **Prefetch along the zoom:** while the zoom moves, the view's tiles one tile-zoom ahead in that
+   direction are requested at low priority.
+4. **Child tiles as stand-ins when zooming out**, if all four are loaded. It turned out not to
+   matter: the tiles missing when zooming out are at the edges, outside anything loaded before.
+5. **A bigger area to use the app in:** `data/westla.pmtiles`, Malibu to downtown and the mountains
+   to LAX (25 MB, 772 tiles), extracted over the LAN. The app opens it by default; the benchmark
+   scripts pin the small cutout so results stay comparable (`MAPS_ARCHIVE`).
+
+After the fixes, small cutout (native): zoom out, 1 frame with 0.7% background, 0 frames drawing a
+stand-in for a loading tile; zoom in, none. With prefetch off: 10 stand-in frames zooming out, 21
+tiles never requested before they were visible. On the West LA archive: no background and no
+stand-ins in any frame either way. MapLibre on the same zoom: up to 30% of a frame background.
+
+Problems on the way:
+- **My stand-in count measured the wrong thing twice.** After the empty-tile fix, an empty tile
+  drawn by its ancestor (its final look; nothing better will load) was still labelled "ancestor",
+  the same as a tile still loading, so the count measured the cutout's edges. It showed 14-17
+  stand-in frames with prefetch on or off. Recording why each tile was not ready showed none were,
+  which was the contradiction that exposed it. Earlier, on that bad count, I concluded the zoom
+  prefetch "did not help" and changed its coverage on a theory; that change was harmless but
+  unmotivated.
+- **A multi-edit script half-applied.** The asserting edit helper refused an edit whose target text
+  had changed, as intended, but the edits before it in the same script were already written, so
+  one build had a subset of the changes. Measurements from that build are not used.
