@@ -12,3 +12,10 @@ for path in sys.argv[1:]:
     total = sum(m["pss_kb"] for m in d["memory"]) // 1024
     rows = ", ".join(f"{m['name']} {m['pss_kb'] // 1024}" for m in d["memory"])
     print(f"{d['probe']:6} total {total:4} MB | {rows}")
+    for m in d["memory"]:
+        k = m.get("kinds")
+        if k:
+            print(f"         {m['name']:<16} anon {k['anon_kb'] // 1024:4}  gpu-mapped {k['gpu_kb'] // 1024:4}"
+                  f"  shared-mem {k['shmem_kb'] // 1024:4}  files {k['file_kb'] // 1024:4}  (MB)")
+    for b in d.get("blocks", []):
+        print(f"         {b['label']:<26} {b['bytes'] / 1048576:7.1f} MB  {b['note']}")

@@ -60,8 +60,10 @@ fn dev_flags() -> serde_json::Value {
         "warmZoom": num("MAPS_WARM_ZOOM"),
         "pixelCheck": std::env::var("MAPS_PIXEL_CHECK").is_ok_and(|v| v == "1"),
         "fadeMs": num("MAPS_FADE_MS"),
-        // MAPS_MEMPROBE=blank|idle: report per-process memory at that stage, then exit
+        // MAPS_MEMPROBE=blank|idle|pan: report per-process memory at that stage, then exit
         "memprobe": std::env::var("MAPS_MEMPROBE").ok(),
+        // MAPS_EMPTY_STYLE=1: a background layer only, no source, tiles or fonts (a memory control)
+        "emptyStyle": std::env::var("MAPS_EMPTY_STYLE").is_ok_and(|v| v == "1"),
         // on unless MAPS_CACHED_PARENTS=0 (bench/2026-11-15-px-parents*.json)
         "cachedParents": !std::env::var("MAPS_CACHED_PARENTS").is_ok_and(|v| v == "0"),
     })

@@ -1,0 +1,174 @@
+{
+ "blocks": [
+  {
+   "bytes": 9454264,
+   "label": "GPU buffers",
+   "note": "3200"
+  },
+  {
+   "bytes": 1753171,
+   "label": "GPU textures",
+   "note": "137"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU renderbuffers",
+   "note": "0"
+  },
+  {
+   "bytes": 5001722,
+   "label": "tiles, CPU arrays",
+   "note": "8+60"
+  },
+  {
+   "bytes": 2948652,
+   "label": "  feature index",
+   "note": ""
+  },
+  {
+   "bytes": 1730894,
+   "label": "  buckets (CPU)",
+   "note": ""
+  },
+  {
+   "bytes": 315096,
+   "label": "  icon atlas (CPU)",
+   "note": ""
+  },
+  {
+   "bytes": 7080,
+   "label": "  collision boxes",
+   "note": ""
+  }
+ ],
+ "cache_zoom_levels": 5,
+ "cached_parents": "applied",
+ "cold": {
+  "cache_max": 60,
+  "dropped": 4,
+  "fetch": {
+   "avg": 2.6,
+   "n": 161,
+   "p95": 6,
+   "worst": 11
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 487,
+   "p95": 19,
+   "worst": 45
+  },
+  "gray_frames": 37,
+  "gray_pct": 7.6,
+  "jitter_only": 77,
+  "load": {
+   "avg": 35.9,
+   "n": 158,
+   "p95": 53,
+   "worst": 86
+  },
+  "memory_mb": 657,
+  "missing_frames": 174,
+  "missing_pct": 35.7,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 487,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 37
+  },
+  "render": {
+   "avg": 4.9,
+   "n": 487,
+   "p95": 8,
+   "worst": 17
+  },
+  "rendered": 487,
+  "serve": {
+   "avg": 0.1,
+   "bytes": 7108961,
+   "n": 161,
+   "worst": 0.2
+  },
+  "settle_ms": 0,
+  "tiles_loaded": 158,
+  "unique_tiles": 161
+ },
+ "cores": 8,
+ "fade_ms": 300,
+ "labels": true,
+ "pixel_check": false,
+ "pixel_selftest_outside_pct": null,
+ "prefetch_zoom_delta": 4,
+ "speed_px_s": 4000,
+ "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+ "warm": {
+  "cache_max": 60,
+  "dropped": 1,
+  "fetch": {
+   "avg": 2.4,
+   "n": 161,
+   "p95": 7,
+   "worst": 12
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 487,
+   "p95": 18,
+   "worst": 41
+  },
+  "gray_frames": 65,
+  "gray_pct": 13.3,
+  "jitter_only": 82,
+  "load": {
+   "avg": 30,
+   "n": 158,
+   "p95": 43,
+   "worst": 51
+  },
+  "memory_mb": 657,
+  "missing_frames": 150,
+  "missing_pct": 30.8,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 487,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 65
+  },
+  "render": {
+   "avg": 5,
+   "n": 487,
+   "p95": 9,
+   "worst": 14
+  },
+  "rendered": 487,
+  "serve": {
+   "avg": 0.1,
+   "bytes": 7108961,
+   "n": 161,
+   "worst": 0.2
+  },
+  "settle_ms": 18,
+  "tiles_loaded": 158,
+  "unique_tiles": 161
+ },
+ "warm_zoom": 0,
+ "workers": 1,
+ "zoom": 15,
+ "label": "blocks-c5 (release)"
+}

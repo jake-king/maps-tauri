@@ -49,6 +49,7 @@ export function createStats() {
     load: new Ring(FRAMES),         // tile request -> decoded, ms
     serve: { avg: 0, worst: 0, requests: 0, bytes: 0 },
     memory: [],
+    blocks: [],                     // bytes per block: GPU ledger + tile CPU arrays (blocks.js)
     fetchInFlight: 0,
     tilesPending: new Map(),        // tile key -> start time
     renderedThisSecond: 0,
@@ -204,7 +205,7 @@ export function createOverlay(stats) {
   canvas.style.display = visible ? "block" : "none";
 
   const viewport = () => ({ w: window.innerWidth, h: window.innerHeight });
-  const rowsCount = () => 5 + 2 + Math.max(1, stats.memory.length) + 1;
+  const rowsCount = () => 5 + 2 + Math.max(1, stats.memory.length) + 1 + (stats.blocks.length ? stats.blocks.length + 1 : 0);
   const size = () => ({ w: W, h: 8 + rowsCount() * ROW + GRAPH_H + 14 });
   const place = () => {
     canvas.style.left = `${pos.x}px`;
@@ -278,7 +279,16 @@ export function createOverlay(stats) {
       y += ROW;
     }
     text(`${"total".padEnd(26)} ${formatBytes(total * 1024).padStart(9)}`, 8, "#ebcb8b");
-    y += ROW + 4;
+    y += ROW;
+    if (stats.blocks.length) {
+      text("bytes per block (estimate)", 8, "#81a1c1");
+      y += ROW;
+      for (const b of stats.blocks) {
+        text(`${b.label.padEnd(26)} ${formatBytes(b.bytes).padStart(9)} ${b.note}`, 8);
+        y += ROW;
+      }
+    }
+    y += 4;
 
     // the graph: frame interval per column, MapLibre's render share darker, a red tick under
     // frames that were drawn with tiles missing, and the budget line

@@ -8,8 +8,10 @@ import MaplibreGeocoder from "@maplibre/maplibre-gl-geocoder";
 import "@maplibre/maplibre-gl-geocoder/dist/maplibre-gl-geocoder.css";
 import initCoords, { parseCoords, coordFeatures } from "./wasm/coords.js";
 import { TimedSource, createStats, instrument, pollBackend, createOverlay } from "./devtools/overlay.js";
-import { runBench } from "./devtools/bench.js";
+import { runBench, runSoak } from "./devtools/bench.js";
 import { retainCachedParents } from "./maplibre-patch.js";
+import { GpuLedger, installGpuLedger } from "./devtools/gpumem.js";
+import { blockRows } from "./devtools/blocks.js";
 
 const status = document.getElementById("status");
 const say = (msg) => {
@@ -44,7 +46,8 @@ const flags = await invoke("dev_flags");
 const memprobe = async (stage) => {
   await new Promise((r) => setTimeout(r, 3000));
   const s = await invoke("dev_stats");
-  await invoke("bench_done", { result: { probe: stage, memory: s.memory } });
+  const blocks = typeof map === "undefined" ? [] : blockRows(map, gpu);
+  await invoke("bench_done", { result: { probe: stage, memory: s.memory, blocks } });
 };
 if (flags.memprobe === "blank") {
   say("memory probe: blank");
@@ -74,6 +77,18 @@ const style = {
 // "gray box") can be counted exactly from the drawn pixels. Ground truth for the tile-based
 // measure; it stalls the GPU every frame, so a pixel-check run's timings mean nothing.
 if (flags.pixelCheck) style.layers[0].paint = { "background-color": "#ff00ff" };
+// MAPS_EMPTY_STYLE=1, a memory control: the map, its WebGL context and its worker, with nothing to
+// draw but a background. Blank -> empty style is the engine; empty style -> full style is the data.
+if (flags.emptyStyle) {
+  style.sources = {};
+  style.layers = [style.layers[0]];
+  delete style.glyphs;
+  delete style.sprite;
+}
+
+// The GPU ledger counts every WebGL allocation from here on, so it must be installed before the
+// map creates its context. Recording is a Map write per allocation call, nothing per frame.
+const gpu = installGpuLedger(WebGL2RenderingContext.prototype, new GpuLedger());
 
 const header = await archive.getHeader();
 // MapLibre keeps tiles that leave the view in a cache of about (tiles across + 1) x (tiles down + 1)
@@ -129,7 +144,9 @@ const frame = (now) => {
 };
 requestAnimationFrame(frame);
 setInterval(() => {
-  if (overlay.isVisible() && !benching) pollBackend(stats);
+  if (!overlay.isVisible() || benching) return;
+  pollBackend(stats);
+  stats.blocks = blockRows(map, gpu); // the tile walk runs here, once a second, never per frame
 }, 1000);
 // Cache warm-up: before anyone pans, visit the whole region once at a low zoom so its tiles sit in
 // the out-of-view cache. Panning into a new area at high zoom then finds a loaded PARENT to draw,
@@ -172,6 +189,7 @@ const bench = async () => {
   result.pixel_check = !!flags.pixelCheck;
   result.fade_ms = flags.fadeMs ?? 300;
   result.cached_parents = patchState;
+  result.blocks = blockRows(map, gpu);
   result.cores = navigator.hardwareConcurrency;
   result.user_agent = navigator.userAgent;
   benching = false;
@@ -189,6 +207,25 @@ window.addEventListener("keydown", (e) => {
 });
 map.once("idle", async () => {
   if (flags.memprobe === "idle") return memprobe("idle");
+  if (flags.memprobe === "soak") {
+    benching = true;
+    const series = await runSoak(map, stats, bounds, 10);
+    benching = false;
+    const s = await invoke("dev_stats");
+    return invoke("bench_done", { result: { probe: "soak", series_mb: series, memory: s.memory, blocks: blockRows(map, gpu) } });
+  }
+  if (flags.memprobe === "pan") {
+    // the pan benchmark's two passes, then the usual 3 s settle, then 20 s more: does memory the
+    // pan added come back on its own (garbage not yet collected) or stay (held)?
+    benching = true;
+    await runBench(map, stats, bounds);
+    benching = false;
+    const s = await invoke("dev_stats");
+    const right_after = s.memory.reduce((a, m) => a + m.pss_kb, 0);
+    await new Promise((r) => setTimeout(r, 20000));
+    await invoke("report", { msg: `pan probe: ${Math.round(right_after / 1024)} MB right after the pan` });
+    return memprobe("pan");
+  }
   const t0 = performance.now();
   const views = await warmUp(bounds, WARM_ZOOM);
   if (views) invoke("report", { msg: `warm-up: ${views} views at z${WARM_ZOOM} in ${Math.round(performance.now() - t0)} ms` });

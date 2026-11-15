@@ -304,3 +304,47 @@ Problem:
   shell is zsh, which does not split an unquoted variable into words, so `MAPS_WORKERS` got
   `"1 20"` (unparseable, so the default) and every run measured the defaults. The giveaway was
   `cache max 240` in runs meant to have a smaller cache. Rerun with explicit values.
+
+## Bytes per block
+
+guile-2d's profiler counts bytes per block, so F4 now does too, at three levels, refreshed once a
+second while it is open and never per frame:
+
+- **The GPU ledger** (`src/devtools/gpumem.js`) wraps WebGL's allocation calls (`bufferData`,
+  `texImage2D`, `texStorage2D`, `renderbufferStorage`, their deletes, and `linkProgram`) and keeps
+  live bytes per buffer, texture and renderbuffer. Counting at the call is the only exact place:
+  MapLibre frees each buffer's CPU copy after upload, and an index buffer does not keep its size.
+- **Tile CPU arrays** (`src/devtools/tilemem.js`) walks each loaded tile, in view and cached, and
+  adds up the ArrayBuffers it reaches by the tile field that holds them, each buffer counted once.
+- **Process memory by mapping kind** (backend, `/proc/<pid>/smaps`): anonymous (JavaScript heaps,
+  malloc, JIT), GPU-mapped, shared memory, and files.
+
+Tests cover both meters' bookkeeping (12 tests; 8 planted bugs, all caught). The live control:
+GPU and tile bytes must follow the cache size, and they do. After the pan with a 240-tile cache,
+26 MB of GPU buffers and 13 MB of tile arrays (167 tiles); with a 60-tile cache, 9 MB and 4.8 MB
+(68 tiles).
+
+What the blocks show:
+
+| | web process, anonymous | map data the meters see |
+|---|---|---|
+| blank window | 58 MB | none |
+| map with an empty style (map, WebGL context, one worker) | 104 MB | none |
+| full map at rest | 226-231 MB | ~3 MB GPU, ~1 MB tile arrays, 12 shader programs |
+| right after the pan | 437 MB | ~30 MB GPU, ~13 MB tile arrays |
+
+So at rest about 120 MB comes from the style itself (71 layers, fonts, sprites, label layout),
+not from tile data and not from shaders (12 programs). During a pan the web process grows by
+about 210 MB, of which the map holds about 45 MB.
+
+**The rest is a high-water mark, not a leak.** Memory did not come down 20 s after the pan
+(710 -> 702 MB), and earlier sweeps showed the total barely depends on cache size, so it is not
+data being held either. A soak run settles it: ten passes in a row with a cache too small to keep
+the path, so every pass decodes all ~160 tiles again (about 1,600 decodes in all). Memory went
+from 507 MB at rest to 685 MB after the first pass, then stayed between 670 and 695 MB for the
+other nine, with no upward trend. Decoding a burst of tiles takes about 180 MB of working memory
+that the JavaScript engine and malloc keep for reuse. For a tool left open all day, that it levels
+off matters more than its size.
+
+What would lower it: less decoding work per tile (fewer style layers; labels alone are about
+80 MB at rest), or a renderer that does not decode in JavaScript at all. Neither is a setting.

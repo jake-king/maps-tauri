@@ -128,6 +128,28 @@ async function pixelSelfTest(map, stats) {
   return r1(worst * 100);
 }
 
+/**
+ * Soak: the pan path `passes` times in a row, recording total memory (PSS, MB) after each. With a
+ * cache too small to hold the path, every pass decodes every tile again. A high-water mark levels
+ * off after the first pass or two; a leak keeps climbing.
+ */
+export async function runSoak(map, stats, bounds, passes) {
+  const path = lawnmower(bounds);
+  const mb = async () => {
+    const s = await invoke("dev_stats");
+    return Math.round(s.memory.reduce((a, m) => a + m.pss_kb, 0) / 1024);
+  };
+  const after = [await mb()];
+  for (let i = 0; i < passes; i++) {
+    map.jumpTo({ center: path[0], zoom: ZOOM });
+    if (!map.areTilesLoaded()) await once(map, "idle");
+    const r = await pass(map, stats, path);
+    after.push(await mb());
+    await invoke("report", { msg: `soak pass ${i + 1}/${passes}: ${after.at(-1)} MB, ${r.load.n} tiles decoded` });
+  }
+  return after;
+}
+
 /** Run cold then warm; returns both results. */
 export async function runBench(map, stats, bounds, opts = {}) {
   const outside_pct = opts.pixelCheck ? await pixelSelfTest(map, stats) : null;

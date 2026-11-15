@@ -41,6 +41,50 @@ impl TileTimes {
     }
 }
 
+/// A process's PSS split by what its mappings are: the OS-level "bytes per block".
+#[derive(Serialize, Default, Debug, PartialEq)]
+pub struct MappingKinds {
+    /// anonymous memory: JavaScript heaps, malloc, JIT code
+    pub anon_kb: u64,
+    /// GPU device mappings (/dev/dri, /dev/nvidia*): driver memory visible to the CPU
+    pub gpu_kb: u64,
+    /// shared memory (memfd, /dev/shm, SYSV): WebKit's IPC and graphics buffers
+    pub shmem_kb: u64,
+    /// shared libraries and other files mapped from disk
+    pub file_kb: u64,
+}
+
+/// Sum each mapping's `Pss:` into a kind, from the text of `/proc/<pid>/smaps`.
+pub fn classify_smaps(text: &str) -> MappingKinds {
+    let mut k = MappingKinds::default();
+    let mut kind = 0u8; // 0 anon, 1 gpu, 2 shmem, 3 file
+    for line in text.lines() {
+        let first = line.split_whitespace().next().unwrap_or("");
+        // a mapping header starts with an address range like 7f00-7f10
+        if first.contains('-') && first.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+            let path = line.split_whitespace().nth(5).unwrap_or("");
+            kind = if path.is_empty() || path.starts_with('[') {
+                0
+            } else if path.starts_with("/dev/dri") || path.starts_with("/dev/nvidia") {
+                1
+            } else if path.starts_with("/memfd:") || path.starts_with("/dev/shm") || path.starts_with("/SYSV") {
+                2
+            } else {
+                3
+            };
+        } else if let Some(rest) = line.strip_prefix("Pss:") {
+            let kb: u64 = rest.split_whitespace().next().and_then(|v| v.parse().ok()).unwrap_or(0);
+            match kind {
+                0 => k.anon_kb += kb,
+                1 => k.gpu_kb += kb,
+                2 => k.shmem_kb += kb,
+                _ => k.file_kb += kb,
+            }
+        }
+    }
+    k
+}
+
 #[derive(Serialize)]
 pub struct ProcessMem {
     pub pid: u32,
@@ -48,6 +92,8 @@ pub struct ProcessMem {
     /// Proportional set size: shared pages split between the processes that map them, so the
     /// rows add up to a meaningful total. Falls back to RSS where smaps_rollup is unreadable.
     pub pss_kb: u64,
+    /// The same PSS by mapping kind, when /proc/<pid>/smaps is readable.
+    pub kinds: Option<MappingKinds>,
 }
 
 /// `(pid, ppid, name)` for every process, from `/proc/<pid>/stat`.
@@ -115,7 +161,8 @@ pub fn process_tree_memory() -> Vec<ProcessMem> {
                         .ok()
                         .and_then(|t| kb_field(&t, "VmRSS:"))
                 })?;
-            Some(ProcessMem { pid, name: names.get(&pid).unwrap_or(&"?").to_string(), pss_kb: pss })
+            let kinds = std::fs::read_to_string(format!("/proc/{pid}/smaps")).ok().map(|t| classify_smaps(&t));
+            Some(ProcessMem { pid, name: names.get(&pid).unwrap_or(&"?").to_string(), pss_kb: pss, kinds })
         })
         .collect()
 }
@@ -145,6 +192,26 @@ mod tests {
         assert_eq!(kb_field(t, "Pss:"), Some(1024));
         assert_eq!(kb_field(t, "Rss:"), Some(2048));
         assert_eq!(kb_field(t, "Swap:"), None);
+    }
+
+    #[test]
+    fn smaps_kinds() {
+        let t = "\
+5600-5700 rw-p 00000000 00:00 0                                  [heap]
+Rss: 9 kB
+Pss: 100 kB
+7f00-7f10 rw-s 00000000 00:05 12                                 /dev/dri/renderD128
+Pss: 40 kB
+7f10-7f20 rw-s 00000000 00:01 7                                  /memfd:WebKitSharedMemory (deleted)
+Pss: 30 kB
+7f20-7f30 r-xp 00001000 103:02 99                                /usr/lib/libwebkit2gtk-4.1.so.0
+Pss: 20 kB
+7f30-7f40 rw-p 00000000 00:00 0 
+Pss: 5 kB
+7f40-7f50 rw-s 00000000 00:05 3                                  /dev/nvidiactl
+Pss: 2 kB
+";
+        assert_eq!(classify_smaps(t), MappingKinds { anon_kb: 105, gpu_kb: 42, shmem_kb: 30, file_kb: 20 });
     }
 
     #[test]

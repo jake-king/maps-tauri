@@ -22,6 +22,8 @@ def main():
     if d.get("pixel_check"):
         print(f"  pixel self-test: {d.get('pixel_selftest_outside_pct')}% background with every other layer hidden"
               " (must be near 100, or the pixel check is blind)")
+    for b in d.get("blocks", []):
+        print(f"  after: {b['label']:<26} {b['bytes'] / 1048576:7.1f} MB  {b['note']}")
     for k in ("cold", "warm"):
         v = d[k]
         print(f"  {k}: GRAY {v['gray_pct']:5}% of frames | loading {v['missing_pct']:5}% | tiles loaded {v['load']['n']:3}"

@@ -1,0 +1,174 @@
+{
+ "blocks": [
+  {
+   "bytes": 27609720,
+   "label": "GPU buffers",
+   "note": "8337"
+  },
+  {
+   "bytes": 4542943,
+   "label": "GPU textures",
+   "note": "335"
+  },
+  {
+   "bytes": 0,
+   "label": "GPU renderbuffers",
+   "note": "0"
+  },
+  {
+   "bytes": 13744328,
+   "label": "tiles, CPU arrays",
+   "note": "8+159"
+  },
+  {
+   "bytes": 8317582,
+   "label": "  feature index",
+   "note": ""
+  },
+  {
+   "bytes": 4649950,
+   "label": "  buckets (CPU)",
+   "note": ""
+  },
+  {
+   "bytes": 757216,
+   "label": "  icon atlas (CPU)",
+   "note": ""
+  },
+  {
+   "bytes": 19580,
+   "label": "  collision boxes",
+   "note": ""
+  }
+ ],
+ "cache_zoom_levels": 20,
+ "cached_parents": "applied",
+ "cold": {
+  "cache_max": 240,
+  "dropped": 3,
+  "fetch": {
+   "avg": 3.5,
+   "n": 161,
+   "p95": 11,
+   "worst": 15
+  },
+  "frames": {
+   "avg": 16.6,
+   "n": 488,
+   "p95": 19,
+   "worst": 44
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 104,
+  "load": {
+   "avg": 37.7,
+   "n": 158,
+   "p95": 57,
+   "worst": 70
+  },
+  "memory_mb": 703,
+  "missing_frames": 176,
+  "missing_pct": 36.1,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 488,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 5,
+   "n": 488,
+   "p95": 9,
+   "worst": 15
+  },
+  "rendered": 488,
+  "serve": {
+   "avg": 0.1,
+   "bytes": 6940769,
+   "n": 149,
+   "worst": 0.3
+  },
+  "settle_ms": 0,
+  "tiles_loaded": 158,
+  "unique_tiles": 161
+ },
+ "cores": 8,
+ "fade_ms": 300,
+ "labels": true,
+ "pixel_check": false,
+ "pixel_selftest_outside_pct": null,
+ "prefetch_zoom_delta": 4,
+ "speed_px_s": 4000,
+ "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+ "warm": {
+  "cache_max": 240,
+  "dropped": 1,
+  "fetch": {
+   "avg": 0.7,
+   "n": 3,
+   "p95": 1,
+   "worst": 1
+  },
+  "frames": {
+   "avg": 16.7,
+   "n": 489,
+   "p95": 18,
+   "worst": 31
+  },
+  "gray_frames": 0,
+  "gray_pct": 0,
+  "jitter_only": 76,
+  "load": {
+   "avg": 10.3,
+   "n": 3,
+   "p95": 12,
+   "worst": 12
+  },
+  "memory_mb": 693,
+  "missing_frames": 1,
+  "missing_pct": 0.2,
+  "moving_s": 8.1,
+  "pixel": {
+   "agree_gray": 0,
+   "area_pct": {
+    "avg": 0,
+    "n": 489,
+    "p95": 0,
+    "worst": 0
+   },
+   "gray_frames": 0,
+   "gray_pct": 0,
+   "pixels_gray_tile_says_clean": 0,
+   "tile_says_gray_pixels_clean": 0
+  },
+  "render": {
+   "avg": 5.8,
+   "n": 489,
+   "p95": 10,
+   "worst": 13
+  },
+  "rendered": 489,
+  "serve": {
+   "avg": 0,
+   "bytes": 0,
+   "n": 0,
+   "worst": 0
+  },
+  "settle_ms": 0,
+  "tiles_loaded": 3,
+  "unique_tiles": 3
+ },
+ "warm_zoom": 0,
+ "workers": 1,
+ "zoom": 15,
+ "label": "after-pan (release)"
+}
