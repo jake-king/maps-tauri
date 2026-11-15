@@ -664,3 +664,29 @@ names, nothing overlapping.
 Problem: the palette generator built the style without a language, and Protomaps adds label layers
 only when given one, so the POI, water and shield label layers were missing from its lookup. It
 crashed rather than producing an empty table, which is the better way to fail.
+
+## Polish: the label hitch, casings, dashed rail
+
+**A 16 ms label frame, found and fixed.** I assumed the first sprite draw or font loading. Recording
+each label frame's time, its text-width cache misses and whether it was the first sprite frame
+showed otherwise: the slow frames (7-11 ms) were the ones measuring new text (4-27 misses), never
+the first sprite frame, and the cost did not scale with the number of misses, which points at
+setting `ctx.font` (the browser parses and resolves it) rather than measuring. Text is now measured
+when a tile arrives (`LabelLayer.prepare`), off the frame, and the font is set only when it changes.
+Worst label frame 8-11 ms to 3-4 ms, with no measurement in any frame.
+
+**Road casings.** The generator takes the style's five "late" casing layers (`#e0e0e0`; total width
+= the road's gap width + twice the casing's own width, sampled every quarter zoom with MapLibre's
+interpolation) and the zoom where each border first becomes visible, so low-zoom tiles carry no
+invisible geometry. Five casing classes come before every road fill: 16 line classes, exactly what
+the shader's uniform arrays hold. Cost: zoom-14 tiles 235 to 274 KB (+17%).
+
+**Dashed railways**, cut into dashes in Rust at the tile's zoom (+0.5), with the style's pattern
+(0.3 on, 0.75 off, in line widths). Trade-off: on an overzoomed tile the dashes stretch with the
+zoom; a dash distance attribute on every line vertex would fix that at about 4 bytes a vertex.
+
+Tests: dash pattern (straight, across corners, degenerate input), casings ordered before fills. Of
+four planted bugs, one ("the pattern never repeats") made the dash loop run forever: my mutation
+script hung with the bug still in the source file, and `pkill -f` on the test binary's name then
+killed the shell running it, because the pattern appeared in its own command line. The file was
+restored from the backup; mutation runs now carry a time limit, and a timeout counts as a catch.

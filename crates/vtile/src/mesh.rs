@@ -316,14 +316,23 @@ impl Mesher {
         }
     }
 
-    fn line_feature(&mut self, f: &mvt::Feature, class: LineClass) {
+    fn line_feature(&mut self, f: &mvt::Feature, class: LineClass, z: u8) {
         if f.geom_type != mvt::GeomType::LineString as u8 {
             return;
         }
         mvt::geometry(&f.geometry, &mut self.rings);
         let rings = std::mem::take(&mut self.rings);
         for r in &rings {
-            self.line_strip(r, class);
+            if class == LineClass::Rail {
+                // dashed: on/off lengths from the style, in this tile's zoom (+0.5) pixels
+                let w = rail_width(f64::from(z) + 0.5).max(0.5);
+                let px = 4096.0 / (512.0 * 2f64.sqrt()); // tile units per px at zoom z + 0.5
+                for d in dash_polyline(r, palette::RAIL_DASH[0] * w * px, palette::RAIL_DASH[1] * w * px) {
+                    self.line_strip(&d, class);
+                }
+            } else {
+                self.line_strip(r, class);
+            }
         }
         self.rings = rings;
     }
@@ -393,10 +402,14 @@ impl Mesher {
                 lines.push((if detail <= 2.0 { LineClass::BoundaryCountry } else { LineClass::Boundary }, l, i));
             }
         }
+        // every road with a casing also gets its casing strip, drawn below all road fills
+        let casings: Vec<(LineClass, &Layer, usize)> =
+            lines.iter().filter_map(|&(c, l, i)| casing_of(c).map(|k| (k, l, i))).collect();
+        lines.extend(casings);
         lines.sort_by_key(|(c, _, _)| *c as u8);
         for (c, l, i) in lines {
             if z >= palette::LINE_MINZOOM[c as usize] {
-                self.line_feature(&l.features[i], c);
+                self.line_feature(&l.features[i], c, z);
             }
         }
         self.labels(layers);
@@ -589,7 +602,83 @@ impl Mesher {
     }
 }
 
-/// The style's road classes, simplified: no tunnel, bridge or casing variants in v1.
+/// The casing class drawn under a road class, if it has one.
+pub fn casing_of(c: LineClass) -> Option<LineClass> {
+    Some(match c {
+        LineClass::RoadService => LineClass::CasingService,
+        LineClass::RoadMinor => LineClass::CasingMinor,
+        LineClass::RoadLink => LineClass::CasingLink,
+        LineClass::RoadMajor => LineClass::CasingMajor,
+        LineClass::RoadHighway => LineClass::CasingHighway,
+        _ => return None,
+    })
+}
+
+/// The railway's width in px at zoom `z` (MapLibre's exponential interpolation of the style's stops).
+pub fn rail_width(z: f64) -> f64 {
+    let s = &palette::RAIL_WIDTH_STOPS;
+    if z <= s[0][0] {
+        return s[0][1];
+    }
+    if z >= s[s.len() - 1][0] {
+        return s[s.len() - 1][1];
+    }
+    let i = s.windows(2).position(|w| z < w[1][0]).unwrap_or(0);
+    let ([z0, v0], [z1, v1]) = (s[i], s[i + 1]);
+    let b = palette::RAIL_WIDTH_BASE;
+    let t = if b == 1.0 { (z - z0) / (z1 - z0) } else { (b.powf(z - z0) - 1.0) / (b.powf(z1 - z0) - 1.0) };
+    v0 + t * (v1 - v0)
+}
+
+/// Cut a polyline into dashes `on` long with `off` gaps (tile units), the pattern running on across
+/// vertices. Each dash keeps the polyline's corners that fall inside it.
+pub fn dash_polyline(pts: &[[i32; 2]], on: f64, off: f64) -> Vec<Vec<[i32; 2]>> {
+    let mut out = Vec::new();
+    if pts.len() < 2 || on <= 0.0 {
+        return out;
+    }
+    let period = on + off.max(0.0);
+    let mut phase = 0.0; // distance into the current period
+    let mut cur: Vec<[f64; 2]> = Vec::new();
+    let flush = |cur: &mut Vec<[f64; 2]>, out: &mut Vec<Vec<[i32; 2]>>| {
+        if cur.len() >= 2 {
+            out.push(cur.iter().map(|p| [p[0].round() as i32, p[1].round() as i32]).collect());
+        }
+        cur.clear();
+    };
+    for w in pts.windows(2) {
+        let (a, b) = ([f64::from(w[0][0]), f64::from(w[0][1])], [f64::from(w[1][0]), f64::from(w[1][1])]);
+        let len = (b[0] - a[0]).hypot(b[1] - a[1]);
+        if len == 0.0 {
+            continue;
+        }
+        let at = |d: f64| [a[0] + (b[0] - a[0]) * d / len, a[1] + (b[1] - a[1]) * d / len];
+        let mut d = 0.0;
+        while d < len {
+            let in_dash = phase < on;
+            let step = if in_dash { on - phase } else { period - phase };
+            let take = step.min(len - d);
+            if in_dash {
+                if cur.is_empty() {
+                    cur.push(at(d));
+                }
+                cur.push(at(d + take));
+            }
+            d += take;
+            phase += take;
+            if phase >= period - 1e-9 {
+                phase = 0.0;
+            }
+            if in_dash && phase >= on - 1e-9 || phase == 0.0 {
+                flush(&mut cur, &mut out);
+            }
+        }
+    }
+    flush(&mut cur, &mut out);
+    out
+}
+
+/// The style's road classes, simplified: no tunnel or bridge variants.
 pub fn road_class(l: &Layer, f: &mvt::Feature) -> Option<LineClass> {
     let s = |k: &str| l.prop(f, k).and_then(|v| v.as_str());
     let has = |k: &str| l.prop(f, k).is_some();
@@ -698,6 +787,30 @@ mod tests {
         assert_eq!(&out[line_at + 4..line_at + 7], &[0, 32, LineClass::RoadMajor as u8]);
         assert_eq!(out.len(), line_at + 4 * 8 + 12);
         assert_eq!(out.len() % 4, 0);
+    }
+
+    #[test]
+    fn dashes_follow_the_pattern_across_corners() {
+        // a straight 100-unit line, 10 on / 15 off: dashes at 0-10, 25-35, 50-60, 75-85
+        let d = dash_polyline(&[[0, 0], [100, 0]], 10.0, 15.0);
+        assert_eq!(d, vec![vec![[0, 0], [10, 0]], vec![[25, 0], [35, 0]], vec![[50, 0], [60, 0]], vec![[75, 0], [85, 0]]]);
+        // the pattern carries round a corner: a dash that starts before it keeps the corner point
+        let c = dash_polyline(&[[0, 0], [6, 0], [6, 20]], 10.0, 5.0);
+        assert_eq!(c[0], vec![[0, 0], [6, 0], [6, 4]]);
+        assert_eq!(c[1], vec![[6, 9], [6, 19]]);
+        // no dash is longer than `on`, nothing degenerate
+        assert!(dash_polyline(&[[0, 0], [1000, 7]], 33.0, 41.0).iter().all(|d| d.len() >= 2));
+        assert!(dash_polyline(&[[0, 0]], 5.0, 5.0).is_empty());
+    }
+
+    #[test]
+    fn every_road_class_with_a_casing_has_one_drawn_before_it() {
+        for c in [LineClass::RoadService, LineClass::RoadMinor, LineClass::RoadLink, LineClass::RoadMajor, LineClass::RoadHighway] {
+            let k = casing_of(c).expect("casing");
+            assert!((k as u8) < (LineClass::RoadOther as u8), "{k:?} must come before every road fill");
+        }
+        assert_eq!(casing_of(LineClass::Rail), None);
+        assert_eq!(casing_of(LineClass::RoadOther), None);
     }
 
     #[test]

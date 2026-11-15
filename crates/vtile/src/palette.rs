@@ -129,6 +129,11 @@ pub fn shield_icon(network: &str, len: usize) -> u8 {
 }
 
 pub const WATER_LABEL_COLOR: u8 = 6;
+
+/// The railway's dash pattern, in line widths (on, off), and its width curve (base, [zoom, px]).
+pub const RAIL_DASH: [f64; 2] = [0.3, 0.75];
+pub const RAIL_WIDTH_BASE: f64 = 1.6;
+pub const RAIL_WIDTH_STOPS: [[f64; 2]; 3] = [[3.0, 0.0], [6.0, 0.15], [18.0, 9.0]];
 pub const SHIELD_TEXT_COLOR: u8 = 7;
 
 /// Line classes in draw order. The class number is written into each line vertex; the frontend
@@ -138,20 +143,30 @@ pub const SHIELD_TEXT_COLOR: u8 = 7;
 pub enum LineClass {
     WaterRiver = 0,
     WaterStream = 1,
-    RoadOther = 2,
-    RoadService = 3,
-    RoadMinor = 4,
-    RoadLink = 5,
-    RoadMajor = 6,
-    RoadHighway = 7,
-    Rail = 8,
-    Boundary = 9,
-    BoundaryCountry = 10,
+    CasingService = 2,
+    CasingMinor = 3,
+    CasingLink = 4,
+    CasingMajor = 5,
+    CasingHighway = 6,
+    RoadOther = 7,
+    RoadService = 8,
+    RoadMinor = 9,
+    RoadLink = 10,
+    RoadMajor = 11,
+    RoadHighway = 12,
+    Rail = 13,
+    Boundary = 14,
+    BoundaryCountry = 15,
 }
 
-pub const LINE_COLORS: [Rgba; 11] = [
+pub const LINE_COLORS: [Rgba; 16] = [
     [128, 222, 234, 255], // water_river
     [128, 222, 234, 255], // water_stream
+    [224, 224, 224, 255], // roads_minor_service_casing
+    [224, 224, 224, 255], // roads_minor_casing
+    [224, 224, 224, 255], // roads_link_casing
+    [224, 224, 224, 255], // roads_major_casing_late
+    [224, 224, 224, 255], // roads_highway_casing_late
     [235, 235, 235, 255], // roads_other
     [235, 235, 235, 255], // roads_minor_service
     [255, 255, 255, 255], // roads_minor
@@ -164,4 +179,4 @@ pub const LINE_COLORS: [Rgba; 11] = [
 ];
 
 /// The zoom below which a class is not drawn (the style layer's minzoom).
-pub const LINE_MINZOOM: [u8; 11] = [9, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+pub const LINE_MINZOOM: [u8; 16] = [9, 14, 13, 12, 13, 9, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0];

@@ -57,9 +57,12 @@ for (const l of ls.filter((x) => x["source-layer"] === "landuse" && x.type === "
   }
 }
 
-// line classes, in draw order; `id` is the style layer they mirror
+// line classes, in draw order; `id` is the style layer they mirror. Casings (a road's border) come
+// before every road fill, as the style's "late" casing layers do.
 const LINES = [
   ["WaterRiver", "water_river"], ["WaterStream", "water_stream"],
+  ["CasingService", "roads_minor_service_casing"], ["CasingMinor", "roads_minor_casing"], ["CasingLink", "roads_link_casing"],
+  ["CasingMajor", "roads_major_casing_late"], ["CasingHighway", "roads_highway_casing_late"],
   ["RoadOther", "roads_other"], ["RoadService", "roads_minor_service"], ["RoadMinor", "roads_minor"],
   ["RoadLink", "roads_link"], ["RoadMajor", "roads_major"], ["RoadHighway", "roads_highway"],
   ["Rail", "roads_rail"], ["Boundary", "boundaries"], ["BoundaryCountry", "boundaries_country"],
@@ -74,15 +77,39 @@ function stops(w) {
   }
   throw new Error(`unparsed width ${JSON.stringify(w)}`);
 }
+// MapLibre's interpolate, to evaluate a casing's two width curves where the style gives them apart
+const evalStops = ({ base, stops: s }, z) => {
+  if (z <= s[0][0]) return s[0][1];
+  if (z >= s[s.length - 1][0]) return s[s.length - 1][1];
+  let i = 0;
+  while (z >= s[i + 1][0]) i++;
+  const [z0, v0] = s[i], [z1, v1] = s[i + 1], d = z1 - z0;
+  const t = base === 1 ? (z - z0) / d : (base ** (z - z0) - 1) / (base ** d - 1);
+  return v0 + t * (v1 - v0);
+};
+if (LINES.length > 16) throw new Error("the shader holds 16 line classes");
 const lines = LINES.map(([name, id], i) => {
   const l = byId[id];
+  let width = stops(l.paint["line-width"]);
+  let minzoom = l.minzoom ?? 0;
+  if (l.paint["line-gap-width"] !== undefined) {
+    // a casing: total width = the gap (the road) + 2 x its own line width, sampled every 1/4 zoom
+    const gap = stops(l.paint["line-gap-width"]);
+    const s = [];
+    for (let z = 0; z <= 22; z += 0.25) s.push([z, Math.round((evalStops(gap, z) + 2 * evalStops(width, z)) * 1000) / 1000]);
+    width = { base: 1, stops: s };
+    // only from the zoom where its own border is visible: no geometry for an invisible casing
+    minzoom = Math.floor(s.find(([z]) => evalStops(stops(l.paint["line-width"]), z) > 0)?.[0] ?? 0);
+  }
   return {
     name, id, class: i,
     color: withOpacity(rgba(lastStop(l.paint["line-color"])), opacityOf(l, "line-opacity")),
-    width: stops(l.paint["line-width"]),
-    minzoom: l.minzoom ?? 0,
+    width, minzoom,
   };
 });
+const rail = byId["roads_rail"];
+const f64 = (n) => (Number.isInteger(n) ? `${n}.0` : `${n}`); // a Rust float literal
+const railDash = rail.paint["line-dasharray"];
 
 // Icons: the sprites the POI and shield layers use, by name; a label carries index+1 (0: none).
 const sprites = JSON.parse(readFileSync("public/assets/sprites/v4/light.json", "utf8"));
@@ -180,6 +207,11 @@ ${SHIELD_NETS.map(([n]) => `        ${JSON.stringify(n)} => [${shieldIcons[n].jo
 }
 
 pub const WATER_LABEL_COLOR: u8 = ${waterColor};
+
+/// The railway's dash pattern, in line widths (on, off), and its width curve (base, [zoom, px]).
+pub const RAIL_DASH: [f64; 2] = [${railDash.join(", ")}];
+pub const RAIL_WIDTH_BASE: f64 = ${stops(rail.paint["line-width"]).base};
+pub const RAIL_WIDTH_STOPS: [[f64; 2]; ${stops(rail.paint["line-width"]).stops.length}] = [${stops(rail.paint["line-width"]).stops.map(([a, b]) => `[${f64(a)}, ${f64(b)}]`).join(", ")}];
 pub const SHIELD_TEXT_COLOR: u8 = ${shieldTextColor};
 
 /// Line classes in draw order. The class number is written into each line vertex; the frontend
