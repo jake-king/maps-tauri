@@ -488,6 +488,28 @@ export class WeatherLayer {
     return times[Math.min(times.length - 1, Math.floor(k / 400))];
   }
 
+  /** For the time-lapse: is what the chosen time shows on screen? Its newest radar frame (the loop is
+   *  held while playing) and its satellite image, when those layers are on and exist then. */
+  displayReady() {
+    const s = this.state;
+    if (!s || this.refreshing) return false;
+    const sel = s.selection ?? {};
+    const radar = !this.radarOn || !sel.radar?.length || this.frames.has(sel.radar.at(-1));
+    const sat = !this.satOn || sel.satellite == null || this.sats.has(sel.satellite);
+    return radar && sat;
+  }
+
+  /** Ask Rust for what time `at` will need, without uploading: it is then held in Rust's memory, so
+   *  the step to `at` costs only the transfer to the GPU. */
+  async prefetch(at) {
+    if (at == null || !this.timer) return;
+    const s = await invoke("wx_state", { at });
+    const jobs = [];
+    if (this.radarOn && s.selection.radar.length) jobs.push(invoke("wx_frame", { time: s.selection.radar.at(-1) }));
+    if (this.satOn && s.selection.satellite != null) jobs.push(invoke("wx_satellite", { time: s.selection.satellite }));
+    await Promise.allSettled(jobs);
+  }
+
   /** For status(): the selection's radar frames on the GPU, and whether its satellite image is. */
   progress() {
     const sel = this.state?.selection ?? {};

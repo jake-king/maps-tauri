@@ -57,6 +57,16 @@ if not (r["popup"] or "").startswith("KLAX"):
     fail.append(f"a click on KLAX did not open its report: {r['popup']!r}")
 if past["metars"] != 0 or "collected from" not in past["stamp"]:
     fail.append(f"3 h back, before any METAR was collected: {past['metars']} stations, stamp {past['stamp']!r}")
+pl = r["play"]
+steps = pl["steps"]
+if not pl["ended_live"]:
+    fail.append(f"the time-lapse did not end at live: {pl}")
+if len(steps) < 10 or any(b - a != 600 for a, b in zip(steps, steps[1:])):
+    fail.append(f"the time-lapse did not step 10 minutes at a time from 2 hours back: {steps}")
+if pl["incomplete"]:
+    fail.append(f"the time-lapse left steps before they were on screen: {pl['incomplete']}")
+if pl["ms"] > 60000:
+    fail.append(f"the time-lapse took {pl['ms']} ms for {len(steps)} steps")
 c = r["changed"]
 if c["at"] != c["want"] or not c["ready"]:
     fail.append(f"a change of time mid-load did not settle on the new time: {c}")
@@ -76,7 +86,7 @@ else:
         fail.append(f"probe: cell drawn {dx}, {dy} px from the pier (half a cell is {cell / 2:.0f} x {tall / 2:.0f})")
     if abs(bw - cell) > 2 or abs(bh - tall) > 2:
         fail.append(f"probe: cell drawn {bw} x {bh} px, expected {cell} x {tall:.0f}")
-print(f"weather: METARs {w['metars']} stations, popup {(r['popup'] or '')[:60]!r}; live ready in {r['live_ms'] / 1000:.1f} s, 3 h back in {r['past_ms'] / 1000:.1f} s, changed mid-load {c}; GPU {past['gpu_bytes'] / 1e6:.0f} MB; hazards by level {lv}; probe {p}")
+print(f"weather: time-lapse {len(steps)} steps in {pl['ms'] / 1000:.1f} s, ended live {pl['ended_live']}; METARs {w['metars']} stations, popup {(r['popup'] or '')[:60]!r}; live ready in {r['live_ms'] / 1000:.1f} s, 3 h back in {r['past_ms'] / 1000:.1f} s, changed mid-load {c}; GPU {past['gpu_bytes'] / 1e6:.0f} MB; hazards by level {lv}; probe {p}")
 if fail:
     print("weather: FAILED:\n  " + "\n  ".join(fail))
     sys.exit(1)

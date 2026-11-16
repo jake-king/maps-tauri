@@ -67,17 +67,27 @@ Center's GFA does it, and off until their boxes are ticked: nothing is fetched f
   about 6.5 hours of history (older imagery exists, from NASA GIBS, but about 5 hours behind real
   time and colour-enhanced; not used yet). Clear ground is transparent; colder, higher cloud tops are
   more opaque.
+- METARs: airport observations as dots coloured by flight category (VFR, MVFR, IFR, LIFR); a click
+  opens the station's report. The present comes from AWC's bulk cache file (about 2,900 stations in
+  the box); the API caps history at 400 observations a request, so history is what the app collected
+  from that file every five minutes while it ran, kept on disk, and the bar shows where it begins.
 - Hazards: the G-AIRMET snapshot valid nearest the chosen time (turbulence, icing, IFR, mountain
   obscuration, surface wind), outlined and labelled, filtered by flight level as GFA does: an area
-  shows if the level is within 3,000 ft of its base or top.
+  shows if the level is within 3,000 ft of its base or top. A snapshot more than 90 minutes from the
+  chosen time is not shown.
+- Play steps the bar 10 minutes at a time (from live, over the last three hours) and moves on only
+  once a step's radar frame and satellite image are on screen; the next step is fetched while the
+  current one shows.
 
 Rust keeps the present warm in the background (every two minutes: the newest radar frame first,
 then the hazards, the newest satellite image, then the rest of the loop) and tells the webview as
 each piece arrives. Whatever was fetched is shown again offline, marked as such.
 
 `tools/weather.sh` checks it end to end against NOAA: the present and three hours back must each load
-fully (radar loop, satellite image, hazards) with nothing shown from after the chosen time, the
-flight-level filter must narrow the hazards, and a synthetic one-cell radar frame at a known point
+fully with nothing shown from after the chosen time; a change of time mid-load must settle on the new
+time with nothing uploaded for the old one; the time-lapse must step 10 minutes at a time to live
+without leaving a step before it is on screen; METARs must cover the present, a click on LAX must open
+its report, and the flight-level filter must narrow the hazards; and a synthetic one-cell radar frame at a known point
 must land where the map's own projection puts that point, one cell wide and 1/cos(latitude) cells
 tall.
 

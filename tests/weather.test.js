@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { lut, codeToDbz, hazardLabel, age, status, stamp, metarStamp, nearestStation, atLevel, flightLevel, zulu, relative, mercToWorld, DBZ_COLORS } from "../src/rust-renderer/weather.js";
-import { range, chosen, along, stepFrom } from "../src/rust-renderer/timebar.js";
+import { range, chosen, along, stepFrom, playStart, nextPlay } from "../src/rust-renderer/timebar.js";
 
 test("codes map back to dBZ as wx::radar writes them", () => {
   assert.equal(codeToDbz(0), null);
@@ -141,4 +141,23 @@ test("a click finds the nearest station within its radius", () => {
   assert.equal(nearestStation(st, 104, 100, 10, project)[0], "B");
   assert.equal(nearestStation(st, 101, 101, 10, project)[0], "A");
   assert.equal(nearestStation(st, 200, 200, 10, project), null, "nothing within reach");
+});
+
+test("time-lapse: where play starts, each next step, and the end at live", () => {
+  const now = Date.UTC(2026, 10, 16, 22, 7) / 1000;
+  const r = range(now, 18 * 3600);
+  const start = playStart(null, now, r);
+  assert.equal(start % 600, 0);
+  assert.ok(now - start >= 3 * 3600 && now - start < 3 * 3600 + 600, "from live: the last three hours");
+  assert.equal(playStart(now - 5 * 3600 - 600, now, r), now - 5 * 3600 - 600, "from a chosen past time: from there");
+  assert.equal(playStart(now + 3 * 3600, now, r), start, "from the future: the last three hours too");
+  let t = start, steps = 0;
+  while (t !== null && steps < 100) {
+    const n = nextPlay(t, now);
+    if (n !== null) assert.equal(n - t, 600);
+    t = n;
+    steps++;
+  }
+  assert.equal(t, null, "it ends at live");
+  assert.equal(steps, 18, "three hours of 10-minute steps, then live");
 });

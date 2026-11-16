@@ -106,6 +106,13 @@ const timeBar = new TimeBar(document.getElementById("map"), {
     weather.looping = on;
     map.triggerRepaint();
   },
+  isReady: () => weather.displayReady(),
+  // while playing the hours, each step shows its newest radar frame, not the 40-minute loop
+  onPlay: (playing) => {
+    weather.looping = !playing && timeBar.loopBox.checked;
+    map.triggerRepaint();
+  },
+  prefetch: (at) => weather.prefetch(at).catch(() => {}),
 });
 const wxSet = () => {
   timeBar.show(radarBox.checked || satBox.checked || hazardBox.checked || metarBox.checked);
@@ -201,9 +208,30 @@ map.whenIdle().then(async () => {
       const switchMs = await settle(90000);
       const sixOnGpu = [...weather.frames.keys()].filter((t) => t > six - 2700 && t <= six).length + [...weather.sats.keys()].filter((t) => t > six - 1800 && t <= six).length;
       const changed = { at: weather.state.at, want: four, ready: ready(), ms: switchMs, six_on_gpu: sixOnGpu };
+      // time-lapse: play from 2 hours back; record each step and whether it was complete when left
+      timeBar.pick(Math.floor((weather.state.now - 2 * 3600) / 600) * 600);
+      await settle(90000);
+      // each step played, and whether its newest radar frame and satellite image were on the GPU when
+      // the player left it (a frame for a time already left is dropped before upload, so "on the GPU
+      // at the change" means it arrived while the step was current)
+      const visited = [];
+      const onGpu = (sel) => !!sel && (!sel.radar?.length || weather.frames.has(sel.radar.at(-1))) && (sel.satellite == null || weather.sats.has(sel.satellite));
+      const playT0 = performance.now();
+      timeBar.toggle();
+      let cur = { at: weather.at, sel: null };
+      while (timeBar.player && performance.now() - playT0 < 120000) {
+        if (weather.at !== cur.at) {
+          visited.push({ at: cur.at, complete: onGpu(cur.sel) });
+          cur = { at: weather.at, sel: null };
+        }
+        if (weather.state?.at === cur.at) cur.sel = weather.state.selection;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      visited.push({ at: cur.at, complete: cur.at === null || onGpu(cur.sel) });
+      const play = { steps: visited.filter((v) => v.at !== null).map((v) => v.at), incomplete: visited.filter((v) => v.at !== null && !v.complete).map((v) => v.at), ended_live: weather.at === null && !timeBar.player, ms: Math.round(performance.now() - playT0) };
       timeBar.pick(null);
       const probe = await weather.probe();
-      return invoke("bench_done", { result: { weather: live, popup, live_ms: liveMs, past, past_ms: pastMs, past_wait_ms: Math.round(performance.now() - p0), back, levels, changed, statuses: [...statuses], probe, snapshots: [livePath, pastPath] } });
+      return invoke("bench_done", { result: { weather: live, popup, play, live_ms: liveMs, past, past_ms: pastMs, past_wait_ms: Math.round(performance.now() - p0), back, levels, changed, statuses: [...statuses], probe, snapshots: [livePath, pastPath] } });
     },
   });
 });

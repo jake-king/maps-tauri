@@ -1139,3 +1139,14 @@ So the present comes from AWC's bulk cache file (2,903 stations, 0.25 MB, 0.3 s)
 what this app collected from it every five minutes while it ran, kept on disk; before collection
 began, the stamp says so. A click on a station opens its report. On the national picture the cluster
 of MVFR stations in Texas sits on the forecast IFR area.
+
+### Time-lapse
+
+Play steps the bar 10 minutes at a time and moves on only when the step's newest radar frame and
+satellite image are on screen (and at least 600 ms has passed), with the next step fetched into Rust's
+memory while the current one shows. Two hours played in 10-14 s. My first check of "never leaves a
+step before it is on screen" was a line that computed nothing. My second sampled the layer's readiness,
+which also reads false while any refresh runs, so it reported complete steps as incomplete. The third
+asks the GPU: were the step's frame and image there when the player left it (a frame for a time
+already left is dropped before upload, so present means it arrived in time). A player planted to
+ignore readiness raced through twelve steps in 0.6 s and the gate listed all twelve.

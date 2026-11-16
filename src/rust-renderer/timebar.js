@@ -29,6 +29,19 @@ export function stepFrom(at, now, dir, [start, end]) {
   return Math.abs(t - now) < STEP ? null : t;
 }
 
+/** Where a time-lapse starts: the chosen past time, or (from live or the future, which has no
+ *  observations to play) the last three hours. */
+export function playStart(at, now, [start]) {
+  if (at != null && at < now) return at;
+  return Math.max(start, Math.floor((now - 3 * 3600) / STEP) * STEP);
+}
+
+/** The time-lapse's next step after `t`, or null when that would be within a step of now: live. */
+export function nextPlay(t, now) {
+  const n = t + STEP;
+  return now - n < STEP ? null : n;
+}
+
 /** Position of `t` along the bar, 0..1, clamped. */
 export function along(t, [start, end]) {
   return Math.max(0, Math.min(1, (t - start) / (end - start)));
@@ -42,8 +55,9 @@ const el = (tag, css, text) => {
 };
 
 export class TimeBar {
-  constructor(container, { onTime, onLevel, onLoop }) {
+  constructor(container, { onTime, onLevel, onLoop, isReady = () => true, onPlay = () => {}, prefetch = () => {} }) {
     this.onTime = onTime;
+    Object.assign(this, { isReady, onPlay, prefetch });
     this.root = el("div", "position:absolute;left:290px;right:16px;bottom:10px;z-index:20;padding:6px 10px 4px;background:#fffe;" +
       "border-radius:6px;box-shadow:0 1px 4px #0003;font:12px 'Noto Sans',sans-serif;color:#222;display:none;user-select:none;");
     const row = el("div", "display:flex;align-items:center;gap:6px;margin-bottom:4px;");
@@ -57,6 +71,7 @@ export class TimeBar {
     button("◀", "10 minutes back", () => this.step(-1));
     this.nowButton = button("Now", "Back to live", () => this.pick(null));
     button("▶", "10 minutes on", () => this.step(1));
+    this.playButton = button("Play", "Play the hours up to now", () => this.toggle());
     this.label = el("span", "min-width:150px;font-weight:600;margin:0 6px;");
     row.append(this.label);
     const loop = el("label", "cursor:pointer;");
@@ -117,6 +132,32 @@ export class TimeBar {
     this.at = at;
     this.layout();
     this.onTime(at);
+  }
+
+  /** Time-lapse: advance a step once the current one is fully on screen and at least 600 ms has
+   *  passed, so a slow fetch slows the playback rather than showing a half-loaded picture. */
+  toggle() {
+    if (this.player) return this.stop();
+    this.pick(playStart(this.at, this.now, range(this.now, this.history ?? 18 * 3600)));
+    this.onPlay(true);
+    this.playButton.textContent = "Pause";
+    let shownAt = performance.now();
+    this.prefetch(nextPlay(this.at, this.now));
+    this.player = setInterval(() => {
+      if (!this.isReady() || performance.now() - shownAt < 600) return;
+      const n = nextPlay(this.at, this.now);
+      this.pick(n);
+      shownAt = performance.now();
+      if (n === null) return this.stop();
+      this.prefetch(nextPlay(n, this.now));
+    }, 50);
+  }
+
+  stop() {
+    clearInterval(this.player);
+    this.player = null;
+    this.playButton.textContent = "Play";
+    this.onPlay(false);
   }
 
   step(dir) {
