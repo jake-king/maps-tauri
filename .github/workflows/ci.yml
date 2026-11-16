@@ -1,6 +1,6 @@
 # The gate on every push and pull request: tools/check.sh, the same command run before every commit
-# on the dev box. The checks that need map data or the private Python service are skipped here, and
-# say so in the log; see the README.
+# on the dev box. tools/ci-local.sh runs the same steps in the same Ubuntu image before a push. The
+# checks that need map data or the private Python service are skipped here and say so in the log.
 name: ci
 on:
   push:
@@ -23,6 +23,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: System libraries and tools
         run: tools/ci-setup.sh
+      - name: Protomaps glyphs and sprites (pinned)
+        run: tools/fetch-assets.sh
       - run: npm ci --no-audit --no-fund
       - name: Gate
         run: tools/check.sh

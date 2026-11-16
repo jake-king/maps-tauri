@@ -1,0 +1,41 @@
+# A version tag (v0.1.0) builds the Linux app and publishes it as a GitHub release. The tag must
+# match the version in tauri.conf.json, and the gate runs first: a release is never built from code
+# the gate has not passed.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches the app version
+        run: |
+          conf=$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
+          [ "${GITHUB_REF_NAME#v}" = "$conf" ] || { echo "tag $GITHUB_REF_NAME, app version $conf"; exit 1; }
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries and tools
+        run: tools/ci-setup.sh
+      - name: Protomaps glyphs and sprites (pinned)
+        run: tools/fetch-assets.sh
+      - name: wasm-pack
+        run: cargo install wasm-pack --version 0.15.1 --locked
+      - run: npm ci --no-audit --no-fund
+      - name: Gate
+        run: tools/check.sh
+      - name: Build
+        run: npx tauri build --bundles deb
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" target/release/bundle/deb/*.deb \
+            --title "maps-tauri $GITHUB_REF_NAME" --notes-file .github/release-notes.md
