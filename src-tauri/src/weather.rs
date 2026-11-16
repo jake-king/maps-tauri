@@ -34,6 +34,8 @@ const HAZARDS_EVERY: i64 = 15 * 60;
 /// bar's 10-minute step is 108 radar frames; a radar frame compresses to a few hundred KB.
 pub const RADAR_KEEP: usize = 160;
 pub const SAT_KEEP: usize = 40;
+/// Wind fields kept (memory and disk): a level for each of 24 hours is about 11 MB uncompressed.
+pub const WIND_KEEP: usize = 24;
 
 /// Where the weather comes from: NOAA in the app, a fake in the tests.
 pub trait Source: Send + Sync {
@@ -43,6 +45,8 @@ pub trait Source: Send + Sync {
     fn satellite_times(&self) -> Result<Vec<i64>, String>;
     /// the server's PNG for the image valid at `t`
     fn satellite(&self, t: i64) -> Result<Vec<u8>, String>;
+    /// U and V at `hpa` from GFS run `run`, forecast hour `fhr`
+    fn wind(&self, run: i64, fhr: i64, hpa: u32) -> Result<wx::wind::Wind, String>;
 }
 
 pub struct Noaa(wx::fetch::Agent);
@@ -68,6 +72,9 @@ impl Source for Noaa {
     }
     fn satellite(&self, t: i64) -> Result<Vec<u8>, String> {
         wx::fetch::satellite_image(&self.0, t)
+    }
+    fn wind(&self, run: i64, fhr: i64, hpa: u32) -> Result<wx::wind::Wind, String> {
+        wx::fetch::wind(&self.0, run, fhr, hpa)
     }
 }
 
@@ -95,6 +102,8 @@ struct Inner {
     sat_times: Vec<i64>,
     radar: Store,
     sat: Store,
+    /// encoded wind fields (wx::wind::encode), keyed by run, forecast hour and level
+    wind: Store,
     grid: Option<Grid>,
     /// each forecast hour's features, replaced only by a successful fetch of that hour
     gairmet: HashMap<u32, Vec<Hazard>>,
@@ -235,11 +244,12 @@ impl Weather {
 
     fn load_from_disk(&self) {
         let Some(db) = &self.db else { return };
-        let (radar, sat, gair, grid) = {
+        let (radar, sat, wind, gair, grid) = {
             let c = db.lock().expect("weather db lock");
             (
                 read_blobs(&c, "radar").unwrap_or_default(),
                 read_blobs(&c, "satellite").unwrap_or_default(),
+                read_blobs(&c, "wind").unwrap_or_default(),
                 read_gairmet(&c).unwrap_or_default(),
                 read_grid(&c),
             )
@@ -264,6 +274,12 @@ impl Weather {
                 g.from_disk = true;
             }
         }
+        let mut gone_wind = Vec::new();
+        if g.wind.data.is_empty() {
+            for (k, d) in wind {
+                gone_wind.extend(g.wind.put(k, Arc::new(d), &mut g.clock, WIND_KEEP, &[]));
+            }
+        }
         for (fore, json) in gair {
             if let Ok((h, _)) = hazards::parse(&json) {
                 g.gairmet.entry(fore).or_insert(h);
@@ -273,6 +289,7 @@ impl Weather {
         // what did not fit under the caps leaves the disk too, or it would be reloaded every start
         self.delete_blobs("radar", &gone_radar);
         self.delete_blobs("satellite", &gone_sat);
+        self.delete_blobs("wind", &gone_wind);
     }
 
     /// The radar times that exist: the server's, plus any held (offline, or since rotated off).
@@ -442,6 +459,48 @@ impl Weather {
             Ok(d)
         })?;
         inflate(&d)
+    }
+
+    /// The wind field at flight level `fl` (None: FL340) for time `at`, encoded for the webview
+    /// (wx::wind::encode): from the newest GFS run that serves `at`, or the runs before it if that
+    /// one is not on NOMADS yet. Each field is fetched once and kept.
+    pub fn wind(
+        &self,
+        src: &dyn Source,
+        at: i64,
+        fl: Option<u32>,
+        now: i64,
+    ) -> Result<Vec<u8>, String> {
+        let hpa = wx::wind::pressure_for(fl.unwrap_or(wx::wind::DEFAULT_FL));
+        let mut errors = Vec::new();
+        for (run, fhr) in wx::wind::runs_for(at, now) {
+            let key = (run / 3600) * 1_000_000 + fhr * 1000 + hpa as i64;
+            let held = || {
+                let mut g = self.lock();
+                let g = &mut *g;
+                g.wind.get(key, &mut g.clock)
+            };
+            let r = self.single_flight(('w', key), held, || {
+                let w = src.wind(run, fhr, hpa)?;
+                let d = Arc::new(deflate(&wx::wind::encode(&w, run, fhr, hpa)));
+                let gone = {
+                    let mut g = self.lock();
+                    let g = &mut *g;
+                    g.wind.put(key, d.clone(), &mut g.clock, WIND_KEEP, &[])
+                };
+                self.store_blob("wind", key, &d, &gone);
+                Ok(d)
+            });
+            match r {
+                Ok(d) => return inflate(&d),
+                Err(e) => errors.push(format!("{} +{fhr} h: {e}", satellite::iso(run))),
+            }
+        }
+        Err(format!(
+            "no wind field for {}: {}",
+            satellite::iso(at),
+            errors.join("; ")
+        ))
     }
 
     /// The present's loop is never evicted by browsing the past.
@@ -702,6 +761,7 @@ fn open_db(p: &Path) -> rusqlite::Result<Connection> {
         "PRAGMA journal_mode=WAL;
          CREATE TABLE IF NOT EXISTS radar(time INTEGER PRIMARY KEY, data BLOB NOT NULL);
          CREATE TABLE IF NOT EXISTS satellite(time INTEGER PRIMARY KEY, data BLOB NOT NULL);
+         CREATE TABLE IF NOT EXISTS wind(time INTEGER PRIMARY KEY, data BLOB NOT NULL);
          CREATE TABLE IF NOT EXISTS gairmet(fore INTEGER PRIMARY KEY, json TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
@@ -847,6 +907,8 @@ mod tests {
         frame_calls: M<Vec<i64>>,
         sat_calls: M<Vec<i64>>,
         gair_calls: M<u32>,
+        wind_calls: M<Vec<(i64, i64, u32)>>,
+        wind_missing: M<Vec<i64>>,
     }
 
     impl Fake {
@@ -858,6 +920,8 @@ mod tests {
                 frame_calls: M::new(vec![]),
                 sat_calls: M::new(vec![]),
                 gair_calls: M::new(0),
+                wind_calls: M::new(vec![]),
+                wind_missing: M::new(vec![]),
             }
         }
         fn live() -> Fake {
@@ -900,6 +964,23 @@ mod tests {
             self.sat_calls.lock().unwrap().push(t);
             self.up()?;
             Ok(sat_png(180))
+        }
+        fn wind(&self, run: i64, fhr: i64, hpa: u32) -> Result<wx::wind::Wind, String> {
+            self.wind_calls.lock().unwrap().push((run, fhr, hpa));
+            self.up()?;
+            if self.wind_missing.lock().unwrap().contains(&run) {
+                return Err("not GRIB: <html>no such file</html>".into());
+            }
+            Ok(wx::wind::Wind {
+                ni: 2,
+                nj: 2,
+                lat0: 60.0,
+                lon0: -135.0,
+                dlat: 45.0,
+                dlon: 80.0,
+                u: vec![10.0, 20.0, 30.0, hpa as f32],
+                v: vec![0.0; 4],
+            })
         }
     }
 
@@ -977,6 +1058,9 @@ mod tests {
             fn satellite(&self, t: i64) -> Result<Vec<u8>, String> {
                 self.0.satellite(t)
             }
+            fn wind(&self, run: i64, fhr: i64, hpa: u32) -> Result<wx::wind::Wind, String> {
+                self.0.wind(run, fhr, hpa)
+            }
         }
         let w = Arc::new(Weather::open(None));
         let src = Arc::new(Boom(Fake::live(), AtomicBool::new(false)));
@@ -1052,6 +1136,75 @@ mod tests {
             .query_row("SELECT count(*) FROM radar", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 2, "the disk matches what memory kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The header of an encoded wind field: (run, forecast hour, hPa).
+    fn wind_header(b: &[u8]) -> (i64, u32, u32) {
+        (
+            i64::from_le_bytes(b[24..32].try_into().unwrap()),
+            u32::from_le_bytes(b[32..36].try_into().unwrap()),
+            u32::from_le_bytes(b[36..40].try_into().unwrap()),
+        )
+    }
+
+    #[test]
+    fn winds_at_a_flight_level_fetched_once_with_the_run_named() {
+        let w = Weather::open(None);
+        let src = Fake::live();
+        let now = NOW; // 19:00Z: 12Z is not yet published (it needs until ~16:30Z... it is), 18Z is not
+        let b = w.wind(&src, now, Some(340), now).unwrap();
+        let (run, fhr, hpa) = wind_header(&b);
+        assert_eq!(
+            (run, fhr, hpa),
+            (T18 - 6 * 3600, 7, 250),
+            "12Z run, 7 hours on, FL340 = 250 hPa"
+        );
+        w.wind(&src, now, Some(340), now).unwrap();
+        assert_eq!(
+            src.wind_calls.lock().unwrap().len(),
+            1,
+            "the second ask is served from memory"
+        );
+        let b = w.wind(&src, now, None, now).unwrap();
+        assert_eq!(wind_header(&b).2, 250, "no level chosen: FL340");
+        let b = w.wind(&src, now, Some(180), now).unwrap();
+        assert_eq!(wind_header(&b).2, 500);
+        assert_eq!(b.len(), 48 + 4 * 8);
+    }
+
+    #[test]
+    fn a_run_not_yet_published_falls_back_to_the_one_before() {
+        let w = Weather::open(None);
+        let src = Fake::live();
+        src.wind_missing.lock().unwrap().push(T18 - 6 * 3600);
+        let b = w.wind(&src, NOW, Some(340), NOW).unwrap();
+        assert_eq!(
+            wind_header(&b),
+            (T18 - 12 * 3600, 13, 250),
+            "06Z, 13 hours on"
+        );
+    }
+
+    #[test]
+    fn winds_from_disk_offline() {
+        let dir = std::env::temp_dir().join(format!("wx-wind-{}", std::process::id()));
+        let path = dir.join("weather.sqlite");
+        let _ = std::fs::remove_dir_all(&dir);
+        {
+            let w = Weather::open(Some(&path));
+            w.wind(&Fake::live(), NOW, Some(340), NOW).unwrap();
+        }
+        let w = Weather::open(Some(&path));
+        w.load_from_disk();
+        let src = Fake::live();
+        src.down.store(true, Ordering::SeqCst);
+        let b = w.wind(&src, NOW, Some(340), NOW).unwrap();
+        assert_eq!(wind_header(&b).2, 250);
+        assert!(
+            src.wind_calls.lock().unwrap().is_empty(),
+            "served from disk, nothing asked"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

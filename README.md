@@ -23,8 +23,9 @@ problem, the measurements that turned out to be wrong, and what fixed them.
 - `crates/coords`: the search box's coordinate parser, name folding and FTS5 query builder, ported
   from the Python service and compiled to WebAssembly for the frontend. `tools/diff.py` runs the
   port and the original over about 190,000 inputs and lists every disagreement.
-- `crates/wx`: NOAA weather. A GRIB2 reader for the MRMS radar mosaic (the regular latitude/longitude
-  grid with PNG-packed values that MRMS uses; anything else is refused by name), the reduction of a
+- `crates/wx`: NOAA weather. A GRIB2 reader for the MRMS radar mosaic and GFS model fields (a regular
+  latitude/longitude grid, rows either way, values PNG-packed or simply packed, several fields to a
+  file; anything else is refused by name), the reduction of a
   frame to one byte per cell for the GPU, and the G-AIRMET hazard GeoJSON.
 - `src-tauri`: the backend. Tiles are served through a `tiles://` URI scheme with range support;
   meshes go to the webview in a compact binary format; `search` queries a GeoNames FTS5 index with
@@ -71,6 +72,13 @@ Center's GFA does it, and off until their boxes are ticked: nothing is fetched f
   opens the station's report. The present comes from AWC's bulk cache file (about 2,900 stations in
   the box); the API caps history at 400 observations a request, so history is what the app collected
   from that file every five minutes while it ran, kept on disk, and the bar shows where it begins.
+- Winds: GFS winds at the chosen flight level (FL050 to FL450 mapped to standard pressure levels;
+  FL340, 250 hPa, when none is chosen), as 5,000 particles that drift with the wind and leave fading
+  trails, coloured by speed. The field (U and V on a 0.25° grid, cut by NOAA's NOMADS filter, about
+  150 KB) comes from the newest run that serves the chosen time, or the run before if that one is not
+  published yet. Particles move a fixed number of screen pixels per m/s at any zoom; the simulation is
+  JavaScript, the trails a pair of textures on the GPU that fade a little each frame. With winds alone
+  on, the map holds 60 frames a second, redraw p50 7 ms, p99 13 ms.
 - Hazards: the G-AIRMET snapshot valid nearest the chosen time (turbulence, icing, IFR, mountain
   obscuration, surface wind), outlined and labelled, filtered by flight level as GFA does: an area
   shows if the level is within 3,000 ft of its base or top. A snapshot more than 90 minutes from the

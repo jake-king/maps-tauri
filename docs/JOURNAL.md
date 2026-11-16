@@ -1150,3 +1150,42 @@ which also reads false while any refresh runs, so it reported complete steps as 
 asks the GPU: were the step's frame and image there when the player left it (a frame for a time
 already left is dropped before upload, so present means it arrived in time). A player planted to
 ignore readiness raced through twelve steps in 0.6 s and the gate listed all twelve.
+
+## Winds aloft as particles
+
+The model screenshot the user found shows streaks over the map: winds at the selected flight level,
+drawn as particles. One request to NOAA's NOMADS GRIB filter (U and V at 250 hPa over the box) came
+back as two GRIB2 messages with simple packing (template 5.0) and rows south to north, on a 0.25°
+grid of 321 x 181: 150 KB in 0.6 s. The decoder took three extensions, each tested at awkward cases
+(10-bit values across byte boundaries, a zero-bit constant field, two messages in one file, short data
+refused rather than read past, complex packing refused by name); the real file decodes to U from -13
+to 69 m/s and a jet of 155 knots. Four planted defects failed the tests, once a planting helper of mine
+stopped reporting plants it had failed to apply as survivors: cargo fmt had moved the lines, and the
+helper ran the tests on the unchanged code.
+
+GFS runs every six hours and is on NOMADS about four and a half hours later, with hourly forecasts.
+A chosen time takes the newest run that had started by then and is published, at the nearest hour,
+falling back to the run before when the newest is not there yet. The test for that was wrong before
+the code was: my constant for 12:00Z was 16:00Z.
+
+Particles move in longitude and latitude, a fixed number of screen pixels per m/s at any zoom, with
+the Mercator stretch on latitude (planted out, it failed its test). The GPU keeps the trails in two
+textures used in turn: each frame the old one is drawn into the new one a little fainter, the moved
+segments on top, and the result over the map. Trails are cleared when the camera moves.
+
+Adding winds broke the end-to-end check in three places, none of them the winds. The registration
+probe compared two frames while particles moved between them. The check for "the selection is ready"
+never confirmed the state was for the time asked for; the old 50 ms wait had hidden that race until
+the wind fetch made refreshes slower. And that fetch was a real slowdown: it sat ahead of the radar and
+satellite uploads, so a slow NOMADS answer delayed the radar for a new time. It runs alongside them now.
+
+With winds alone on: 60 frames a second, no late frames, redraw p50 7 ms and p99 13 ms for the whole
+frame. The national picture shows the jet around a trough in the West and a second jet off the
+Southeast coast.
+
+The gate then failed once more on unchanged code with no hazards at the present, the second time
+that had happened (the first, during a planted run, I had not explained). The state showed no fetch
+errors and no snapshot selected: the hazards had simply not arrived yet. When hazards were limited to
+90 minutes, "no snapshot near this time" became a valid answer for readiness, but before the first
+fetch completes it means "not loaded" too, and the check could not tell them apart. It now requires a
+completed hazard fetch (or hazards from disk) before none counts. Three runs after the fix passed.

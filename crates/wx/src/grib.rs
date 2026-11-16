@@ -1,7 +1,9 @@
-//! Just enough GRIB2 to read NOAA's MRMS radar mosaics: one message, a regular latitude/longitude
-//! grid (template 3.0) scanned west to east and north to south, values packed as a PNG image
-//! (template 5.41), no bitmap. Anything else is refused with an error naming what was found, so a
-//! format change upstream shows up as a message rather than as a wrong picture.
+//! Just enough GRIB2 to read NOAA's MRMS radar mosaics and GFS model fields cut by NOMADS: a regular
+//! latitude/longitude grid (template 3.0) scanned west to east, rows north to south (MRMS) or south
+//! to north (GFS), values packed simply (template 5.0, GFS) or as a PNG image (5.41, MRMS), no
+//! bitmap; one field per message, any number of messages per file. Anything else is refused with an
+//! error naming what was found, so a format change upstream shows up as a message rather than as a
+//! wrong picture.
 
 use std::fmt;
 use std::io::Cursor;
@@ -22,8 +24,10 @@ pub struct Grid {
     /// grid spacing in degrees (positive)
     pub dlat: f64,
     pub dlon: f64,
-    /// discipline, parameter category and parameter number (MRMS reflectivity is 209/11/0 or 0/...)
+    /// discipline, parameter category and parameter number (GFS wind: 0/2/2 is U, 0/2/3 is V)
     pub param: (u8, u8, u8),
+    /// the first fixed surface: its type and scaled value (isobaric is type 100, in pascals)
+    pub level: (u8, u32),
     pub values: Vec<f32>,
 }
 
@@ -74,6 +78,7 @@ fn byte_at(b: &[u8], i: usize) -> Result<u8, Error> {
 }
 
 struct GridDef {
+    south_first: bool,
     ni: usize,
     nj: usize,
     lat0: f64,
@@ -83,6 +88,7 @@ struct GridDef {
 }
 
 struct Packing {
+    tmpl: u16,
     points: u64,
     r: f32,
     e: i16,
@@ -103,6 +109,7 @@ pub fn decode(b: &[u8]) -> Result<Grid, Error> {
     let mut grid: Option<GridDef> = None;
     let mut packing: Option<Packing> = None;
     let mut param = None;
+    let mut level = (0, 0);
     let mut bitmap = None;
     let mut data: Option<&[u8]> = None;
     let mut i = 16;
@@ -135,9 +142,10 @@ pub fn decode(b: &[u8]) -> Result<Grid, Error> {
                 let di = u32_at(s, 63)? as f64 / 1e6;
                 let dj = u32_at(s, 67)? as f64 / 1e6;
                 let scan = byte_at(s, 71)?;
-                if scan != 0 {
+                // bit 2 (0x40): rows run south to north; any other bit set is a layout not read
+                if scan & !0x40 != 0 {
                     return err(format!(
-                        "scanning mode {scan:#010b}, only 0 (west to east, north to south) is read"
+                        "scanning mode {scan:#010b}, only west to east with rows either way is read"
                     ));
                 }
                 if ni == 0 || nj == 0 || (ni as u64) * (nj as u64) > MAX_POINTS {
@@ -149,10 +157,17 @@ pub fn decode(b: &[u8]) -> Result<Grid, Error> {
                     return err(format!("grid spacing {di} x {dj}"));
                 }
                 let lon0 = if lo1 > 180.0 { lo1 - 360.0 } else { lo1 };
+                let south_first = scan & 0x40 != 0;
                 grid = Some(GridDef {
+                    south_first,
                     ni,
                     nj,
-                    lat0: la1,
+                    // the grid's first row is always the northernmost here (rows are flipped on read)
+                    lat0: if south_first {
+                        la1 + (nj - 1) as f64 * dj
+                    } else {
+                        la1
+                    },
                     lon0,
                     dlat: dj,
                     dlon: di,
@@ -160,14 +175,18 @@ pub fn decode(b: &[u8]) -> Result<Grid, Error> {
             }
             4 => {
                 param = Some((discipline, byte_at(s, 9)?, byte_at(s, 10)?));
+                level = (byte_at(s, 22)?, u32_at(s, 24)?);
             }
             5 => {
                 let tmpl = u16_at(s, 9)?;
-                if tmpl != 41 {
-                    return err(format!("data template 5.{tmpl}, only 5.41 (PNG) is read"));
+                if tmpl != 0 && tmpl != 41 {
+                    return err(format!(
+                        "data template 5.{tmpl}, only 5.0 (simple) and 5.41 (PNG) are read"
+                    ));
                 }
                 let r = f32::from_bits(u32_at(s, 11)?);
                 packing = Some(Packing {
+                    tmpl,
                     points: u32_at(s, 5)? as u64,
                     r,
                     e: i16_sm_at(s, 15)?,
@@ -204,17 +223,26 @@ pub fn decode(b: &[u8]) -> Result<Grid, Error> {
             p.points, g.ni, g.nj
         ));
     }
-    if p.bits != 8 && p.bits != 16 {
-        return err(format!("{} bits per value, only 8 or 16 are read", p.bits));
-    }
-    let raw = png_samples(data, g.ni, g.nj, p.bits)?;
+    let raw = if p.tmpl == 0 {
+        simple_samples(data, n as usize, p.bits)?
+    } else {
+        if p.bits != 8 && p.bits != 16 {
+            return err(format!("{} bits per value, only 8 or 16 are read", p.bits));
+        }
+        png_samples(data, g.ni, g.nj, p.bits)?
+    };
     // value = (R + X * 2^E) / 10^D
     let scale = 2f32.powi(p.e as i32);
     let div = 10f32.powi(p.d as i32);
-    let values = raw
+    let mut values: Vec<f32> = raw
         .into_iter()
         .map(|x| (p.r + x as f32 * scale) / div)
         .collect();
+    if g.south_first {
+        // north row first, as the rest of the crate expects
+        let rows: Vec<Vec<f32>> = values.chunks(g.ni).rev().map(|r| r.to_vec()).collect();
+        values = rows.concat();
+    }
     Ok(Grid {
         ni: g.ni,
         nj: g.nj,
@@ -223,8 +251,64 @@ pub fn decode(b: &[u8]) -> Result<Grid, Error> {
         dlat: g.dlat,
         dlon: g.dlon,
         param,
+        level,
         values,
     })
+}
+
+/// Every message in a file, in order. Each message gives its own length, so a file of several fields
+/// (NOMADS sends U and V wind together) is read message by message.
+pub fn decode_all(b: &[u8]) -> Result<Vec<Grid>, Error> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b.get(i..i + 4) != Some(b"GRIB") {
+            return err(format!("no GRIB message at byte {i}"));
+        }
+        let total = b
+            .get(i + 8..i + 16)
+            .map(|s| u64::from_be_bytes(s.try_into().expect("8 bytes")))
+            .ok_or_else(|| Error(format!("short read at {i}")))? as usize;
+        if total < 20 || i + total > b.len() {
+            return err(format!(
+                "message at {i} claims {total} bytes, {} are left",
+                b.len() - i
+            ));
+        }
+        out.push(decode(&b[i..i + total])?);
+        i += total;
+    }
+    Ok(out)
+}
+
+/// `n` values of `bits` bits each, most significant bit first (simple packing). Zero bits means
+/// every value is the reference value.
+fn simple_samples(data: &[u8], n: usize, bits: u8) -> Result<Vec<u32>, Error> {
+    if bits > 32 {
+        return err(format!("{bits} bits per value"));
+    }
+    if bits == 0 {
+        return Ok(vec![0; n]);
+    }
+    let need = (n * bits as usize).div_ceil(8);
+    if data.len() < need {
+        return err(format!(
+            "{} bytes of data for {n} values of {bits} bits ({need} needed)",
+            data.len()
+        ));
+    }
+    let mut out = Vec::with_capacity(n);
+    let (mut acc, mut have, mut i) = (0u64, 0u32, 0usize);
+    for _ in 0..n {
+        while have < bits as u32 {
+            acc = (acc << 8) | data[i] as u64;
+            i += 1;
+            have += 8;
+        }
+        have -= bits as u32;
+        out.push(((acc >> have) & ((1u64 << bits) - 1)) as u32);
+    }
+    Ok(out)
 }
 
 fn png_samples(data: &[u8], ni: usize, nj: usize, bits: u8) -> Result<Vec<u32>, Error> {
@@ -292,6 +376,24 @@ pub(crate) mod tests {
                 samples.iter().map(|&x| x as u8).collect()
             };
             w.write_image_data(&bytes).unwrap();
+        }
+        out
+    }
+
+    /// Values as `bits`-bit integers, most significant bit first, padded to a whole byte.
+    fn simple(bits: u8, samples: &[u32]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let (mut acc, mut n) = (0u64, 0u32);
+        for &x in samples {
+            acc = (acc << bits) | (x as u64 & ((1u64 << bits) - 1));
+            n += bits as u32;
+            while n >= 8 {
+                out.push((acc >> (n - 8)) as u8);
+                n -= 8;
+            }
+        }
+        if n > 0 {
+            out.push((acc << (8 - n)) as u8);
         }
         out
     }
@@ -381,7 +483,14 @@ pub(crate) mod tests {
         body.extend(section(4, &sec4));
         body.extend(section(5, &sec5));
         body.extend(section(6, &[s.bitmap]));
-        body.extend(section(7, &png(s.ni, s.nj, s.bits, &s.samples)));
+        body.extend(section(
+            7,
+            &if s.data_tmpl == 0 {
+                simple(s.bits, &s.samples)
+            } else {
+                png(s.ni, s.nj, s.bits, &s.samples)
+            },
+        ));
         let total = 16 + body.len() + 4;
         let mut m = b"GRIB".to_vec();
         m.extend_from_slice(&[0, 0, 209, 2]);
@@ -457,7 +566,7 @@ pub(crate) mod tests {
         s.data_tmpl = 40;
         refused(&s, "data template 5.40");
         let mut s = base();
-        s.scan = 0b0100_0000;
+        s.scan = 0b1000_0000; // east to west
         refused(&s, "scanning mode");
         let mut s = base();
         s.bitmap = 0;
@@ -511,6 +620,119 @@ pub(crate) mod tests {
         m[s3 + 30..s3 + 34].copy_from_slice(&100_000u32.to_be_bytes());
         m[s3 + 34..s3 + 38].copy_from_slice(&100_000u32.to_be_bytes());
         assert!(decode(&m).unwrap_err().0.contains("larger than"));
+    }
+
+    /// GFS-style: simple packing, south-to-north rows, two fields in one file.
+    fn gfs(param: u8, values: &[u32], bits: u8) -> Vec<u8> {
+        let mut s = Spec::mrms(3, 2, values.to_vec());
+        (
+            s.lat0,
+            s.lon0_east,
+            s.d,
+            s.r,
+            s.e,
+            s.dd,
+            s.bits,
+            s.data_tmpl,
+            s.scan,
+        ) = (15.0, 225.0, 0.25, -100.0, 0, 1, bits, 0, 0b0100_0000);
+        let mut m = message(&s);
+        // section 4: parameter number (offset 10) and the level, isobaric 25000 Pa (offsets 22, 24)
+        let s4 = m
+            .windows(5)
+            .position(|w| w[4] == 4 && u32::from_be_bytes([w[0], w[1], w[2], w[3]]) == 34)
+            .unwrap();
+        m[s4 + 9] = 2;
+        m[s4 + 10] = param;
+        m[s4 + 22] = 100;
+        m[s4 + 24..s4 + 28].copy_from_slice(&25_000u32.to_be_bytes());
+        m
+    }
+
+    #[test]
+    fn simple_packing_at_an_unaligned_width() {
+        // 10-bit values cross byte boundaries; value = (R + X) / 10 with R = -100
+        let g = decode(&gfs(2, &[0, 1, 1023, 512, 100, 999], 10)).unwrap();
+        // rows came south first: the decoded grid is north first, so the second row's values lead
+        let want = [412.0, 0.0, 899.0, -100.0, -99.0, 923.0].map(|x: f32| x / 10.0);
+        for (v, w) in g.values.iter().zip(want) {
+            assert!((v - w).abs() < 1e-4, "{:?}", g.values);
+        }
+        assert!(
+            (g.lat0 - 15.25).abs() < 1e-9 && (g.lon0 - -135.0).abs() < 1e-9,
+            "north row first: {} {}",
+            g.lat0,
+            g.lon0
+        );
+        assert_eq!((g.param, g.level), ((209, 2, 2), (100, 25_000)));
+    }
+
+    #[test]
+    fn simple_packing_with_no_bits_is_a_constant_field() {
+        let mut s = Spec::mrms(2, 2, vec![0; 4]);
+        (s.r, s.dd, s.bits, s.data_tmpl) = (42.0, 0, 0, 0);
+        assert_eq!(decode(&message(&s)).unwrap().values, vec![42.0; 4]);
+    }
+
+    #[test]
+    fn short_simple_data_is_refused_not_read_past() {
+        let mut m = gfs(2, &[1, 2, 3, 4, 5, 6], 10);
+        // shorten section 7 by a byte, keep the end marker
+        let s7 = m.windows(5).rposition(|w| w[4] == 7).unwrap();
+        let len = u32::from_be_bytes([m[s7], m[s7 + 1], m[s7 + 2], m[s7 + 3]]);
+        m.remove(s7 + len as usize - 1);
+        m[s7..s7 + 4].copy_from_slice(&(len - 1).to_be_bytes());
+        assert!(
+            decode(&m).unwrap_err().0.contains("bytes of data"),
+            "{:?}",
+            decode(&m)
+        );
+    }
+
+    #[test]
+    fn several_fields_in_one_file() {
+        let mut file = gfs(2, &[0, 1, 2, 3, 4, 5], 10);
+        file.extend(gfs(3, &[5, 4, 3, 2, 1, 0], 10));
+        let g = decode_all(&file).unwrap();
+        assert_eq!(
+            g.iter().map(|x| x.param.2).collect::<Vec<_>>(),
+            vec![2, 3],
+            "U then V"
+        );
+        assert!(
+            decode_all(&file[..file.len() - 3]).is_err(),
+            "a truncated second message"
+        );
+    }
+
+    #[test]
+    fn refuses_complex_packing_by_name() {
+        let mut s = Spec::mrms(2, 2, vec![0; 4]);
+        s.data_tmpl = 3;
+        refused(&s, "data template 5.3");
+    }
+
+    /// A real GFS subset from NOMADS: WX_GFS=file.grib2 (UGRD and VGRD at one level)
+    #[test]
+    fn a_real_gfs_subset() {
+        let Ok(path) = std::env::var("WX_GFS") else {
+            return;
+        };
+        let g = decode_all(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(g.len(), 2);
+        for f in &g {
+            let max = f.values.iter().cloned().fold(f32::MIN, f32::max);
+            let min = f.values.iter().cloned().fold(f32::MAX, f32::min);
+            eprintln!(
+                "param {:?} level {:?}: {} x {} from {},{}; {min:.1}..{max:.1} m/s",
+                f.param, f.level, f.ni, f.nj, f.lat0, f.lon0
+            );
+            assert!(
+                min > -120.0 && max < 120.0 && max - min > 10.0,
+                "not wind speeds"
+            );
+        }
+        assert!((g[0].lat0 - 60.0).abs() < 1e-6, "north row first");
     }
 
     /// A real frame, when one has been downloaded: WX_FRAME=path/to/MRMS_...grib2 (not gzipped).

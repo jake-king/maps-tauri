@@ -82,7 +82,8 @@ export class TimeBar {
     loop.append(this.loopBox, "Loop radar");
     row.append(loop);
     row.append(el("span", "flex:1;"));
-    const fl = el("label", "", "Hazards at ");
+    const fl = el("label", "", "Level ");
+    fl.title = "Hazards within 3,000 ft of this level; winds at it (all levels: FL340)";
     this.levelSel = el("select", "font:12px 'Noto Sans',sans-serif;");
     for (const v of LEVELS) {
       const o = el("option", null, v == null ? "all levels" : `FL${String(v).padStart(3, "0")}`);

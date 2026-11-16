@@ -81,6 +81,7 @@ const radarBox = wxBox("Radar");
 const satBox = wxBox("Satellite");
 const hazardBox = wxBox("Hazards");
 const metarBox = wxBox("METARs");
+const windBox = wxBox("Winds");
 const wxStatus = document.createElement("div");
 wxStatus.style.cssText = "margin-top:3px;color:#555;font-size:11px;min-height:14px;";
 wxPanel.append(wxStatus);
@@ -90,11 +91,11 @@ const wxStamp = document.createElement("div");
 wxStamp.style.cssText = "position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:20;padding:4px 10px;background:#fffe;" +
   "border-radius:6px;box-shadow:0 1px 4px #0003;font:600 12px 'Noto Sans',sans-serif;color:#222;display:none;pointer-events:none;";
 document.getElementById("map").appendChild(wxStamp);
-const layers = () => ({ radar: radarBox.checked, satellite: satBox.checked, hazards: hazardBox.checked, metars: metarBox.checked });
+const layers = () => ({ radar: radarBox.checked, satellite: satBox.checked, hazards: hazardBox.checked, metars: metarBox.checked, winds: windBox.checked });
 const weather = new WeatherLayer(map, {
   onChange: (s) => {
     wxStatus.textContent = wxStatusText(s, layers(), weather.progress());
-    wxStamp.textContent = wxStampText(s, layers(), weather.metars);
+    wxStamp.textContent = wxStampText(s, layers(), weather.metars, weather.wind);
     wxStamp.style.display = wxStamp.textContent ? "block" : "none";
     timeBar.update(s, weather.metars?.range);
   },
@@ -115,10 +116,10 @@ const timeBar = new TimeBar(document.getElementById("map"), {
   prefetch: (at) => weather.prefetch(at).catch(() => {}),
 });
 const wxSet = () => {
-  timeBar.show(radarBox.checked || satBox.checked || hazardBox.checked || metarBox.checked);
+  timeBar.show(radarBox.checked || satBox.checked || hazardBox.checked || metarBox.checked || windBox.checked);
   return weather.set(layers()).catch((e) => say(`map error: weather: ${e.message ?? e}`));
 };
-for (const b of [radarBox, satBox, hazardBox, metarBox]) b.addEventListener("change", wxSet);
+for (const b of [radarBox, satBox, hazardBox, metarBox, windBox]) b.addEventListener("change", wxSet);
 // pixel check: a magenta background, so any uncovered screen area is countable
 if (flags.pixelCheck) map.setBackground([1, 0, 1, 1]);
 map.on("error", (e) => say(`map error: ${e.error?.message ?? e}`));
@@ -155,14 +156,17 @@ map.whenIdle().then(async () => {
     // MAPS_WEATHER=1: all three layers on; wait for the present (its radar loop, satellite image and
     // hazards, 90 s at most), picture it; then 3 hours back, the same; then the registration probe
     weather: async () => {
-      radarBox.checked = satBox.checked = hazardBox.checked = metarBox.checked = true;
+      radarBox.checked = satBox.checked = hazardBox.checked = metarBox.checked = windBox.checked = true;
       await wxSet();
       const statuses = new Set([wxStatus.textContent]);
       const ready = () => {
+        // the state must be for the time asked for, not the one before it; and "no hazard snapshot
+        // near this time" only counts once hazards have been fetched (before that, none is not an answer)
+        if (!weather.state || (weather.at != null && weather.state.at !== weather.at)) return false;
         const p = weather.progress(), sel = weather.state?.selection ?? {};
         // complete for that time: its radar loop, its satellite image if one exists, its hazards if a
         // snapshot is in reach (none is the right answer far from any)
-        return sel.radar?.length > 0 && p.radar === sel.radar.length && (sel.satellite == null || p.satellite === true) && (sel.hazards == null || weather.state.hazards?.length > 0) && weather.metars != null;
+        return sel.radar?.length > 0 && p.radar === sel.radar.length && (sel.satellite == null || p.satellite === true) && (sel.hazards == null ? weather.state.hazardsOk != null || weather.state.available?.hazards?.length > 0 : weather.state.hazards?.length > 0) && weather.metars != null && !!weather.wind;
       };
       // wait on the layer's own updates, as a user would: no extra polling from here
       const settle = async (limit) => {
@@ -179,6 +183,34 @@ map.whenIdle().then(async () => {
       const live = weather.report();
       const pic = (name) => snapshot(map, name, { center: [-97, 38.5], zoom: 3.6 }, (ctx) => ctx.drawImage(weather.canvas, 0, 0, ctx.canvas.width, ctx.canvas.height));
       const livePath = await pic("weather");
+      // winds alone over the country, after the trails have built up for 3 s; then FL180
+      const keep = layers();
+      await weather.set({ radar: false, satellite: false, hazards: false, metars: false, winds: true });
+      const usView = { center: [-97, 38.5], zoom: 3.6, bearing: 0 };
+      map.jumpTo(usView);
+      await new Promise((r) => setTimeout(r, 500));
+      // the cost of animating: frame-loop stats and redraw time over 3 s of winds alone
+      const s0 = map.loop.stats();
+      const times = [];
+      const r0 = map._render;
+      map._render = (...a) => {
+        const t = performance.now();
+        r0(...a);
+        times.push(performance.now() - t);
+      };
+      await new Promise((r) => setTimeout(r, 3000));
+      map._render = r0;
+      const s1 = map.loop.stats();
+      times.sort((a, b) => a - b);
+      const windCost = { ticks: s1.ticks - s0.ticks, draws: s1.draws - s0.draws, late: s1.late - s0.late, interval_ms: s1.interval, render_p50_ms: times[times.length >> 1], render_p99_ms: times[Math.floor(times.length * 0.99)] };
+      const windPath = await snapshot(map, "weather-wind", usView);
+      const windLive = weather.report().wind;
+      weather.setLevel(180);
+      const l0 = performance.now();
+      while (weather.wind?.hpa !== 500 && performance.now() - l0 < 30000) await new Promise((r) => setTimeout(r, 100));
+      const wind180 = { hpa: weather.wind?.hpa ?? null, ms: Math.round(performance.now() - l0) };
+      weather.setLevel(null);
+      await weather.set(keep);
       // a click on LAX's dot opens its report
       const lax = weather.metars?.stations?.find((x) => x[0] === "KLAX");
       let popup = null;
@@ -231,7 +263,7 @@ map.whenIdle().then(async () => {
       const play = { steps: visited.filter((v) => v.at !== null).map((v) => v.at), incomplete: visited.filter((v) => v.at !== null && !v.complete).map((v) => v.at), ended_live: weather.at === null && !timeBar.player, ms: Math.round(performance.now() - playT0) };
       timeBar.pick(null);
       const probe = await weather.probe();
-      return invoke("bench_done", { result: { weather: live, popup, play, live_ms: liveMs, past, past_ms: pastMs, past_wait_ms: Math.round(performance.now() - p0), back, levels, changed, statuses: [...statuses], probe, snapshots: [livePath, pastPath] } });
+      return invoke("bench_done", { result: { weather: live, wind: windLive, wind180, windCost, windPath, popup, play, live_ms: liveMs, past, past_ms: pastMs, past_wait_ms: Math.round(performance.now() - p0), back, levels, changed, statuses: [...statuses], probe, snapshots: [livePath, pastPath] } });
     },
   });
 });

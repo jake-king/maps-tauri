@@ -354,6 +354,25 @@ async fn wx_satellite(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// The GFS wind field at flight level `fl` (default FL340) for `at` (default now): a 48-byte header
+/// (wx::wind::encode) then U and V as f32; fetched from NOMADS first if not held, on the blocking pool.
+#[tauri::command]
+async fn wx_wind(
+    at: Option<i64>,
+    fl: Option<u32>,
+    w: tauri::State<'_, Arc<weather::Weather>>,
+) -> Result<tauri::ipc::Response, String> {
+    let w = Arc::clone(&w);
+    let src = w.source().ok_or("weather is off")?;
+    let now = unix_now();
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        w.wind(src.as_ref(), at.unwrap_or(now), fl, now)
+    })
+    .await
+    .map_err(|e| format!("wind task: {e}"))??;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 /// The METARs in force at `at` (default now), compact: [id, lon, lat, category, time] each, with the
 /// range collected and a version that changes when anything new arrives.
 #[tauri::command]
@@ -508,7 +527,8 @@ pub fn run() {
             wx_frame,
             wx_satellite,
             wx_metars,
-            wx_metar
+            wx_metar,
+            wx_wind
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

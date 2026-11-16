@@ -6,6 +6,7 @@
 //! * [`hazards`]: G-AIRMET hazard areas (turbulence, icing, ...) from aviationweather.gov GeoJSON.
 //! * [`satellite`]: GOES infrared clouds from nowCOAST, one byte of grey per pixel.
 //! * [`timeline`]: what to show at a chosen time (radar loop, satellite image, hazard snapshot).
+//! * [`wind`]: winds aloft from the GFS model at a flight level.
 //! * `fetch` (feature `http`): getting it all from NOAA.
 
 #[cfg(feature = "http")]
@@ -16,3 +17,4 @@ pub mod metar;
 pub mod radar;
 pub mod satellite;
 pub mod timeline;
+pub mod wind;

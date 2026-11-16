@@ -90,3 +90,14 @@ pub fn metars(agent: &ureq::Agent) -> Result<Vec<crate::metar::Metar>, String> {
     let (m, _) = crate::metar::parse_cache(&String::from_utf8_lossy(&csv))?;
     Ok(m)
 }
+
+/// U and V wind at `hpa` from GFS run `run`, forecast hour `fhr`, cut by NOMADS (about 150 KB).
+pub fn wind(
+    agent: &ureq::Agent,
+    run: i64,
+    fhr: i64,
+    hpa: u32,
+) -> Result<crate::wind::Wind, String> {
+    let bytes = get(agent, &crate::wind::url(run, fhr, hpa), 16 << 20)?;
+    crate::wind::from_grib(&bytes, hpa)
+}

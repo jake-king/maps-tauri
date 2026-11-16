@@ -147,6 +147,7 @@ mod tests {
             dlat: 0.01,
             dlon: 0.01,
             param: (209, 15, 0),
+            level: (0, 0),
             values,
         }
     }

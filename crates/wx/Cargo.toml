@@ -14,3 +14,7 @@ ureq = { version = "3", default-features = false, features = ["rustls"], optiona
 [features]
 # fetch from NOAA over HTTPS (wx::fetch)
 http = ["dep:ureq"]
+
+[[example]]
+name = "live"
+required-features = ["http"]

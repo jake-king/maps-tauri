@@ -7,6 +7,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { WindRenderer, decodeWind } from "./wind.js";
 
 const VS = `#version 300 es
 // one triangle that covers the screen: vertex ids 0, 1, 2 -> (-1,-1), (3,-1), (-1,3)
@@ -112,7 +113,7 @@ export function relative(t, now) {
 }
 
 /** The valid-time line over the map: what each layer shows and when it is from. */
-export function stamp(s, { radar, satellite, hazards, metars = false }, m = null) {
+export function stamp(s, { radar, satellite, hazards, metars = false, winds = false }, m = null, w = null) {
   if (!s) return "";
   const sel = s.selection ?? {};
   const parts = [];
@@ -120,6 +121,7 @@ export function stamp(s, { radar, satellite, hazards, metars = false }, m = null
   if (satellite) parts.push(sel.satellite != null ? `Satellite ${zulu(sel.satellite)} obs` : s.at > s.now + 300 ? "Satellite: observations only" : "Satellite: none at this time");
   if (hazards) parts.push(s.hazardsValid != null ? `Hazards ${zulu(s.hazardsValid)} ${s.hazardsValid > s.now ? `fcst ${relative(s.hazardsValid, s.now)}` : "issued"}` : "Hazards: none near this time");
   if (metars) parts.push(metarStamp(m, s.at, s.now));
+  if (winds) parts.push(windStamp(w));
   return parts.join(" · ");
 }
 
@@ -153,6 +155,14 @@ export function nearestStation(stations, x, y, radius, project) {
     }
   }
   return best;
+}
+
+/** The wind part of the valid-time line: level, model run and forecast hour, valid time. */
+export function windStamp(w) {
+  if (!w) return "Winds: loading…";
+  if (w.error) return "Winds: none (model not reached)";
+  const fl = { 850: "FL050", 700: "FL100", 500: "FL180", 400: "FL240", 300: "FL300", 250: "FL340", 200: "FL390", 150: "FL450" }[w.hpa] ?? `${w.hpa} hPa`;
+  return `Winds ${fl} GFS ${zulu(w.run).slice(0, 2)}Z +${w.fhr} h (${zulu(w.valid)})`;
 }
 
 /** The NWS reflectivity scale, by lower bound in dBZ. */
@@ -262,6 +272,9 @@ export class WeatherLayer {
     this.hazardsOn = false;
     this.metarOn = false;
     this.metars = null; // wx_metars for the chosen time
+    this.windOn = false;
+    this.wind = null; // the decoded field for the chosen time and level, or { error }
+    this.windKey = null;
     this.looping = true; // animate the radar loop; false holds its newest frame
     this.level = null; // flight level for hazards (hundreds of feet), null = all
     this.at = null; // the chosen time (Unix seconds), null = live: the present, following it
@@ -305,17 +318,18 @@ export class WeatherLayer {
     // the report box stays on its station as the map moves
     map.on("render", () => this.placePopup());
     // every frame: is a different radar frame due, or a different satellite image?
-    map.loop.addUpdater((now) => (this.radarOn && this.frameNow(now) !== this.shown) || (this.satOn && this.satNow() !== this.shownSat));
+    // the winds animate: every frame while they are on and have a field
+    map.loop.addUpdater((now) => (this.radarOn && this.frameNow(now) !== this.shown) || (this.satOn && this.satNow() !== this.shownSat) || (this.windOn && !!this.wind?.uv));
   }
 
   get anyOn() {
-    return this.radarOn || this.satOn || this.hazardsOn || this.metarOn;
+    return this.radarOn || this.satOn || this.hazardsOn || this.metarOn || this.windOn;
   }
 
   /** Turn layers on or off. The first time any goes on, Rust starts fetching. */
-  async set({ radar = this.radarOn, satellite = this.satOn, hazards = this.hazardsOn, metars = this.metarOn }) {
+  async set({ radar = this.radarOn, satellite = this.satOn, hazards = this.hazardsOn, metars = this.metarOn, winds = this.windOn }) {
     this.marks.enabled ??= performance.now();
-    Object.assign(this, { radarOn: radar, satOn: satellite, hazardsOn: hazards, metarOn: metars });
+    Object.assign(this, { radarOn: radar, satOn: satellite, hazardsOn: hazards, metarOn: metars, windOn: winds });
     if (!metars) this.closePopup();
     if (this.anyOn && !this.timer) {
       this.onChange?.(null); // "starting": shown before the first answer
@@ -340,6 +354,7 @@ export class WeatherLayer {
     this.level = fl;
     this.painted = true; // force a repaint of the outlines
     this.map.triggerRepaint();
+    if (this.windOn) this.refresh(); // the winds are per level
   }
 
   /** Fetch the state for the chosen time and get what it needs onto the GPU. Signals arrive in
@@ -369,10 +384,10 @@ export class WeatherLayer {
       if (this.gen === gen) this.metars = m;
       if (m.stations.length) this.marks.metars ??= performance.now();
     }
-    if (this.state.hazards?.length) this.marks.hazards ??= performance.now();
     this.onChange?.(this.state);
     this.map.triggerRepaint();
-    await this.sync();
+    // the wind field alongside the radar and satellite, not ahead of them: NOMADS can be slow
+    await Promise.all([this.sync(), this.syncWind(gen)]);
     this.onChange?.(this.state);
   }
 
@@ -488,6 +503,33 @@ export class WeatherLayer {
     return times[Math.min(times.length - 1, Math.floor(k / 400))];
   }
 
+  /** The wind field for the chosen time and level: fetched when either changes, put on the GPU
+   *  inside a frame. */
+  async syncWind(gen) {
+    // the wind field for this time and level: fetched when either changes, on the GPU inside a frame
+    const key = `${this.at}|${this.level}`;
+    if (this.windOn && key !== this.windKey) {
+      this.windKey = key;
+      try {
+        const f = decodeWind(await invoke("wx_wind", { at: this.at, fl: this.level }));
+        if (this.gen === gen && this.windKey === key) {
+          this.wind = f;
+          this.map.loop.arrive(() => this.windRenderer().setField(f), 600);
+          this.marks.wind ??= performance.now();
+        }
+      } catch (e) {
+        this.wind = { error: String(e?.message ?? e) };
+        this.windKey = null; // try again on the next refresh
+      }
+    }
+    if (this.state.hazards?.length) this.marks.hazards ??= performance.now();
+  }
+
+  windRenderer() {
+    this.windGl ??= new WindRenderer(this.map.gl);
+    return this.windGl;
+  }
+
   /** For the time-lapse: is what the chosen time shows on screen? Its newest radar frame (the loop is
    *  held while playing) and its satellite image, when those layers are on and exist then. */
   displayReady() {
@@ -572,6 +614,7 @@ export class WeatherLayer {
       }
     }
     gl.bindVertexArray(null);
+    if (this.windOn && this.windGl?.field) this.windGl.draw(gl, map);
   }
 
   drawHazards() {
@@ -699,8 +742,9 @@ export class WeatherLayer {
     const gl = this.map.gl;
     const n = 41, d = 0.001;
     const grid = { ni: n, nj: n, lat0: ll[1] + 20 * d, lon0: ll[0] - 20 * d, dlat: d, dlon: d };
-    const saved = { frames: this.frames, looping: this.looping, radarOn: this.radarOn, satOn: this.satOn, override: this.override };
-    Object.assign(this, { looping: false, radarOn: true, satOn: false, override: [0] });
+    // nothing else may change the picture between the two shots: satellite and winds off
+    const saved = { frames: this.frames, looping: this.looping, radarOn: this.radarOn, satOn: this.satOn, windOn: this.windOn, override: this.override };
+    Object.assign(this, { looping: false, radarOn: true, satOn: false, windOn: false, override: [0] });
     this.map.jumpTo({ center: ll, zoom: 15, bearing: 0 });
     await new Promise((r) => (this.map.areTilesLoaded() ? r() : this.map.once("idle", r)));
     const shot = async (lit) => {
@@ -768,6 +812,7 @@ export class WeatherLayer {
       shown: this.shown,
       shown_sat: this.shownSat,
       metars: this.metars?.stations?.length ?? null,
+      wind: this.wind?.uv ? { run: this.wind.run, fhr: this.wind.fhr, hpa: this.wind.hpa, valid: this.wind.valid, segments: this.windGl?.lastSegments ?? 0, frames: this.windGl?.frames ?? 0 } : this.wind,
       metar_range: this.metars?.range ?? null,
       last_error: this.lastError ?? null,
       gpu_bytes: this.gpuBytes,

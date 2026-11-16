@@ -16,6 +16,7 @@ fn main() {
             "wx_satellite",
             "wx_metars",
             "wx_metar",
+            "wx_wind",
         ]),
     ))
     .expect("failed to run tauri-build");
