@@ -19,7 +19,7 @@ rusqlite = { version = "0.43", features = ["bundled"] }
 coords = { path = "../crates/coords" }
 vtile = { path = "../crates/vtile", features = ["http"] }
 wx = { path = "../crates/wx", features = ["http"] }
+flate2 = "1"
 
 [dev-dependencies]
 png = "0.18"
-flate2 = "1"

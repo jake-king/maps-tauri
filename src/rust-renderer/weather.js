@@ -1,5 +1,6 @@
-// The weather layer of the native renderer: NOAA radar (MRMS) as an animated overlay and G-AIRMET
-// hazard areas as outlines. Rust fetches, decodes and caches (src-tauri/src/weather.rs); this side
+// The weather layer of the native renderer, synced to one chosen time as the Aviation Weather
+// Center's GFA does it: NOAA radar (MRMS) as an animated loop ending at that time, GOES satellite
+// clouds, and G-AIRMET hazard areas as outlines, filtered by flight level. Rust fetches, decodes and caches (src-tauri/src/weather.rs); this side
 // uploads each radar frame once as a one-byte-per-cell texture and draws it in a single full-screen
 // pass: every pixel is taken back to latitude/longitude through the camera and Web Mercator, and
 // looks its cell up, so the radar's own latitude/longitude grid is never reprojected on the CPU.
@@ -42,6 +43,84 @@ void main() {
   vec4 c = texelFetch(u_lut, ivec2(code, 0), 0);
   o = vec4(c.rgb * c.a, c.a) * u_opacity;
 }`;
+
+// Satellite clouds: a texture in Web Mercator over a fixed box (wx::satellite), grey levels from the
+// infrared image; clear ground (grey below ~130) is transparent, colder cloud tops more opaque.
+const SAT_FS = `#version 300 es
+precision highp float;
+uniform vec2 u_size;
+uniform float u_dpr;
+uniform vec2 u_center;
+uniform float u_scale;
+uniform vec2 u_rot;
+uniform vec4 u_box;     // the image's world box: x0, y0 (top), x1, y1 (bottom), in [0,1)
+uniform float u_opacity;
+uniform sampler2D u_sat; // R8 grey, 0 = no data
+out vec4 o;
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, u_size.y * u_dpr - gl_FragCoord.y) / u_dpr;
+  vec2 d = p - 0.5 * u_size;
+  vec2 w = u_center + vec2(d.x * u_rot.x - d.y * u_rot.y, d.x * u_rot.y + d.y * u_rot.x) / u_scale;
+  vec2 uv = (w - u_box.xy) / (u_box.zw - u_box.xy);
+  if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) discard;
+  float g = texture(u_sat, uv).r;
+  if (g <= 0.0) discard;
+  float cold = smoothstep(130.0 / 255.0, 215.0 / 255.0, g);
+  if (cold <= 0.0) discard;
+  // low cloud blue-grey, cold high tops near white: readable on the light basemap
+  vec3 c = mix(vec3(0.42, 0.48, 0.58), vec3(0.97, 0.98, 1.0), cold);
+  float a = (0.25 + 0.55 * cold) * u_opacity;
+  o = vec4(c * a, a);
+}`;
+
+/** Web Mercator metres to world coordinates in [0, 1) (y south), as geo.js uses. */
+export function mercToWorld(x, y) {
+  const half = Math.PI * 6378137;
+  return [(x + half) / (2 * half), (half - y) / (2 * half)];
+}
+
+/** "SFC" and "FZL" (the freezing level, which varies) count as the surface; "180" is FL180. */
+export function flightLevel(s) {
+  if (s == null) return null;
+  if (s === "SFC" || s === "FZL") return 0;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Whether a hazard applies at flight level `fl` (null = all levels): as GFA does, within 3,000 ft
+ *  of its base or top. A missing base or top does not hide it. */
+export function atLevel(h, fl) {
+  if (fl == null) return true;
+  const base = flightLevel(h.base) ?? 0;
+  const top = flightLevel(h.top) ?? 999;
+  return base <= fl + 30 && top >= fl - 30;
+}
+
+/** "18:40Z" */
+export function zulu(t) {
+  const d = new Date(t * 1000);
+  return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}Z`;
+}
+
+/** "now", "-2 h 20 min", "+3 h" for a time relative to now (seconds). */
+export function relative(t, now) {
+  const m = Math.round((t - now) / 60);
+  if (Math.abs(m) < 5) return "now";
+  const sign = m < 0 ? "-" : "+";
+  const h = Math.floor(Math.abs(m) / 60), mm = Math.abs(m) % 60;
+  return `${sign}${h ? `${h} h` : ""}${h && mm ? " " : ""}${mm ? `${mm} min` : ""}`;
+}
+
+/** The valid-time line over the map: what each layer shows and when it is from. */
+export function stamp(s, { radar, satellite, hazards }) {
+  if (!s) return "";
+  const sel = s.selection ?? {};
+  const parts = [];
+  if (radar) parts.push(sel.radar?.length ? `Radar ${zulu(sel.radar.at(-1))} obs` : s.at > s.now + 300 ? "Radar: observations only" : "Radar: none at this time");
+  if (satellite) parts.push(sel.satellite != null ? `Satellite ${zulu(sel.satellite)} obs` : s.at > s.now + 300 ? "Satellite: observations only" : "Satellite: none at this time");
+  if (hazards) parts.push(s.hazardsValid != null ? `Hazards ${zulu(s.hazardsValid)} ${s.hazardsValid > s.now ? `fcst ${relative(s.hazardsValid, s.now)}` : "issued"}` : "Hazards: none");
+  return parts.join(" · ");
+}
 
 /** The NWS reflectivity scale, by lower bound in dBZ. */
 export const DBZ_COLORS = [
@@ -89,21 +168,23 @@ export function hazardLabel(h) {
   return parts.join(" ");
 }
 
-/** The panel's status line for `s` (wx_state, or null before the first answer). */
-export function status(s, { radar, hazards }) {
-  if (!radar && !hazards) return "";
+/** The panel's status line for `s` (wx_state, or null before the first answer). `progress` is the
+ *  layer's own: `radar` = how many of the selection's frames are on the GPU, `satellite` = whether
+ *  the selection's image is. */
+export function status(s, { radar, satellite, hazards }, progress = {}) {
+  if (!radar && !satellite && !hazards) return "";
   if (!s) return "starting…";
   const parts = [];
   const l = s.loading ?? {};
-  if (radar) {
-    if (l.busy && l.wanted && l.held < l.wanted) parts.push(`radar: loading ${l.held} of ${l.wanted}…`);
-    else if (s.frames.length) parts.push(`radar ${age(s.frames.at(-1), s.now)} (${s.frames.length} frames)`);
-    else parts.push(l.busy || !s.radarOk ? "radar: loading…" : "radar: none");
-  }
-  if (hazards) {
-    if (s.hazardsValid != null) parts.push(`hazards valid ${age(s.hazardsValid, s.now)}${l.hazards ? ", updating…" : ""}`);
-    else parts.push(l.hazards || l.busy || !s.hazardsOk ? "hazards: loading…" : "hazards: none issued");
-  }
+  const sel = s.selection ?? {};
+  const want = sel.radar?.length ?? 0;
+  const past = s.at <= s.now + 300;
+  if (radar && want && progress.radar != null && progress.radar < want) parts.push(`radar: loading ${progress.radar} of ${want}…`);
+  else if (radar && !want && past && (l.busy || s.radarOk == null)) parts.push("radar: loading…");
+  if (satellite && sel.satellite != null && progress.satellite === false) parts.push("satellite: loading…");
+  else if (satellite && sel.satellite == null && past && (l.busy || s.satelliteOk == null)) parts.push("satellite: loading…");
+  if (hazards && s.hazardsValid == null && (l.hazards || l.busy || s.hazardsOk == null)) parts.push("hazards: loading…");
+  else if (hazards && l.hazards) parts.push("hazards: updating…");
   if (s.fromDisk) parts.push("offline: last fetched");
   if (s.errors?.length) parts.push(`${s.errors.length} fetch errors`);
   return parts.join(" · ");
@@ -118,9 +199,9 @@ export function age(t, now) {
   return m >= 0 ? `${hm}, ${m < 120 ? `${m} min` : `${Math.round(m / 60)} h`} old` : `${hm}, in ${Math.round(-m / 60 * 10) / 10} h`;
 }
 
-function program(gl) {
+function program(gl, fs, names) {
   const p = gl.createProgram();
-  for (const [type, src] of [[gl.VERTEX_SHADER, VS], [gl.FRAGMENT_SHADER, FS]]) {
+  for (const [type, src] of [[gl.VERTEX_SHADER, VS], [gl.FRAGMENT_SHADER, fs]]) {
     const s = gl.createShader(type);
     gl.shaderSource(s, src);
     gl.compileShader(s);
@@ -130,28 +211,39 @@ function program(gl) {
   gl.linkProgram(p);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(`weather program: ${gl.getProgramInfoLog(p)}`);
   const u = {};
-  for (const n of ["u_size", "u_dpr", "u_center", "u_scale", "u_rot", "u_grid", "u_dims", "u_opacity", "u_radar", "u_lut"]) u[n] = gl.getUniformLocation(p, n);
+  for (const n of names) u[n] = gl.getUniformLocation(p, n);
   return { p, u };
 }
+
+/** Radar textures kept on the GPU (6 MB each) and satellite textures (3 MB each): the selection's
+ *  plus the most recently shown, so stepping back and forth does not fetch again. */
+const RADAR_GPU = 15;
+const SAT_GPU = 4;
 
 export class WeatherLayer {
   constructor(map, { onChange } = {}) {
     this.map = map;
     this.onChange = onChange;
     this.radarOn = false;
-    this.looping = true; // animate the frames; false holds the newest
+    this.satOn = false;
     this.hazardsOn = false;
+    this.looping = true; // animate the radar loop; false holds its newest frame
+    this.level = null; // flight level for hazards (hundreds of feet), null = all
+    this.at = null; // the chosen time (Unix seconds), null = live: the present, following it
     this.state = null;
-    this.frames = new Map(); // time -> texture, on the GPU
-    this.fetching = new Set(); // times being fetched from Rust
-    this.loading = false;
-    this.shown = null; // time of the frame drawn last
+    this.frames = new Map(); // radar time -> { tex, bytes, grid, used }, on the GPU
+    this.sats = new Map(); // satellite time -> { tex, bytes, used }
+    this.fetching = new Set(); // "r<time>" / "s<time>" being fetched from Rust
+    this.override = null; // radar times to loop instead of the selection (the registration probe)
+    this.shown = null; // radar frame drawn last
+    this.shownSat = null;
     this.loopStart = performance.now();
     this.gpuBytes = 0;
     /** performance.now() of: enabled, first frame on the GPU, hazards present, every frame held */
     this.marks = {};
     const gl = map.gl;
-    this.prog = program(gl);
+    this.prog = program(gl, FS, ["u_size", "u_dpr", "u_center", "u_scale", "u_rot", "u_grid", "u_dims", "u_opacity", "u_radar", "u_lut"]);
+    this.satProg = program(gl, SAT_FS, ["u_size", "u_dpr", "u_center", "u_scale", "u_rot", "u_box", "u_opacity", "u_sat"]);
     this.vao = gl.createVertexArray();
     this.lutTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.lutTex);
@@ -166,31 +258,46 @@ export class WeatherLayer {
     this.ctx = c.getContext("2d");
     map.overlays.push(this);
     map.on("render", () => this.drawHazards());
-    // every frame: is a different radar frame due? (the loop as a pure function of time)
-    map.loop.addUpdater((now) => this.radarOn && this.frameNow(now) !== this.shown);
+    // every frame: is a different radar frame due, or a different satellite image?
+    map.loop.addUpdater((now) => (this.radarOn && this.frameNow(now) !== this.shown) || (this.satOn && this.satNow() !== this.shownSat));
   }
 
-  /** Turn layers on or off. The first time either goes on, Rust starts fetching. */
-  async set({ radar = this.radarOn, hazards = this.hazardsOn }) {
+  get anyOn() {
+    return this.radarOn || this.satOn || this.hazardsOn;
+  }
+
+  /** Turn layers on or off. The first time any goes on, Rust starts fetching. */
+  async set({ radar = this.radarOn, satellite = this.satOn, hazards = this.hazardsOn }) {
     this.marks.enabled ??= performance.now();
-    this.radarOn = radar;
-    this.hazardsOn = hazards;
-    if ((radar || hazards) && !this.timer) {
+    Object.assign(this, { radarOn: radar, satOn: satellite, hazardsOn: hazards });
+    if (this.anyOn && !this.timer) {
       this.onChange?.(null); // "starting": shown before the first answer
-      // Rust says when anything arrives; the slow poll is only a safety net
+      // Rust says when anything arrives; the slow poll is only a safety net (and moves "now")
       await listen("wx-changed", () => this.refresh());
       this.state = await invoke("wx_enable");
       this.timer = setInterval(() => this.refresh(), 60000);
-      await this.refresh();
-    } else {
-      this.onChange?.(this.state);
     }
+    await this.refresh();
     this.map.triggerRepaint();
   }
 
-  /** Fetch the state and upload new frames. Signals arrive in bursts (one per frame): a refresh
-   *  asked for while one runs is folded into a single rerun after it. */
+  /** Choose the time to show (Unix seconds), or null for live. */
+  async setTime(at) {
+    this.at = at;
+    this.loopStart = performance.now();
+    await this.refresh();
+  }
+
+  setLevel(fl) {
+    this.level = fl;
+    this.painted = true; // force a repaint of the outlines
+    this.map.triggerRepaint();
+  }
+
+  /** Fetch the state for the chosen time and get what it needs onto the GPU. Signals arrive in
+   *  bursts (one per frame): a refresh asked for while one runs is folded into one rerun after it. */
   async refresh() {
+    if (!this.timer) return;
     if (this.refreshing) {
       this.again = true;
       return;
@@ -207,74 +314,116 @@ export class WeatherLayer {
   }
 
   async refreshOnce() {
-    this.state = await invoke("wx_state");
+    this.state = await invoke("wx_state", { at: this.at });
     if (this.state.hazards?.length) this.marks.hazards ??= performance.now();
-    await this.sync();
     this.onChange?.(this.state);
     this.map.triggerRepaint();
+    await this.sync();
+    this.onChange?.(this.state);
   }
 
-  /** Fetch the frames not yet held, one at a time (each is ~6 MB over IPC); each goes onto the GPU
-   *  inside a frame through the map's loop, the newest first. Frames Rust no longer holds are freed
-   *  there too: nothing here touches WebGL outside a frame. */
+  /** The selection's radar frames (newest first) and satellite image, fetched from Rust one at a time
+   *  and put on the GPU inside a frame. Nothing here touches WebGL outside a frame. */
   async sync() {
-    if (this.loading || !this.state) return;
-    this.loading = true;
-    try {
-      const want = new Set(this.state.frames);
-      const stale = [...this.frames.keys()].filter((t) => !want.has(t));
-      if (stale.length) this.map.loop.arrive(() => this.free(stale), 0);
-      const g = this.state.grid;
-      const newest = this.state.frames.at(-1);
-      for (const t of [...this.state.frames].reverse()) {
-        if (this.frames.has(t) || this.fetching.has(t) || !g) continue;
-        this.fetching.add(t);
-        try {
-          const buf = new Uint8Array(await invoke("wx_frame", { time: t }));
+    const s = this.state;
+    if (!s) return;
+    const sel = s.selection;
+    const jobs = [];
+    if (this.satOn && sel.satellite != null && !this.sats.has(sel.satellite)) jobs.push(["s", sel.satellite, 400]);
+    if (this.radarOn && s.grid) {
+      [...sel.radar].reverse().forEach((t, i) => {
+        if (!this.frames.has(t)) jobs.push(["r", t, i === 0 ? 500 : 3000]);
+      });
+    }
+    // the newest radar frame first, then the satellite image, then the rest of the loop
+    jobs.sort((a, b) => a[2] - b[2]);
+    for (const [kind, t, priority] of jobs) {
+      const key = `${kind}${t}`;
+      if (this.fetching.has(key)) continue;
+      this.fetching.add(key);
+      try {
+        const buf = new Uint8Array(await invoke(kind === "r" ? "wx_frame" : "wx_satellite", { time: t }));
+        if (kind === "r") {
+          const g = s.grid;
           if (buf.length !== g.ni * g.nj) throw new Error(`radar frame ${t}: ${buf.length} bytes for a ${g.ni} x ${g.nj} grid`);
-          // the newest frame is what the user is waiting for: ahead of everything but visible tiles
-          this.map.loop.arrive(() => this.uploadFrame(t, buf, g), t === newest ? 500 : 3000);
-        } finally {
-          this.fetching.delete(t);
+          this.map.loop.arrive(() => this.uploadRadar(t, buf, g), priority);
+        } else {
+          const { width, height } = s.satellite;
+          if (buf.length !== width * height) throw new Error(`satellite ${t}: ${buf.length} bytes for ${width} x ${height}`);
+          this.map.loop.arrive(() => this.uploadSat(t, buf, s.satellite), priority);
         }
+      } catch (e) {
+        this.lastError = String(e?.message ?? e);
+      } finally {
+        this.fetching.delete(key);
       }
-    } finally {
-      this.loading = false;
+      // the chosen time moved on while this was fetched: stop fetching for the old one
+      if (this.state !== s) break;
     }
   }
 
-  /** Inside a frame. */
-  uploadFrame(t, buf, g) {
-    if (this.frames.has(t)) return;
+  texture(w, h, buf, filter) {
     const gl = this.map.gl;
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, g.ni, g.nj, 0, gl.RED, gl.UNSIGNED_BYTE, buf);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, w, h, 0, gl.RED, gl.UNSIGNED_BYTE, buf);
+    // set explicitly: the default minification filter wants mipmaps, and an incomplete texture reads 0
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
-    this.frames.set(t, { tex, bytes: buf.length, grid: g });
-    this.gpuBytes += buf.length;
-    this.marks.firstFrame ??= performance.now();
-    const all = this.state?.frames ?? [];
-    if (all.length >= 10 && all.every((x) => this.frames.has(x))) this.marks.allFrames ??= performance.now();
+    return tex;
   }
 
   /** Inside a frame. */
-  free(times) {
-    for (const t of times) {
-      const f = this.frames.get(t);
-      if (!f) continue;
+  uploadRadar(t, buf, g) {
+    if (this.frames.has(t)) return;
+    const tex = this.texture(g.ni, g.nj, buf, this.map.gl.NEAREST);
+    this.frames.set(t, { tex, bytes: buf.length, grid: g, used: performance.now() });
+    this.gpuBytes += buf.length;
+    this.marks.firstFrame ??= performance.now();
+    const want = this.state?.selection?.radar ?? [];
+    if (want.length && want.every((x) => this.frames.has(x))) this.marks.allFrames ??= performance.now();
+    this.evict(this.frames, RADAR_GPU, new Set(want));
+    this.onChange?.(this.state);
+  }
+
+  /** Inside a frame. */
+  uploadSat(t, buf, meta) {
+    if (this.sats.has(t)) return;
+    const tex = this.texture(meta.width, meta.height, buf, this.map.gl.LINEAR);
+    const [x0, y0, x1, y1] = meta.bbox3857;
+    const [wx0, wy0] = mercToWorld(x0, y1); // top left: west, north
+    const [wx1, wy1] = mercToWorld(x1, y0); // bottom right: east, south
+    this.sats.set(t, { tex, bytes: buf.length, box: [wx0, wy0, wx1, wy1], used: performance.now() });
+    this.gpuBytes += buf.length;
+    this.marks.firstSat ??= performance.now();
+    this.evict(this.sats, SAT_GPU, new Set([this.state?.selection?.satellite]));
+    this.onChange?.(this.state);
+  }
+
+  /** Free the least recently used textures past `keep`, never one the selection needs. */
+  evict(map, keep, need) {
+    if (map.size <= keep) return;
+    const victims = [...map.entries()].filter(([t]) => !need.has(t)).sort((a, b) => a[1].used - b[1].used);
+    for (const [t, f] of victims.slice(0, map.size - keep)) {
       this.map.gl.deleteTexture(f.tex);
       this.gpuBytes -= f.bytes;
-      this.frames.delete(t);
+      map.delete(t);
     }
+  }
+
+  /** The radar loop's frames on the GPU, oldest first. */
+  loopTimes() {
+    if (this.override) return this.override;
+    return (this.state?.selection?.radar ?? []).filter((t) => this.frames.has(t));
   }
 
   /** Which frame the loop is on: each held 400 ms, the newest 2 s, oldest to newest. */
   frameNow(now = performance.now()) {
-    const times = [...this.frames.keys()].sort((a, b) => a - b);
+    const times = this.loopTimes();
     if (!times.length) return null;
     if (!this.looping) return times.at(-1);
     const period = (times.length - 1) * 400 + 2000;
@@ -282,33 +431,67 @@ export class WeatherLayer {
     return times[Math.min(times.length - 1, Math.floor(k / 400))];
   }
 
-  /** Called by the renderer after the map, before the labels. */
+  /** For status(): the selection's radar frames on the GPU, and whether its satellite image is. */
+  progress() {
+    const sel = this.state?.selection ?? {};
+    return { radar: (sel.radar ?? []).filter((t) => this.frames.has(t)).length, satellite: sel.satellite == null ? null : this.sats.has(sel.satellite) };
+  }
+
+  satNow() {
+    const t = this.state?.selection?.satellite;
+    return t != null && this.sats.has(t) ? t : null;
+  }
+
+  /** Called by the renderer after the map, before the labels: the clouds, then the radar on them. */
   draw(gl, map) {
-    if (!this.radarOn) return;
-    const t = this.frameNow();
-    this.shown = t;
-    const f = t == null ? null : this.frames.get(t);
-    if (!f) return;
     const cam = map.cam;
-    const { p, u } = this.prog;
-    gl.useProgram(p);
-    gl.uniform2f(u.u_size, cam.w, cam.h);
-    gl.uniform1f(u.u_dpr, map.dpr);
-    gl.uniform2f(u.u_center, cam.cx, cam.cy);
-    gl.uniform1f(u.u_scale, cam.scale);
-    gl.uniform2f(u.u_rot, Math.cos(cam.bearing), Math.sin(cam.bearing));
-    gl.uniform4f(u.u_grid, f.grid.lat0, f.grid.lon0, f.grid.dlat, f.grid.dlon);
-    gl.uniform2f(u.u_dims, f.grid.ni, f.grid.nj);
-    gl.uniform1f(u.u_opacity, 0.85);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, f.tex);
-    gl.uniform1i(u.u_radar, 0);
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.lutTex);
-    gl.uniform1i(u.u_lut, 1);
-    gl.activeTexture(gl.TEXTURE0);
+    const common = (u) => {
+      gl.uniform2f(u.u_size, cam.w, cam.h);
+      gl.uniform1f(u.u_dpr, map.dpr);
+      gl.uniform2f(u.u_center, cam.cx, cam.cy);
+      gl.uniform1f(u.u_scale, cam.scale);
+      gl.uniform2f(u.u_rot, Math.cos(cam.bearing), Math.sin(cam.bearing));
+    };
     gl.bindVertexArray(this.vao);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (this.satOn) {
+      const t = this.satNow();
+      this.shownSat = t;
+      const s = t == null ? null : this.sats.get(t);
+      if (s) {
+        s.used = performance.now();
+        const { p, u } = this.satProg;
+        gl.useProgram(p);
+        common(u);
+        gl.uniform4f(u.u_box, ...s.box);
+        gl.uniform1f(u.u_opacity, 1);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, s.tex);
+        gl.uniform1i(u.u_sat, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
+    }
+    if (this.radarOn) {
+      const t = this.frameNow();
+      this.shown = t;
+      const f = t == null ? null : this.frames.get(t);
+      if (f) {
+        f.used = performance.now();
+        const { p, u } = this.prog;
+        gl.useProgram(p);
+        common(u);
+        gl.uniform4f(u.u_grid, f.grid.lat0, f.grid.lon0, f.grid.dlat, f.grid.dlon);
+        gl.uniform2f(u.u_dims, f.grid.ni, f.grid.nj);
+        gl.uniform1f(u.u_opacity, 0.85);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, f.tex);
+        gl.uniform1i(u.u_radar, 0);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, this.lutTex);
+        gl.uniform1i(u.u_lut, 1);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
+    }
     gl.bindVertexArray(null);
   }
 
@@ -335,6 +518,7 @@ export class WeatherLayer {
     };
     for (const hz of this.state.hazards) {
       if (hz.hazard === "FZLVL") continue; // freezing-level contours: lines across the whole map
+      if (!atLevel(hz, this.level)) continue;
       const style = HAZARD_STYLE[hz.hazard] ?? { color: "#444" };
       ctx.strokeStyle = style.color;
       ctx.fillStyle = `${style.color}22`;
@@ -371,8 +555,8 @@ export class WeatherLayer {
     const gl = this.map.gl;
     const n = 41, d = 0.001;
     const grid = { ni: n, nj: n, lat0: ll[1] + 20 * d, lon0: ll[0] - 20 * d, dlat: d, dlon: d };
-    const saved = { frames: this.frames, looping: this.looping, radarOn: this.radarOn };
-    Object.assign(this, { looping: false, radarOn: true });
+    const saved = { frames: this.frames, looping: this.looping, radarOn: this.radarOn, satOn: this.satOn, override: this.override };
+    Object.assign(this, { looping: false, radarOn: true, satOn: false, override: [0] });
     this.map.jumpTo({ center: ll, zoom: 15, bearing: 0 });
     await new Promise((r) => (this.map.areTilesLoaded() ? r() : this.map.once("idle", r)));
     const shot = async (lit) => {
@@ -433,8 +617,13 @@ export class WeatherLayer {
     const since = (k) => (this.marks[k] == null ? null : Math.round(this.marks[k] - this.marks.enabled));
     return {
       ms_to: { first_frame: since("firstFrame"), hazards: since("hazards"), all_frames: since("allFrames") },
+      at: s.at,
+      selection: s.selection,
       frames: [...this.frames.keys()].length,
+      sats: [...this.sats.keys()].length,
       shown: this.shown,
+      shown_sat: this.shownSat,
+      last_error: this.lastError ?? null,
       gpu_bytes: this.gpuBytes,
       grid: s.grid,
       hazards: s.hazards?.length ?? 0,

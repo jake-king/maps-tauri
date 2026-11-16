@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window may use core APIs and its app commands: report, search, and the F4 overlay's dev_stats, dev_flags, bench_done, and archive_info for the native renderer, and the weather layer's wx_enable, wx_state and wx_frame.",
+  "description": "The main window may use core APIs and its app commands: report, search, and the F4 overlay's dev_stats, dev_flags, bench_done, and archive_info for the native renderer, and the weather layer's wx_enable, wx_state, wx_frame and wx_satellite.",
   "windows": ["main"],
-  "permissions": ["core:default", "allow-report", "allow-search", "allow-dev-stats", "allow-dev-flags", "allow-bench-done", "allow-archive-info", "allow-save-snapshot", "allow-wx-enable", "allow-wx-state", "allow-wx-frame"]
+  "permissions": ["core:default", "allow-report", "allow-search", "allow-dev-stats", "allow-dev-flags", "allow-bench-done", "allow-archive-info", "allow-save-snapshot", "allow-wx-enable", "allow-wx-state", "allow-wx-frame", "allow-wx-satellite"]
 }

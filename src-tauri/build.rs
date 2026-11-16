@@ -13,6 +13,7 @@ fn main() {
             "wx_enable",
             "wx_state",
             "wx_frame",
+            "wx_satellite",
         ]),
     ))
     .expect("failed to run tauri-build");

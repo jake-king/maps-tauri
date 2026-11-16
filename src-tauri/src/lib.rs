@@ -303,25 +303,40 @@ fn wx_enable(app: tauri::AppHandle, w: tauri::State<'_, Arc<weather::Weather>>) 
         let _ = app.emit("wx-changed", ());
     };
     w.enable(Arc::new(weather::Noaa::new()), Arc::new(changed));
-    w.state(unix_now())
+    w.state(unix_now(), unix_now())
 }
 
-/// Radar frame times, the grid, the hazard snapshot nearest now, and how fresh each is.
+/// What to show at `at` (Unix seconds; default now): the radar loop, satellite image and hazard
+/// snapshot for that time, what exists over the time bar, and how fresh it all is.
 #[tauri::command]
-fn wx_state(w: tauri::State<'_, Arc<weather::Weather>>) -> Value {
-    w.state(unix_now())
+fn wx_state(at: Option<i64>, w: tauri::State<'_, Arc<weather::Weather>>) -> Value {
+    let now = unix_now();
+    w.state(at.unwrap_or(now), now)
 }
 
 /// One radar frame's cells, one byte each (wx::radar's code), as raw bytes rather than JSON.
-#[tauri::command]
+/// Fetched from NOAA first if not held: `async` runs it on Tauri's thread pool, off the UI thread.
+#[tauri::command(async)]
 fn wx_frame(
     time: i64,
     w: tauri::State<'_, Arc<weather::Weather>>,
 ) -> Result<tauri::ipc::Response, String> {
-    let r = w
-        .frame(time)
-        .ok_or_else(|| format!("no radar frame at {time}"))?;
-    Ok(tauri::ipc::Response::new(r.codes.clone()))
+    let src = w.source().ok_or("weather is off")?;
+    Ok(tauri::ipc::Response::new(
+        w.radar_frame(src.as_ref(), time)?,
+    ))
+}
+
+/// One satellite image's grey levels (wx::satellite), one byte a pixel, fetched first if not held.
+#[tauri::command(async)]
+fn wx_satellite(
+    time: i64,
+    w: tauri::State<'_, Arc<weather::Weather>>,
+) -> Result<tauri::ipc::Response, String> {
+    let src = w.source().ok_or("weather is off")?;
+    Ok(tauri::ipc::Response::new(
+        w.satellite_image(src.as_ref(), time)?,
+    ))
 }
 
 fn unix_now() -> i64 {
@@ -453,7 +468,8 @@ pub fn run() {
             save_snapshot,
             wx_enable,
             wx_state,
-            wx_frame
+            wx_frame,
+            wx_satellite
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # The weather layer end to end, on the release build, against NOAA (needs the internet, so it is not
 # part of tools/check.sh): both layers on, every radar frame on the GPU and the hazards loaded,
-# then two checks:
+# then the same 3 hours back, then these checks:
+#   - both times fully loaded (radar loop, satellite image, hazards), nothing from after the chosen time,
+#     and the flight-level filter narrowing the hazards
 #   - registration: a synthetic one-cell frame at Santa Monica Pier must land where the map's own
 #     projection puts the pier, within half a cell, and be one cell wide and 1/cos(lat) cells tall
 #   - nothing reported an error, and real data arrived (frames, hazards)
@@ -29,11 +31,26 @@ if bad:
 if not bench:
     sys.exit("weather: FAILED: no [bench] line (logs/weather-e2e.log)")
 r = json.loads(bench[0][8:])
-w, p = r["weather"], r["probe"]
-if w["errors"]:
-    fail.append(f"fetch errors: {w['errors']}")
-if w["frames"] < 1 or w["hazards"] < 1:
-    fail.append(f"no data: {w['frames']} frames, {w['hazards']} hazards")
+w, past, p = r["weather"], r["past"], r["probe"]
+for name, x in (("live", w), ("3 h back", past)):
+    if x["errors"]:
+        fail.append(f"{name}: fetch errors: {x['errors']}")
+    if x["last_error"]:
+        fail.append(f"{name}: the layer reported: {x['last_error']}")
+    sel = x["selection"] or {}
+    if len(sel.get("radar") or []) < 4:
+        fail.append(f"{name}: radar loop of {len(sel.get('radar') or [])} frames")
+    if x["shown_sat"] is None:
+        fail.append(f"{name}: no satellite image drawn")
+    if x["hazards"] < 1:
+        fail.append(f"{name}: no hazards")
+if any(t > r["back"] for t in past["selection"]["radar"]):
+    fail.append(f"3 h back: a radar frame from after the chosen time: {past['selection']['radar']} > {r['back']}")
+if past["selection"]["satellite"] is None or past["selection"]["satellite"] > r["back"]:
+    fail.append(f"3 h back: satellite {past['selection']['satellite']} is not at or before {r['back']}")
+lv = r["levels"]
+if not (lv["all"] >= lv["180"] and lv["all"] > min(lv["100"], lv["180"], lv["340"])):
+    fail.append(f"the flight-level filter changed nothing: {lv}")
 cell = p.get("cell_css") or 0
 if not p.get("changed"):
     fail.append("probe: the lit cell drew nothing")
@@ -45,7 +62,7 @@ else:
         fail.append(f"probe: cell drawn {dx}, {dy} px from the pier (half a cell is {cell / 2:.0f} x {tall / 2:.0f})")
     if abs(bw - cell) > 2 or abs(bh - tall) > 2:
         fail.append(f"probe: cell drawn {bw} x {bh} px, expected {cell} x {tall:.0f}")
-print(f"weather: {w['frames']} frames ({w['gpu_bytes'] / 1e6:.0f} MB on the GPU), {w['hazards']} hazard areas, ready in {r['wait_ms'] / 1000:.1f} s; probe {p}")
+print(f"weather: live ready in {r['live_ms'] / 1000:.1f} s, 3 h back in {r['past_ms'] / 1000:.1f} s; GPU {past['gpu_bytes'] / 1e6:.0f} MB; hazards by level {lv}; probe {p}")
 if fail:
     print("weather: FAILED:\n  " + "\n  ".join(fail))
     sys.exit(1)

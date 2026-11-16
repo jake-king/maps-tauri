@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { lut, codeToDbz, hazardLabel, age, status, DBZ_COLORS } from "../src/rust-renderer/weather.js";
+import { lut, codeToDbz, hazardLabel, age, status, stamp, atLevel, flightLevel, zulu, relative, mercToWorld, DBZ_COLORS } from "../src/rust-renderer/weather.js";
+import { range, chosen, along } from "../src/rust-renderer/timebar.js";
 
 test("codes map back to dBZ as wx::radar writes them", () => {
   assert.equal(codeToDbz(0), null);
@@ -37,15 +38,74 @@ test("ages", () => {
 });
 
 test("the status line says what is loading, from the first click", () => {
-  const on = { radar: true, hazards: true };
+  const on = { radar: true, satellite: true, hazards: true };
   const now = Date.UTC(2026, 10, 16, 20, 10) / 1000;
-  const base = { now, frames: [], radarOk: null, hazardsOk: null, hazardsValid: null, fromDisk: false, errors: [] };
+  const sel = { radar: [now - 2400, now - 1800, now - 1200, now - 600, now], satellite: now - 120, hazards: now + 3000 };
+  const base = { now, at: now, selection: { radar: [], satellite: null, hazards: null }, radarOk: null, satelliteOk: null, hazardsOk: null, hazardsValid: null, fromDisk: false, errors: [], loading: { busy: true, hazards: false } };
   assert.equal(status(null, on), "starting…");
-  assert.equal(status(null, { radar: false, hazards: false }), "");
-  assert.equal(status({ ...base, loading: { busy: true, held: 0, wanted: 0, hazards: false } }, on), "radar: loading… · hazards: loading…");
-  assert.equal(status({ ...base, frames: [now - 60], loading: { busy: true, held: 1, wanted: 10, hazards: true } }, on), "radar: loading 1 of 10… · hazards: loading…");
-  const done = { ...base, frames: Array.from({ length: 10 }, (_, i) => now - 1200 + i * 120), radarOk: now, hazardsOk: now, hazardsValid: now + 3000, loading: { busy: false, held: 10, wanted: 10, hazards: false } };
-  assert.equal(status(done, on), "radar 20:08Z, 2 min old (10 frames) · hazards valid 21:00Z, in 0.8 h");
-  assert.equal(status({ ...done, hazardsValid: null }, { radar: false, hazards: true }), "hazards: none issued");
-  assert.equal(status({ ...done, fromDisk: true, errors: ["x"] }, { radar: true, hazards: false }), "radar 20:08Z, 2 min old (10 frames) · offline: last fetched · 1 fetch errors");
+  assert.equal(status(null, { radar: false, satellite: false, hazards: false }), "");
+  assert.equal(status(base, on, {}), "radar: loading… · satellite: loading… · hazards: loading…");
+  const some = { ...base, selection: sel, hazardsValid: now + 3000, radarOk: now, satelliteOk: now, hazardsOk: now, loading: { busy: false, hazards: false } };
+  assert.equal(status(some, on, { radar: 1, satellite: false }), "radar: loading 1 of 5… · satellite: loading…");
+  assert.equal(status(some, on, { radar: 5, satellite: true }), "", "all there: nothing to say");
+  assert.equal(status({ ...some, fromDisk: true, errors: ["x"] }, on, { radar: 5, satellite: true }), "offline: last fetched · 1 fetch errors");
+  // the future: no radar or satellite exists, and that is not "loading"
+  const ahead = { ...some, at: now + 6 * 3600, selection: { radar: [], satellite: null, hazards: now + 5 * 3600 } };
+  assert.equal(status(ahead, on, { radar: 0, satellite: null }), "");
+});
+
+test("the valid-time stamp says what each layer shows and when it is from", () => {
+  const now = Date.UTC(2026, 10, 16, 20, 10) / 1000;
+  const on = { radar: true, satellite: true, hazards: true };
+  const s = { now, at: now - 3 * 3600, selection: { radar: [now - 3 * 3600 - 600, now - 3 * 3600], satellite: now - 3 * 3600 - 120 }, hazardsValid: now - 2 * 3600 - 600 };
+  assert.equal(stamp(s, on), "Radar 17:10Z obs · Satellite 17:08Z obs · Hazards 18:00Z issued");
+  const ahead = { now, at: now + 6 * 3600, selection: { radar: [], satellite: null }, hazardsValid: now + 4 * 3600 + 3000 };
+  assert.equal(stamp(ahead, on), "Radar: observations only · Satellite: observations only · Hazards 01:00Z fcst +4 h 50 min");
+  assert.equal(stamp({ ...s, selection: { radar: [], satellite: null } }, { radar: true, satellite: false, hazards: false }), "Radar: none at this time");
+});
+
+test("hazards by flight level: within 3,000 ft of base or top, as GFA", () => {
+  const turb = { base: "180", top: "400" };
+  assert.equal(atLevel(turb, null), true);
+  assert.equal(atLevel(turb, 300), true);
+  assert.equal(atLevel(turb, 150), true, "FL150 is 3,000 ft under the base");
+  assert.equal(atLevel(turb, 140), false);
+  assert.equal(atLevel(turb, 430), true);
+  assert.equal(atLevel(turb, 440), false);
+  assert.equal(atLevel({ base: "SFC", top: "100" }, 30), true);
+  assert.equal(atLevel({ base: "FZL", top: "230" }, 240), true);
+  assert.equal(atLevel({ base: "FZL", top: "230" }, 300), false);
+  assert.equal(atLevel({}, 450), true, "no base or top: shown");
+  assert.equal(flightLevel("SFC"), 0);
+  assert.equal(flightLevel("x"), null);
+});
+
+test("times as a dispatcher reads them", () => {
+  const t = Date.UTC(2026, 10, 16, 18, 40) / 1000;
+  assert.equal(zulu(t), "18:40Z");
+  assert.equal(relative(t, t), "now");
+  assert.equal(relative(t - 2 * 3600 - 1200, t), "-2 h 20 min");
+  assert.equal(relative(t + 3 * 3600, t), "+3 h");
+  assert.equal(relative(t - 600, t), "-10 min");
+});
+
+test("Web Mercator metres to the renderer's world coordinates", () => {
+  const half = Math.PI * 6378137;
+  assert.deepEqual(mercToWorld(0, 0), [0.5, 0.5]);
+  assert.deepEqual(mercToWorld(-half, half), [0, 0]);
+  assert.deepEqual(mercToWorld(half, -half), [1, 1]);
+});
+
+test("the time bar: its range, a slider value to a time, positions", () => {
+  const now = Date.UTC(2026, 10, 16, 20, 7) / 1000;
+  const r = range(now, 18 * 3600);
+  assert.equal(r[0] % 600, 0);
+  assert.equal(r[1] % 600, 0);
+  assert.ok(r[0] <= now - 18 * 3600 && r[0] > now - 18 * 3600 - 600);
+  assert.ok(r[1] >= now + 12 * 3600 && r[1] < now + 12 * 3600 + 600);
+  assert.equal(chosen(now + 100, now), null, "within a step of now is live");
+  assert.equal(chosen(now - 3 * 3600, now), Math.floor((now - 3 * 3600) / 600) * 600);
+  assert.equal(along(r[0], r), 0);
+  assert.equal(along(r[1] + 9999, r), 1);
+  assert.ok(Math.abs(along(now, r) - 0.6) < 0.01, "now sits 18 of 30 hours along");
 });

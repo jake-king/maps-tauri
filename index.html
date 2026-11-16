@@ -5,8 +5,9 @@
     <title>Maps</title>
     <style>
       html, body, #map { margin: 0; height: 100%; }
-      #status { position: absolute; left: 8px; bottom: 8px; padding: 4px 8px;
-                background: #fffc; font: 12px system-ui; border-radius: 4px; }
+      /* top right: the bottom left belongs to the weather panel, the bottom to its time bar */
+      #status { position: absolute; right: 8px; top: 8px; max-width: 40%; padding: 4px 8px; z-index: 5;
+                background: #fffc; font: 11px system-ui; color: #444; border-radius: 4px; }
     </style>
   </head>
   <body>

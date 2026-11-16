@@ -54,3 +54,31 @@ pub fn gairmet(agent: &ureq::Agent, fore: u32) -> Result<String, String> {
     }
     String::from_utf8(body).map_err(|e| format!("gairmet: {e}"))
 }
+
+/// The satellite image times nowCOAST offers now (its WMS capabilities), ascending.
+pub fn satellite_times(agent: &ureq::Agent) -> Result<Vec<i64>, String> {
+    let xml = get(agent, &crate::satellite::capabilities_url(), 16 << 20)?;
+    let t = crate::satellite::times(&String::from_utf8_lossy(&xml));
+    if t.is_empty() {
+        return Err("satellite: no image times in the capabilities".into());
+    }
+    Ok(t)
+}
+
+/// The satellite image valid at `t`, as the server's PNG. A WMS error comes back as XML with a 200,
+/// so anything that is not a PNG is an error.
+pub fn satellite_image(agent: &ureq::Agent, t: i64) -> Result<Vec<u8>, String> {
+    let body = get(
+        agent,
+        &crate::satellite::url(&crate::satellite::iso(t)),
+        MAX_FRAME,
+    )?;
+    if !body.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(format!(
+            "satellite {}: not a PNG: {}",
+            crate::satellite::iso(t),
+            String::from_utf8_lossy(&body[..body.len().min(200)])
+        ));
+    }
+    Ok(body)
+}

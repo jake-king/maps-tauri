@@ -4,7 +4,8 @@ import js from "@eslint/js";
 import globals from "globals";
 
 export default [
-  { ignores: ["dist/", "node_modules/", "src/wasm/", "target/", "src-tauri/target/", "src-tauri/gen/"] },
+  // logs/ holds scratch files and run output, never source
+  { ignores: ["dist/", "node_modules/", "src/wasm/", "target/", "src-tauri/target/", "src-tauri/gen/", "logs/"] },
   js.configs.recommended,
   {
     files: ["src/**/*.js"],

@@ -11,7 +11,8 @@ import { say, memprobeBlank, startDevtools } from "../devtools/harness.js";
 import { createSearchBox } from "./search.js";
 import initCoords, { coordFeatures } from "../wasm/coords.js";
 import { once } from "./once.js";
-import { WeatherLayer, status as wxStatusText } from "./weather.js";
+import { WeatherLayer, status as wxStatusText, stamp as wxStampText, atLevel } from "./weather.js";
+import { TimeBar } from "./timebar.js";
 
 const flags = await invoke("dev_flags");
 const gpu = installGpuLedger(WebGL2RenderingContext.prototype, new GpuLedger());
@@ -61,13 +62,14 @@ const creditShown = () => {
   const inside = r.width > 0 && r.height > 0 && r.right <= innerWidth && r.bottom <= innerHeight;
   return { text: credit.textContent, inside };
 };
-// Weather: NOAA radar and G-AIRMET hazards, off until a box is ticked (nothing is fetched before).
+// Weather, synced to one chosen time (GFA's model): NOAA radar, GOES satellite clouds and G-AIRMET
+// hazards, off until a box is ticked (nothing is fetched before).
 const wxPanel = document.createElement("div");
 wxPanel.style.cssText = "position:absolute;left:10px;bottom:10px;z-index:20;padding:6px 10px;background:#fffe;border-radius:6px;" +
-  "box-shadow:0 1px 4px #0003;font:12px 'Noto Sans',sans-serif;color:#222;";
+  "box-shadow:0 1px 4px #0003;font:12px 'Noto Sans',sans-serif;color:#222;width:254px;box-sizing:border-box;";
 const wxBox = (label) => {
   const l = document.createElement("label");
-  l.style.cssText = "margin-right:10px;cursor:pointer;";
+  l.style.cssText = "margin-right:10px;cursor:pointer;white-space:nowrap;";
   const b = document.createElement("input");
   b.type = "checkbox";
   b.style.cssText = "vertical-align:middle;margin:0 4px 0 0;";
@@ -76,17 +78,39 @@ const wxBox = (label) => {
   return b;
 };
 const radarBox = wxBox("Radar");
-const hazardBox = wxBox("G-AIRMET hazards");
+const satBox = wxBox("Satellite");
+const hazardBox = wxBox("Hazards");
 const wxStatus = document.createElement("div");
-wxStatus.style.cssText = "margin-top:3px;color:#555;font-size:11px;";
+wxStatus.style.cssText = "margin-top:3px;color:#555;font-size:11px;min-height:14px;";
 wxPanel.append(wxStatus);
 document.getElementById("map").appendChild(wxPanel);
+// what each layer shows and when it is from, over the map (GFA puts the valid time on the map)
+const wxStamp = document.createElement("div");
+wxStamp.style.cssText = "position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:20;padding:4px 10px;background:#fffe;" +
+  "border-radius:6px;box-shadow:0 1px 4px #0003;font:600 12px 'Noto Sans',sans-serif;color:#222;display:none;pointer-events:none;";
+document.getElementById("map").appendChild(wxStamp);
+const layers = () => ({ radar: radarBox.checked, satellite: satBox.checked, hazards: hazardBox.checked });
 const weather = new WeatherLayer(map, {
-  onChange: (s) => (wxStatus.textContent = wxStatusText(s, { radar: radarBox.checked, hazards: hazardBox.checked })),
+  onChange: (s) => {
+    wxStatus.textContent = wxStatusText(s, layers(), weather.progress());
+    wxStamp.textContent = wxStampText(s, layers());
+    wxStamp.style.display = wxStamp.textContent ? "block" : "none";
+    timeBar.update(s);
+  },
 });
-const wxSet = () => weather.set({ radar: radarBox.checked, hazards: hazardBox.checked }).catch((e) => say(`map error: weather: ${e.message ?? e}`));
-radarBox.addEventListener("change", wxSet);
-hazardBox.addEventListener("change", wxSet);
+const timeBar = new TimeBar(document.getElementById("map"), {
+  onTime: (at) => weather.setTime(at).catch((e) => say(`map error: weather: ${e.message ?? e}`)),
+  onLevel: (fl) => weather.setLevel(fl),
+  onLoop: (on) => {
+    weather.looping = on;
+    map.triggerRepaint();
+  },
+});
+const wxSet = () => {
+  timeBar.show(radarBox.checked || satBox.checked || hazardBox.checked);
+  return weather.set(layers()).catch((e) => say(`map error: weather: ${e.message ?? e}`));
+};
+for (const b of [radarBox, satBox, hazardBox]) b.addEventListener("change", wxSet);
 // pixel check: a magenta background, so any uncovered screen area is countable
 if (flags.pixelCheck) map.setBackground([1, 0, 1, 1]);
 map.on("error", (e) => say(`map error: ${e.error?.message ?? e}`));
@@ -120,21 +144,43 @@ map.whenIdle().then(async () => {
     },
     // MAPS_WEATHER=1: both layers on, wait for every frame and the hazards (90 s at most), then a
     // picture of the whole country with the loop held on the newest frame
+    // MAPS_WEATHER=1: all three layers on; wait for the present (its radar loop, satellite image and
+    // hazards, 90 s at most), picture it; then 3 hours back, the same; then the registration probe
     weather: async () => {
-      radarBox.checked = hazardBox.checked = true;
+      radarBox.checked = satBox.checked = hazardBox.checked = true;
       await wxSet();
-      const t0 = performance.now();
-      // wait on the layer's own updates, as a user would: no extra polling from here
       const statuses = new Set([wxStatus.textContent]);
-      while ((weather.marks.allFrames == null || weather.marks.hazards == null) && performance.now() - t0 < 90000) {
+      const ready = () => {
+        const p = weather.progress(), sel = weather.state?.selection ?? {};
+        return sel.radar?.length > 0 && p.radar === sel.radar.length && p.satellite === true && weather.state.hazards?.length > 0;
+      };
+      // wait on the layer's own updates, as a user would: no extra polling from here
+      const settle = async (limit) => {
+        const s0 = performance.now();
+        while (!ready() && performance.now() - s0 < limit) {
+          statuses.add(wxStatus.textContent);
+          await new Promise((r) => setTimeout(r, 100));
+        }
         statuses.add(wxStatus.textContent);
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      statuses.add(wxStatus.textContent);
+        return Math.round(performance.now() - s0);
+      };
+      const liveMs = await settle(90000);
       weather.looping = false;
-      const path = await snapshot(map, "weather", { center: [-97, 38.5], zoom: 3.6 }, (ctx) => ctx.drawImage(weather.canvas, 0, 0, ctx.canvas.width, ctx.canvas.height));
+      const live = weather.report();
+      const pic = (name) => snapshot(map, name, { center: [-97, 38.5], zoom: 3.6 }, (ctx) => ctx.drawImage(weather.canvas, 0, 0, ctx.canvas.width, ctx.canvas.height));
+      const livePath = await pic("weather");
+      const back = Math.floor((weather.state.now - 3 * 3600) / 600) * 600;
+      const p0 = performance.now();
+      timeBar.pick(back);
+      await new Promise((r) => setTimeout(r, 50));
+      const pastMs = await settle(90000);
+      const past = weather.report();
+      const pastPath = await pic("weather-past");
+      const all = weather.state.hazards ?? [];
+      const levels = Object.fromEntries([null, 100, 180, 340].map((fl) => [fl ?? "all", all.filter((h) => h.hazard !== "FZLVL" && atLevel(h, fl)).length]));
+      timeBar.pick(null);
       const probe = await weather.probe();
-      return invoke("bench_done", { result: { weather: weather.report(), wait_ms: Math.round(performance.now() - t0), statuses: [...statuses], probe, snapshot: path } });
+      return invoke("bench_done", { result: { weather: live, live_ms: liveMs, past, past_ms: pastMs, past_wait_ms: Math.round(performance.now() - p0), back, levels, statuses: [...statuses], probe, snapshots: [livePath, pastPath] } });
     },
   });
 });

@@ -1063,3 +1063,41 @@ instead of landing in one. Peak memory in the stress runs read 17-57 MB higher, 
 the new build differed by 38 MB between themselves, and the idle probe, three interleaved runs each,
 shows no difference; I read it as run-to-run noise. The zoom benchmark's one zoom-out frame with 1-2%
 background is there in both builds: the known gap, not a new one.
+
+## A time bar: radar, satellite and hazards at any time in 18 hours
+
+The model came from the Aviation Weather Center's GFA, read from its help page rather than guessed: one
+time slider (18 hours back to 18 ahead), every layer synced to it, observations in the past and
+forecasts in the future, the radar loop being the five images ending at the slider's time, the valid
+time stamped on the map, and an altitude control that shows an advisory only within 3,000 ft of the
+chosen level.
+
+Satellite needed a source, and the first two candidates each failed on a fact checked before any code.
+NASA GIBS serves GOES infrared as Web Mercator tiles with a time parameter, but its newest image was 5
+hours 18 minutes old. AWC's own mosaic is not public. NOAA's nowCOAST WMS has GOES-East and West
+longwave every 5 minutes, five minutes behind real time, but only about 6.5 hours of history, and it
+renders greyscale where GIBS is colour-enhanced: stitching the two would change the clouds' colours
+partway along the bar. Satellite uses nowCOAST alone for now, and the bar shows where its history
+ends. Its PNG was histogrammed before the shader was written: 25% of pixels transparent (no
+satellite), clear ground at grey 48-128, cloud tops 130-224; the shader fades cloud in from 130.
+
+`wx::timeline` decides what to show at a time: a radar slot takes the frame nearest it within 4
+minutes and never one from after the chosen time; satellite is the newest image at or before it and
+no older than 30 minutes (a stopped feed is not passed off as current); hazards are the snapshot
+valid nearest. A planted defect survived its tests: removing the deduplication of loop frames
+changed nothing, because two slots 10 minutes apart can never both take a frame that must be within
+4 minutes of each. The dedup was dead code; it is now a compile-time assertion of that reason.
+
+The backend went from "keep the newest ten frames" to "serve any time": what exists on the servers is
+refreshed every round, frames and images are fetched when first needed with one fetch per key
+however many callers ask, kept compressed and evicted least recently used, but never the present's
+loop. The first run of its tests hung: a line held the weather lock while calling a function that
+takes it again, and Rust's Mutex is not re-entrant. Killing the hung test with `pkill -f` killed my
+own shell, twice, because the pattern appeared in the command line doing the killing; `pkill -x` on
+the process name does not have that problem.
+
+The window, captured with the dev status line moved out of the weather panel's corner: the stamp
+reads "Radar 22:00Z obs · Satellite 21:58Z obs · Hazards 21:00Z issued", and the bar shows radar
+history back to its start, satellite from 15Z, hazard snapshots at 21Z to 09Z and the red now line.
+`tools/weather.sh`: the present ready in 5.6 s, three hours back in 4.3 s, the flight-level filter
+taking 21 hazard areas to 11-18 depending on the level, registration still exact.

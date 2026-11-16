@@ -51,23 +51,35 @@ Against the remote planet over a LAN, the disk cache took frames with background
 
 ## Weather
 
-Two layers for the native renderer, off until their boxes are ticked; nothing is fetched from NOAA
-before that. Rust fetches on a background thread, every two minutes for radar and every fifteen for
-hazards, and keeps what it fetched in a small SQLite file, so the last weather still shows offline,
-labelled with its age.
+Three layers for the native renderer, synced to one chosen time the way the Aviation Weather
+Center's GFA does it, and off until their boxes are ticked: nothing is fetched from NOAA before that.
 
-- Radar: the newest ten MRMS base reflectivity mosaics (about 20 minutes), animated. Each frame is
-  0.7 MB of GRIB2, decoded and thinned to a 3500 x 1750 grid of one-byte cells (0.02°) and uploaded
-  once as a texture, 61 MB on the GPU for the ten. It is drawn in one full-screen pass: the shader
-  takes each pixel back to latitude and longitude through the camera and Web Mercator and looks its
-  cell up, so the radar grid is never reprojected on the CPU. Colours are the NWS reflectivity scale.
-- Hazards: the G-AIRMET snapshot nearest the present (turbulence, icing, IFR, mountain obscuration,
-  surface wind), outlined and labelled with severity and flight levels.
+- A time bar from 18 hours back to 12 hours ahead, in UTC, in 10-minute steps. Radar and satellite
+  are observations, so they exist up to the present; the hazards are forecasts. Under the slider:
+  radar and satellite history as strips, the hazard snapshot times as marks, and now. The valid time
+  of what each layer shows is stamped on the map.
+- Radar: MRMS base reflectivity, a loop of five frames ten minutes apart ending at the chosen time.
+  Frames for a past time are fetched when first needed from NOAA's 24-hour archive, decoded in Rust
+  (0.7 MB of GRIB2 each, thinned to 3500 x 1750 one-byte cells) and kept compressed in memory and on
+  disk; the GPU holds up to 15 as textures. The shader takes each pixel back to latitude and
+  longitude through the camera and Web Mercator and looks its cell up.
+- Satellite: GOES-East and West longwave infrared from NOAA's nowCOAST map server, every 5 minutes,
+  about 6.5 hours of history (older imagery exists, from NASA GIBS, but about 5 hours behind real
+  time and colour-enhanced; not used yet). Clear ground is transparent; colder, higher cloud tops are
+  more opaque.
+- Hazards: the G-AIRMET snapshot valid nearest the chosen time (turbulence, icing, IFR, mountain
+  obscuration, surface wind), outlined and labelled, filtered by flight level as GFA does: an area
+  shows if the level is within 3,000 ft of its base or top.
 
-`tools/weather.sh` checks it end to end against NOAA: real data must arrive with no errors, and a
-synthetic one-cell frame at a known point must land where the map's own projection puts that point,
-one cell wide and 1/cos(latitude) cells tall. The shader and the map's projection are separate code,
-so each checks the other.
+Rust keeps the present warm in the background (every two minutes: the newest radar frame first,
+then the hazards, the newest satellite image, then the rest of the loop) and tells the webview as
+each piece arrives. Whatever was fetched is shown again offline, marked as such.
+
+`tools/weather.sh` checks it end to end against NOAA: the present and three hours back must each load
+fully (radar loop, satellite image, hazards) with nothing shown from after the chosen time, the
+flight-level filter must narrow the hazards, and a synthetic one-cell radar frame at a known point
+must land where the map's own projection puts that point, one cell wide and 1/cos(latitude) cells
+tall.
 
 ## Data
 
