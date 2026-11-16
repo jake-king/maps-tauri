@@ -5,6 +5,7 @@
 // looks its cell up, so the radar's own latitude/longitude grid is never reprojected on the CPU.
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 const VS = `#version 300 es
 // one triangle that covers the screen: vertex ids 0, 1, 2 -> (-1,-1), (3,-1), (-1,3)
@@ -88,6 +89,26 @@ export function hazardLabel(h) {
   return parts.join(" ");
 }
 
+/** The panel's status line for `s` (wx_state, or null before the first answer). */
+export function status(s, { radar, hazards }) {
+  if (!radar && !hazards) return "";
+  if (!s) return "starting…";
+  const parts = [];
+  const l = s.loading ?? {};
+  if (radar) {
+    if (l.busy && l.wanted && l.held < l.wanted) parts.push(`radar: loading ${l.held} of ${l.wanted}…`);
+    else if (s.frames.length) parts.push(`radar ${age(s.frames.at(-1), s.now)} (${s.frames.length} frames)`);
+    else parts.push(l.busy || !s.radarOk ? "radar: loading…" : "radar: none");
+  }
+  if (hazards) {
+    if (s.hazardsValid != null) parts.push(`hazards valid ${age(s.hazardsValid, s.now)}${l.hazards ? ", updating…" : ""}`);
+    else parts.push(l.hazards || l.busy || !s.hazardsOk ? "hazards: loading…" : "hazards: none issued");
+  }
+  if (s.fromDisk) parts.push("offline: last fetched");
+  if (s.errors?.length) parts.push(`${s.errors.length} fetch errors`);
+  return parts.join(" · ");
+}
+
 /** "20:04Z, 3 min old" from Unix seconds. */
 export function age(t, now) {
   if (t == null) return "none";
@@ -126,6 +147,8 @@ export class WeatherLayer {
     this.shown = null; // time of the frame drawn last
     this.loopStart = performance.now();
     this.gpuBytes = 0;
+    /** performance.now() of: enabled, first frame on the GPU, hazards present, every frame held */
+    this.marks = {};
     const gl = map.gl;
     this.prog = program(gl);
     this.vao = gl.createVertexArray();
@@ -146,20 +169,46 @@ export class WeatherLayer {
 
   /** Turn layers on or off. The first time either goes on, Rust starts fetching. */
   async set({ radar = this.radarOn, hazards = this.hazardsOn }) {
+    this.marks.enabled ??= performance.now();
     this.radarOn = radar;
     this.hazardsOn = hazards;
     if ((radar || hazards) && !this.timer) {
+      this.onChange?.(null); // "starting": shown before the first answer
+      // Rust says when anything arrives; the slow poll is only a safety net
+      await listen("wx-changed", () => this.refresh());
       this.state = await invoke("wx_enable");
-      this.timer = setInterval(() => this.refresh(), 15000);
+      this.timer = setInterval(() => this.refresh(), 60000);
       this.tick = setInterval(() => this.animate(), 100);
       await this.refresh();
+    } else {
+      this.onChange?.(this.state);
     }
     this.map.triggerRepaint();
   }
 
+  /** Fetch the state and upload new frames. Signals arrive in bursts (one per frame): a refresh
+   *  asked for while one runs is folded into a single rerun after it. */
   async refresh() {
+    if (this.refreshing) {
+      this.again = true;
+      return;
+    }
+    this.refreshing = true;
+    try {
+      do {
+        this.again = false;
+        await this.refreshOnce();
+      } while (this.again);
+    } finally {
+      this.refreshing = false;
+    }
+  }
+
+  async refreshOnce() {
     this.state = await invoke("wx_state");
+    if (this.state.hazards?.length) this.marks.hazards ??= performance.now();
     await this.sync();
+    if (this.state.frames.length >= 10 && this.frames.size === this.state.frames.length) this.marks.allFrames ??= performance.now();
     this.onChange?.(this.state);
     this.map.triggerRepaint();
   }
@@ -192,6 +241,7 @@ export class WeatherLayer {
         gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
         this.frames.set(t, { tex, bytes: buf.length, grid: g });
         this.gpuBytes += buf.length;
+        this.marks.firstFrame ??= performance.now();
         this.map.triggerRepaint();
       }
     } finally {
@@ -363,7 +413,9 @@ export class WeatherLayer {
   /** What the end-to-end check reports. */
   report() {
     const s = this.state ?? {};
+    const since = (k) => (this.marks[k] == null ? null : Math.round(this.marks[k] - this.marks.enabled));
     return {
+      ms_to: { first_frame: since("firstFrame"), hazards: since("hazards"), all_frames: since("allFrames") },
       frames: [...this.frames.keys()].length,
       shown: this.shown,
       gpu_bytes: this.gpuBytes,

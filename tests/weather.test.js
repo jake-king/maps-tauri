@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { lut, codeToDbz, hazardLabel, age, DBZ_COLORS } from "../src/rust-renderer/weather.js";
+import { lut, codeToDbz, hazardLabel, age, status, DBZ_COLORS } from "../src/rust-renderer/weather.js";
 
 test("codes map back to dBZ as wx::radar writes them", () => {
   assert.equal(codeToDbz(0), null);
@@ -34,4 +34,18 @@ test("ages", () => {
   assert.equal(age(t, t + 3 * 3600), "20:04Z, 3 h old");
   assert.equal(age(t, t - 5400), "20:04Z, in 1.5 h");
   assert.equal(age(null, t), "none");
+});
+
+test("the status line says what is loading, from the first click", () => {
+  const on = { radar: true, hazards: true };
+  const now = Date.UTC(2026, 10, 16, 20, 10) / 1000;
+  const base = { now, frames: [], radarOk: null, hazardsOk: null, hazardsValid: null, fromDisk: false, errors: [] };
+  assert.equal(status(null, on), "starting…");
+  assert.equal(status(null, { radar: false, hazards: false }), "");
+  assert.equal(status({ ...base, loading: { busy: true, held: 0, wanted: 0, hazards: false } }, on), "radar: loading… · hazards: loading…");
+  assert.equal(status({ ...base, frames: [now - 60], loading: { busy: true, held: 1, wanted: 10, hazards: true } }, on), "radar: loading 1 of 10… · hazards: loading…");
+  const done = { ...base, frames: Array.from({ length: 10 }, (_, i) => now - 1200 + i * 120), radarOk: now, hazardsOk: now, hazardsValid: now + 3000, loading: { busy: false, held: 10, wanted: 10, hazards: false } };
+  assert.equal(status(done, on), "radar 20:08Z, 2 min old (10 frames) · hazards valid 21:00Z, in 0.8 h");
+  assert.equal(status({ ...done, hazardsValid: null }, { radar: false, hazards: true }), "hazards: none issued");
+  assert.equal(status({ ...done, fromDisk: true, errors: ["x"] }, { radar: true, hazards: false }), "radar 20:08Z, 2 min old (10 frames) · offline: last fetched · 1 fetch errors");
 });

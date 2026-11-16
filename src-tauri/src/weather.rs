@@ -63,6 +63,10 @@ struct Inner {
     errors: Vec<String>,
     /// true until the first successful fetch: what is shown came from the disk
     from_disk: bool,
+    /// a round is running; how many frames it wants; whether hazards are being fetched
+    busy: bool,
+    wanted: usize,
+    hazards_loading: bool,
 }
 
 pub struct Weather {
@@ -105,7 +109,7 @@ impl Weather {
     }
 
     /// Start the background thread, once: first what the disk holds, then NOAA every two minutes.
-    pub fn enable(self: &Arc<Self>, source: Arc<dyn Source>) {
+    pub fn enable(self: &Arc<Self>, source: Arc<dyn Source>, changed: Arc<dyn Fn() + Send + Sync>) {
         if self.started.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -114,8 +118,9 @@ impl Weather {
             .name("weather".into())
             .spawn(move || {
                 me.load_from_disk();
+                changed();
                 loop {
-                    me.round(source.as_ref(), now());
+                    me.round(source.as_ref(), now(), changed.as_ref());
                     std::thread::sleep(RADAR_EVERY);
                 }
             })
@@ -153,61 +158,57 @@ impl Weather {
         }
     }
 
-    /// One update: the newest radar frames, and the hazards if they are older than 15 minutes. A
-    /// failure keeps what was there.
-    pub fn round(&self, src: &dyn Source, now: i64) {
-        let mut errors = Vec::new();
-        match src.index() {
-            Err(e) => errors.push(format!("radar index: {e}")),
-            Ok(idx) => {
-                let want: Vec<_> = idx.iter().rev().take(FRAMES).rev().cloned().collect();
-                let mut fetched_any = false;
-                for (name, t) in &want {
-                    if self
-                        .inner
-                        .lock()
-                        .expect("weather lock")
-                        .frames
-                        .contains_key(t)
-                    {
-                        continue;
-                    }
-                    match src.frame(name).and_then(|gz| decode(&gz).map(|r| (gz, r))) {
-                        Ok((gz, r)) => {
-                            self.store_frame(*t, &gz);
-                            self.inner
-                                .lock()
-                                .expect("weather lock")
-                                .frames
-                                .insert(*t, Arc::new(r));
-                            fetched_any = true;
-                        }
-                        Err(e) => errors.push(format!("radar {name}: {e}")),
-                    }
-                }
-                if !want.is_empty() {
-                    let keep: Vec<i64> = want.iter().map(|w| w.1).collect();
-                    let mut g = self.inner.lock().expect("weather lock");
-                    // prune only to frames the server still lists, and only once the newest is held
-                    if g.frames.contains_key(keep.last().expect("non-empty")) {
-                        g.frames.retain(|t, _| keep.contains(t));
-                        drop(g);
-                        self.prune_frames(&keep);
-                        let mut g = self.inner.lock().expect("weather lock");
-                        g.radar_ok = Some(now);
-                        g.from_disk = false;
-                    } else {
-                        if fetched_any {
-                            g.from_disk = false;
-                        }
-                        // the newest keeps failing: still bounded, the oldest go first
-                        while g.frames.len() > 2 * FRAMES {
-                            g.frames.pop_first();
-                        }
-                    }
-                }
+    /// One update, most useful first so something shows at once: the newest radar frame, then the
+    /// hazards (if older than 15 minutes), then the older frames for the loop, three at a time.
+    /// `changed` is called after every piece that arrives, so the webview never waits for a whole
+    /// round. A failure keeps what was there.
+    pub fn round(&self, src: &dyn Source, now: i64, changed: &(dyn Fn() + Sync)) {
+        let errors = Mutex::new(Vec::new());
+        self.inner.lock().expect("weather lock").busy = true;
+        changed();
+        let want: Vec<(String, i64)> = match src.index() {
+            Ok(idx) => idx.iter().rev().take(FRAMES).rev().cloned().collect(),
+            Err(e) => {
+                errors
+                    .lock()
+                    .expect("errors")
+                    .push(format!("radar index: {e}"));
+                Vec::new()
             }
+        };
+        self.inner.lock().expect("weather lock").wanted = want.len();
+        let held = |t: &i64| {
+            self.inner
+                .lock()
+                .expect("weather lock")
+                .frames
+                .contains_key(t)
+        };
+        // newest first, then the rest newest to oldest
+        let mut missing: Vec<&(String, i64)> =
+            want.iter().rev().filter(|(_, t)| !held(t)).collect();
+        let fetch = |name: &str, t: i64| match src
+            .frame(name)
+            .and_then(|gz| decode(&gz).map(|r| (gz, r)))
+        {
+            Ok((gz, r)) => {
+                self.store_frame(t, &gz);
+                let mut g = self.inner.lock().expect("weather lock");
+                g.frames.insert(t, Arc::new(r));
+                g.from_disk = false;
+                drop(g);
+                changed();
+            }
+            Err(e) => errors
+                .lock()
+                .expect("errors")
+                .push(format!("radar {name}: {e}")),
+        };
+        if !missing.is_empty() {
+            let (name, t) = missing.remove(0);
+            fetch(name, *t);
         }
+
         let due = self
             .inner
             .lock()
@@ -215,6 +216,8 @@ impl Weather {
             .hazards_ok
             .is_none_or(|t| now - t >= HAZARDS_EVERY);
         if due {
+            self.inner.lock().expect("weather lock").hazards_loading = true;
+            changed();
             let mut ok = 0;
             for fore in FORECASTS {
                 match src
@@ -223,21 +226,58 @@ impl Weather {
                 {
                     Ok((s, h)) => {
                         self.store_gairmet(fore, &s);
-                        self.inner
-                            .lock()
-                            .expect("weather lock")
-                            .gairmet
-                            .insert(fore, h);
+                        let mut g = self.inner.lock().expect("weather lock");
+                        g.gairmet.insert(fore, h);
+                        g.from_disk = false;
+                        drop(g);
                         ok += 1;
+                        changed();
                     }
-                    Err(e) => errors.push(format!("hazards fore={fore}: {e}")),
+                    Err(e) => errors
+                        .lock()
+                        .expect("errors")
+                        .push(format!("hazards fore={fore}: {e}")),
                 }
             }
+            let mut g = self.inner.lock().expect("weather lock");
+            g.hazards_loading = false;
             if ok == FORECASTS.len() {
-                self.inner.lock().expect("weather lock").hazards_ok = Some(now);
+                g.hazards_ok = Some(now);
             }
         }
-        self.inner.lock().expect("weather lock").errors = errors;
+
+        // the older frames, three requests at a time
+        let queue = Mutex::new(missing.into_iter());
+        std::thread::scope(|sc| {
+            for _ in 0..3 {
+                sc.spawn(|| loop {
+                    let next = queue.lock().expect("queue").next();
+                    let Some((name, t)) = next else { break };
+                    fetch(name, *t);
+                });
+            }
+        });
+
+        let mut g = self.inner.lock().expect("weather lock");
+        if let Some(newest) = want.last() {
+            let keep: Vec<i64> = want.iter().map(|w| w.1).collect();
+            // prune only to frames the server still lists, and only once the newest is held
+            if g.frames.contains_key(&newest.1) {
+                g.frames.retain(|t, _| keep.contains(t));
+                g.radar_ok = Some(now);
+                drop(g);
+                self.prune_frames(&keep);
+                g = self.inner.lock().expect("weather lock");
+            }
+        }
+        // the newest keeps failing: still bounded, the oldest go first
+        while g.frames.len() > 2 * FRAMES {
+            g.frames.pop_first();
+        }
+        g.errors = errors.into_inner().expect("errors");
+        g.busy = false;
+        drop(g);
+        changed();
     }
 
     fn store_frame(&self, t: i64, gz: &[u8]) {
@@ -288,6 +328,12 @@ impl Weather {
             "radarOk": g.radar_ok,
             "hazardsOk": g.hazards_ok,
             "fromDisk": g.from_disk,
+            "loading": {
+                "busy": g.busy,
+                "held": g.frames.len().min(g.wanted),
+                "wanted": g.wanted,
+                "hazards": g.hazards_loading,
+            },
             "errors": g.errors,
             "now": now,
         })
@@ -488,7 +534,7 @@ mod tests {
         let all: Vec<i64> = (0..15).map(|i| i * 120).collect();
         let src = Fake::new(&all);
         let w = Weather::open(None);
-        w.round(&src, 2000);
+        w.round(&src, 2000, &|| {});
         assert_eq!(times(&w), all[5..].to_vec());
         assert_eq!(src.frame_calls.lock().unwrap().len(), FRAMES);
         // two new frames: only they are fetched, the two oldest dropped
@@ -496,7 +542,7 @@ mod tests {
             .lock()
             .unwrap()
             .extend([(String::from("f1800"), 1800), (String::from("f1920"), 1920)]);
-        w.round(&src, 2100);
+        w.round(&src, 2100, &|| {});
         assert_eq!(src.frame_calls.lock().unwrap().len(), FRAMES + 2);
         assert_eq!(times(&w).first(), Some(&840));
         assert_eq!(times(&w).len(), FRAMES);
@@ -509,10 +555,10 @@ mod tests {
     fn a_failure_keeps_what_was_there_and_says_so() {
         let src = Fake::new(&[100, 220]);
         let w = Weather::open(None);
-        w.round(&src, 300);
+        w.round(&src, 300, &|| {});
         assert_eq!(w.state(300)["hazards"].as_array().unwrap().len(), 1);
         src.down.store(true, Ordering::SeqCst);
-        w.round(&src, 300 + HAZARDS_EVERY);
+        w.round(&src, 300 + HAZARDS_EVERY, &|| {});
         let s = w.state(300 + HAZARDS_EVERY);
         assert_eq!(times(&w), vec![100, 220]);
         assert_eq!(
@@ -533,7 +579,7 @@ mod tests {
             "{errors:?}"
         );
         src.down.store(false, Ordering::SeqCst);
-        w.round(&src, 400 + HAZARDS_EVERY);
+        w.round(&src, 400 + HAZARDS_EVERY, &|| {});
         assert_eq!(
             w.state(0)["errors"].as_array().unwrap().len(),
             0,
@@ -544,7 +590,7 @@ mod tests {
     #[test]
     fn one_forecast_hour_is_shown_the_nearest_to_now() {
         let w = Weather::open(None);
-        w.round(&Fake::new(&[1]), T18);
+        w.round(&Fake::new(&[1]), T18, &|| {});
         for (now, valid) in [
             (T18, T18),
             (T18 + 3600, T18),
@@ -564,13 +610,56 @@ mod tests {
     }
 
     #[test]
+    fn the_newest_frame_first_then_hazards_then_the_rest_each_signalled() {
+        let all: Vec<i64> = (0..10).map(|i| 1000 + i * 120).collect();
+        let w = Weather::open(None);
+        let seen = M::new(Vec::new()); // (frames held, hazards shown, loading) at each signal
+        w.round(&Fake::new(&all), T18, &|| {
+            let s = w.state(T18);
+            seen.lock().unwrap().push((
+                times(&w),
+                s["hazards"].as_array().unwrap().len(),
+                s["loading"].clone(),
+            ));
+        });
+        let seen = seen.into_inner().unwrap();
+        // the round announces itself before anything arrives
+        assert_eq!(seen[0].0, Vec::<i64>::new());
+        assert_eq!(seen[0].2["busy"], true);
+        let first = seen.iter().position(|x| !x.0.is_empty()).unwrap();
+        assert_eq!(seen[first].0, vec![2080], "the newest frame alone first");
+        let hz = seen.iter().position(|x| x.1 > 0).unwrap();
+        assert!(
+            seen[hz].0.len() == 1,
+            "hazards before any older frame: {:?}",
+            seen[hz].0
+        );
+        // one signal per frame and per forecast hour, at least
+        assert!(seen.len() >= 10 + FORECASTS.len(), "{} signals", seen.len());
+        let last = &seen.last().unwrap();
+        assert_eq!(last.0, all);
+        assert_eq!(
+            (
+                last.2["busy"].clone(),
+                last.2["held"].clone(),
+                last.2["wanted"].clone()
+            ),
+            (json!(false), json!(10), json!(10))
+        );
+        // while the older frames came in, progress counted up
+        assert!(seen.iter().any(|x| x.2["busy"] == true
+            && x.2["held"].as_u64().unwrap() > 1
+            && x.2["held"].as_u64().unwrap() < 10));
+    }
+
+    #[test]
     fn hazards_are_refetched_every_fifteen_minutes_not_every_round() {
         let src = Fake::new(&[100]);
         let w = Weather::open(None);
-        w.round(&src, 1000);
-        w.round(&src, 1000 + 120);
+        w.round(&src, 1000, &|| {});
+        w.round(&src, 1000 + 120, &|| {});
         assert_eq!(*src.gair_calls.lock().unwrap(), FORECASTS.len() as u32);
-        w.round(&src, 1000 + HAZARDS_EVERY);
+        w.round(&src, 1000 + HAZARDS_EVERY, &|| {});
         assert_eq!(*src.gair_calls.lock().unwrap(), 2 * FORECASTS.len() as u32);
     }
 
@@ -581,7 +670,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         {
             let w = Weather::open(Some(&path));
-            w.round(&Fake::new(&[100, 220, 340]), 400);
+            w.round(&Fake::new(&[100, 220, 340]), 400, &|| {});
         }
         let w = Weather::open(Some(&path));
         w.load_from_disk();
@@ -592,7 +681,7 @@ mod tests {
         // and the network still down: nothing lost, the error reported
         let src = Fake::new(&[]);
         src.down.store(true, Ordering::SeqCst);
-        w.round(&src, 500);
+        w.round(&src, 500, &|| {});
         assert_eq!(times(&w), vec![100, 220, 340]);
         assert_eq!(w.state(500)["fromDisk"], true);
         let _ = std::fs::remove_dir_all(&dir);
@@ -618,9 +707,9 @@ mod tests {
             }
         }
         let w = Weather::open(None);
-        w.round(&Fake::new(&[1, 2]), 10);
+        w.round(&Fake::new(&[1, 2]), 10, &|| {});
         let all: Vec<i64> = (100..110).chain([999]).collect();
-        w.round(&Flaky(Fake::new(&all)), 20);
+        w.round(&Flaky(Fake::new(&all)), 20, &|| {});
         assert!(
             times(&w).contains(&1) && times(&w).contains(&2),
             "{:?}",

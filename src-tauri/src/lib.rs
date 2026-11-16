@@ -293,8 +293,13 @@ fn data_dir() -> PathBuf {
 
 /// Turn the weather layer on: the first call starts fetching from NOAA (nothing does before it).
 #[tauri::command]
-fn wx_enable(w: tauri::State<'_, Arc<weather::Weather>>) -> Value {
-    w.enable(Arc::new(weather::Noaa::new()));
+fn wx_enable(app: tauri::AppHandle, w: tauri::State<'_, Arc<weather::Weather>>) -> Value {
+    use tauri::Emitter;
+    // every frame and forecast hour that arrives: tell the webview at once rather than wait for a poll
+    let changed = move || {
+        let _ = app.emit("wx-changed", ());
+    };
+    w.enable(Arc::new(weather::Noaa::new()), Arc::new(changed));
     w.state(unix_now())
 }
 

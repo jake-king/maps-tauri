@@ -11,7 +11,7 @@ import { say, memprobeBlank, startDevtools } from "../devtools/harness.js";
 import { createSearchBox } from "./search.js";
 import initCoords, { coordFeatures } from "../wasm/coords.js";
 import { once } from "./once.js";
-import { WeatherLayer, age } from "./weather.js";
+import { WeatherLayer, status as wxStatusText } from "./weather.js";
 
 const flags = await invoke("dev_flags");
 const gpu = installGpuLedger(WebGL2RenderingContext.prototype, new GpuLedger());
@@ -82,15 +82,7 @@ wxStatus.style.cssText = "margin-top:3px;color:#555;font-size:11px;";
 wxPanel.append(wxStatus);
 document.getElementById("map").appendChild(wxPanel);
 const weather = new WeatherLayer(map, {
-  onChange: (s) => {
-    const now = s.now;
-    const parts = [];
-    if (radarBox.checked) parts.push(`radar ${age(s.frames.at(-1), now)} (${s.frames.length} frames)`);
-    if (hazardBox.checked) parts.push(`hazards valid ${age(s.hazardsValid, now)}`);
-    if (s.fromDisk) parts.push("offline: last fetched");
-    if (s.errors.length) parts.push(`${s.errors.length} fetch errors`);
-    wxStatus.textContent = parts.join(" · ");
-  },
+  onChange: (s) => (wxStatus.textContent = wxStatusText(s, { radar: radarBox.checked, hazards: hazardBox.checked })),
 });
 const wxSet = () => weather.set({ radar: radarBox.checked, hazards: hazardBox.checked }).catch((e) => say(`map error: weather: ${e.message ?? e}`));
 radarBox.addEventListener("change", wxSet);
@@ -132,16 +124,17 @@ map.whenIdle().then(async () => {
       radarBox.checked = hazardBox.checked = true;
       await wxSet();
       const t0 = performance.now();
-      while (performance.now() - t0 < 90000) {
-        await weather.refresh();
-        const s = weather.state;
-        if (s.frames.length && weather.frames.size === s.frames.length && s.hazardsOk) break;
-        await new Promise((r) => setTimeout(r, 2000));
+      // wait on the layer's own updates, as a user would: no extra polling from here
+      const statuses = new Set([wxStatus.textContent]);
+      while ((weather.marks.allFrames == null || weather.marks.hazards == null) && performance.now() - t0 < 90000) {
+        statuses.add(wxStatus.textContent);
+        await new Promise((r) => setTimeout(r, 100));
       }
+      statuses.add(wxStatus.textContent);
       weather.loop = false;
       const path = await snapshot(map, "weather", { center: [-97, 38.5], zoom: 3.6 }, (ctx) => ctx.drawImage(weather.canvas, 0, 0, ctx.canvas.width, ctx.canvas.height));
       const probe = await weather.probe();
-      return invoke("bench_done", { result: { weather: weather.report(), wait_ms: Math.round(performance.now() - t0), probe, snapshot: path } });
+      return invoke("bench_done", { result: { weather: weather.report(), wait_ms: Math.round(performance.now() - t0), statuses: [...statuses], probe, snapshot: path } });
     },
   });
 });

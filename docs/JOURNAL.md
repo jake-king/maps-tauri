@@ -1001,3 +1001,19 @@ one-cell longitude shift, planted in the shader, both failed `tools/weather.sh`.
 
 Nothing is fetched until a box is ticked, so the benchmarks and the offline gate stay offline; the
 fetching is in Rust, so the content security policy is unchanged.
+
+### Loading: 15 seconds of nothing, then everything
+
+Ticking the boxes showed nothing for a long time and gave no sign that anything was happening. The
+end-to-end check had hidden this: it polled the backend itself every two seconds, so it never saw what
+a user saw. Changed to wait on the layer's own updates and timestamp them, it measured first frame
+15.0 s, hazards 15.0 s, all frames 15.2 s: exactly the frontend's 15-second poll. NOAA was not the
+cause (0.3-0.8 s a request); the data sat ready in Rust until the next poll.
+
+Now Rust emits an event after every frame and forecast hour that arrives (the poll is a 60-second
+safety net, and a burst of events is folded into one refresh), and a round fetches the most useful
+thing first: the newest frame, then the hazards, then the older frames three at a time. The state
+carries progress, and the panel shows "starting…" on the click, then "radar: loading 4 of 10…".
+After: first frame 1.3 s, hazards 2.6 s, all ten frames 7.1 s. A backend test records the state at
+every signal and requires the newest frame alone first and the hazards before any older frame;
+fetching oldest first, planted, failed it.
