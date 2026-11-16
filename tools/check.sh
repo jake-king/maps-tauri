@@ -29,10 +29,15 @@ run eslint 300 npx eslint .
 run ruff 120 sh -c 'ruff check tools/*.py && ruff format --check tools/*.py'
 run shellcheck 120 sh -c 'shellcheck tools/*.sh'
 # generated files must match a fresh run of their generator (a hand edit or a stale file fails here)
-# shellcheck disable=SC2016 # $d is meant to expand in the inner sh, not here
-run palette-fresh 120 sh -c 'd=$(mktemp -d) && cp crates/vtile/src/palette.rs src/rust-renderer/palette.json "$d"/ &&
-  node tools/gen_palette.mjs >/dev/null &&
-  cmp crates/vtile/src/palette.rs "$d"/palette.rs && cmp src/rust-renderer/palette.json "$d"/palette.json'
+# The generator reads the sprite sheet from public/assets, which is not in the repository.
+if [[ -s public/assets/sprites/v4/light.json ]]; then
+  # shellcheck disable=SC2016 # $d is meant to expand in the inner sh, not here
+  run palette-fresh 120 sh -c 'd=$(mktemp -d) && cp crates/vtile/src/palette.rs src/rust-renderer/palette.json "$d"/ &&
+    node tools/gen_palette.mjs >/dev/null &&
+    cmp crates/vtile/src/palette.rs "$d"/palette.rs && cmp src/rust-renderer/palette.json "$d"/palette.json'
+else
+  skip palette-fresh "no public/assets/sprites (tools/fetch-data.sh)"
+fi
 
 run cargo-test 900 cargo test -q --workspace
 run js-test 300 npm test --silent
