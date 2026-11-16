@@ -47,6 +47,19 @@ const coordFeaturesLazy = async (text, limit) => {
   return coordFeatures(text, limit);
 };
 const search = createSearchBox(map, { invoke, coordFeatures: coordFeaturesLazy, container: document.getElementById("map") });
+// The map data's licence (ODbL) requires the credit to be visible. Plain text: a link would navigate
+// the app's only window, and the content security policy would refuse it anyway.
+const credit = document.createElement("div");
+credit.textContent = "© OpenStreetMap contributors, Protomaps";
+credit.style.cssText = "position:absolute;right:0;bottom:0;z-index:20;padding:2px 6px;background:#fffc;" +
+  "font:11px 'Noto Sans',sans-serif;color:#333;pointer-events:none;";
+document.getElementById("map").appendChild(credit);
+// what the end-to-end search reports: the text, and that it lies inside the window
+const creditShown = () => {
+  const r = credit.getBoundingClientRect();
+  const inside = r.width > 0 && r.height > 0 && r.right <= innerWidth && r.bottom <= innerHeight;
+  return { text: credit.textContent, inside };
+};
 // pixel check: a magenta background, so any uncovered screen area is countable
 if (flags.pixelCheck) map.setBackground([1, 0, 1, 1]);
 map.on("error", (e) => say(`map error: ${e.error?.message ?? e}`));
@@ -76,7 +89,7 @@ map.whenIdle().then(async () => {
       if (!map.areTilesLoaded()) await new Promise((r) => map.once("idle", r));
       await new Promise((r) => setTimeout(r, 200));
       const path = await snapshot(map, "search", { center: map.getCenter(), zoom: map.getZoom() }, (ctx, dpr) => search.paint(ctx, dpr));
-      return invoke("bench_done", { result: { search: flags.search, results: names, box: search.boxStyle(), center: map.getCenter(), snapshot: path } });
+      return invoke("bench_done", { result: { search: flags.search, results: names, box: search.boxStyle(), credit: creditShown(), center: map.getCenter(), snapshot: path } });
     },
   });
 });

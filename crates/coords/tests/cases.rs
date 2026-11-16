@@ -1,4 +1,4 @@
-//! The coordinate test tables from the Infrastructure repo's `ci/maps-search-selftest.py`,
+//! The coordinate test tables from the Python service's selftest (`maps-search-selftest.py`),
 //! ported as-is. Every accepted notation names the Greenwich observatory, ~51.5074 N 0.1278 W.
 
 use std::time::{Duration, Instant};

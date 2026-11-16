@@ -1,12 +1,12 @@
-//! The maps search box's input handling, ported from the Infrastructure repo's
-//! `containers/epoch/maps/gazetteer/serve.py` (ADR 0195/0196 there).
+//! The maps search box's input handling, ported from `serve.py`, the Python gazetteer service
+//! of the self-hosted map viewer this app rebuilds (not in this repository).
 //!
 //! Three functions:
 //! * [`parse_coords`]: read a typed coordinate as zero, one or two (lat, lon) readings.
 //! * [`fold`]: lowercase, decompose, strip combining marks; the gazetteer's `name_fold` column.
 //! * [`fts_query`]: turn arbitrary text into a safe FTS5 phrase-prefix query.
 //!
-//! Behaviour is meant to match the Python exactly; `tests/differential.rs` checks that against the
+//! Behaviour is meant to match the Python exactly; `tools/diff.py` checks that against the
 //! real `serve.py` and lists every input where the two disagree.
 //!
 //! One property the port gets for free: Rust's `regex` crate runs in linear time and never

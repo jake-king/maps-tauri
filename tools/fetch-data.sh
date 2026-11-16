@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Fetch the experiment's data from the Datastrike maps service on the LAN (never the internet):
+# Fetch the app's data from a map service that serves this layout under MAPS_SRC (mine is on my LAN):
+#   $MAPS_SRC/tiles/basemap.pmtiles              a Protomaps basemap archive (the planet, or any extract)
+#   $MAPS_SRC/assets/basemaps-assets.tar.gz      a protomaps/basemaps-assets release tarball
+#   $MAPS_SRC/gazetteer/geonames.db              a GeoNames FTS5 index (only with --gazetteer)
+# It writes:
 #   data/basemap.pmtiles   a small Santa Monica cutout of the planet archive (the benchmarks' reference)
 #   data/westla.pmtiles    a larger West LA cutout, what the app opens by default
 #   public/assets/         Protomaps glyphs + sprites, from the service's pinned basemaps-assets tarball
 #   data/geonames.db       the production GeoNames FTS5 gazetteer (1.6 GB), only with --gazetteer
 set -euo pipefail
 cd "$(dirname "$0")/.."
-SRC=${MAPS_SRC:?set MAPS_SRC to the service base URL}
+SRC=${MAPS_SRC:?set MAPS_SRC to the service base URL; see README.md for public sources}
 BBOX=${BBOX:--118.55,33.95,-118.35,34.10}
 PMTILES=${PMTILES:-$HOME/go/bin/go-pmtiles}
 mkdir -p data public/assets
@@ -25,7 +29,7 @@ if [[ ! -d public/assets/fonts ]]; then
   cp -r "$root/sprites/v4" public/assets/sprites/v4
 fi
 
-# the planet the native renderer reads over the LAN (data/ is gitignored: the hostname stays local)
+# the planet the native renderer reads over HTTP (data/ is gitignored, so the URL stays local)
 [[ -s data/remote.url ]] || echo "$SRC/tiles/basemap.pmtiles" > data/remote.url
 
 if [[ ${1:-} == --gazetteer && ! -s data/geonames.db ]]; then

@@ -47,7 +47,7 @@ expect stress-rust 0 '"csp_violations":0'
 app stress-maplibre MAPS_RENDERER=maplibre MAPS_STRESS=40
 expect stress-maplibre 0 '"csp_violations":0'
 app search-name MAPS_RENDERER=rust MAPS_SEARCH="santa mon"
-expect search-name 0 '"box":{"list":"none","padding":"10px"}.*"results":\["Santa Monica'
+expect search-name 0 '"box":{"list":"none","padding":"10px"}.*"credit":{"inside":true,"text":"© OpenStreetMap contributors, Protomaps"}.*"results":\["Santa Monica'
 app search-coords MAPS_RENDERER=rust MAPS_SEARCH="34.0105, -118.4912"
 expect search-coords 0 '"results":\["34'
 

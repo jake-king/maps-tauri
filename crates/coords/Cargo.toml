@@ -2,6 +2,7 @@
 name = "coords"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
 description = "Coordinate parsing, name folding and FTS5 query building for the maps search box (a port of serve.py)"
 
 [lib]

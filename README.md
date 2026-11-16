@@ -1,66 +1,88 @@
 # maps-tauri
 
-An experiment: the Datastrike offline map viewer (MapLibre GL over a PMTiles basemap, with a
-GeoNames search box) rebuilt as a Tauri 2 desktop app, with its search-box parsing ported from
-Python to Rust and compiled to WebAssembly for the frontend. Built to learn Tauri.
+A desktop map viewer in Tauri 2, built to learn Tauri. It started as a port of my self-hosted web
+map viewer (MapLibre GL over a Protomaps basemap, with a GeoNames search box) and grew a second,
+native renderer: Rust reads the PMTiles archive, decodes the vector tiles and builds the meshes,
+and a small WebGL2 renderer in the webview draws them. It can read a whole-planet archive over
+HTTP range requests and keeps what it has seen in a SQLite cache, so places visited once still draw
+with the network gone.
 
-## Layout
-- `crates/coords`: the coordinate parser, name folding and FTS5 query builder, ported from
-  `Infrastructure/containers/epoch/maps/gazetteer/serve.py`. Native for the backend, WASM (`--features wasm`)
-  for the frontend.
-- `src-tauri`: the Tauri backend. `tiles.rs` serves the archive over a `tiles://` URI scheme with
-  HTTP Range semantics, off the UI thread; only listed file names are reachable.
-  `search.rs` is `serve.py`'s `search()` over the same GeoNames FTS5 index with rusqlite, exposed as
-  the `search` command. `build.rs` declares the app's commands so each needs a capability grant
-  (`capabilities/default.json` grants exactly `report` and `search`).
-- `src`, `index.html`: the frontend (Vite). The search box answers coordinates in WASM with no
-  round trip, and sends anything else to `search`.
-- `tools/diff.py`: the differential test, Rust port against the Python original.
+## How this was built
+
+I built this in November 2026 with an AI coding agent. I set the goals, chose what to measure and
+what to try next, tested the app by hand, and reviewed the changes; the agent wrote most of the
+code and kept the journal. `docs/JOURNAL.md` is that working log, in the order it happened: every
+problem, the measurements that turned out to be wrong, and what fixed them.
+
+## What is in it
+
+- `crates/vtile`: PMTiles v3 reading (local file, or HTTP range requests with a pluggable cache),
+  Mapbox Vector Tile decoding, and meshing: polygons triangulated with earcut, lines as mitered
+  strips, label positions including street names along curved paths. Its decoder output is
+  checked against `@mapbox/vector-tile` over every tile of an extract.
+- `crates/coords`: the search box's coordinate parser, name folding and FTS5 query builder, ported
+  from the Python service and compiled to WebAssembly for the frontend. `tools/diff.py` runs the
+  port and the original over about 190,000 inputs and lists every disagreement.
+- `src-tauri`: the backend. Tiles are served through a `tiles://` URI scheme with range support;
+  meshes go to the webview in a compact binary format; `search` queries a GeoNames FTS5 index with
+  rusqlite; `diskcache.rs` is the SQLite cache for the remote archive. Commands need capability
+  grants, and a strict content security policy keeps the webview from reaching anything but the
+  app itself.
+- `src`: the frontend. `maplibre-app.js` is the MapLibre version (the default), `rust-renderer/`
+  the native one, `devtools/` the profiler overlay and the benchmarks.
+
+## Measured
+
+A seeded stress script of 150 camera operations (interrupted pans, zooms, rotations, wheel bursts,
+drags and teleports), the same input for both renderers, on a West LA extract. "Background
+showing" counts frames where any of the screen was not yet drawn, read back from the GPU:
+
+|                              | native            | MapLibre           |
+|------------------------------|-------------------|--------------------|
+| frames with background       | 0 of 2380         | 325 of 3066 (10.6%) |
+| render p50 / p99             | 2 / 7 ms          | 5 / 13 ms          |
+| peak memory                  | 619 MB            | 1501 MB            |
+
+Against the remote planet over a LAN, the disk cache took frames with background from 7.8% to
+0.4%. The journal has how each number was measured and what was wrong with the first attempts.
 
 ## Data
-`tools/fetch-data.sh` pulls everything from the Datastrike maps service on the LAN, never the
-internet: an LA cutout of the planet archive (6.2 MB, by HTTP Range with `go-pmtiles extract`),
-the Protomaps glyphs and sprites, and with `--gazetteer` the production GeoNames index (1.6 GB).
+
+The app expects data the repository does not include (`data/` and `public/assets/` are
+gitignored):
+
+- `data/westla.pmtiles` and `data/basemap.pmtiles`: Protomaps basemap extracts (v4 schema). With
+  [go-pmtiles](https://github.com/protomaps/go-pmtiles), from a daily build at
+  `https://build.protomaps.com/<YYYYMMDD>.pmtiles`:
+
+      go-pmtiles extract <build url> data/westla.pmtiles --bbox=-118.70,33.85,-118.15,34.20 --maxzoom=14
+      go-pmtiles extract <build url> data/basemap.pmtiles --bbox=-118.55,33.95,-118.35,34.10 --maxzoom=14
+
+- `public/assets/fonts` and `public/assets/sprites/v4`: from
+  [protomaps/basemaps-assets](https://github.com/protomaps/basemaps-assets).
+- `data/geonames.db` (optional): a GeoNames FTS5 index. The builder lives with the private Python
+  service and is not included; without the index, search answers coordinates only.
+- `data/remote.url` (optional): one line, the URL of a PMTiles archive to read over HTTP.
+
+`tools/fetch-data.sh` does all of this from my own map service (`MAPS_SRC=<base url>`). I have not
+run the public-source steps above end to end from a fresh clone.
 
 ## Run
-Needs `wasm-pack` in `~/.cargo/bin` and `go-pmtiles` in `~/go/bin`.
+
+Needs Rust, Node, [wasm-pack](https://rustwasm.github.io/wasm-pack/) and the Tauri 2 system
+dependencies for your platform. Developed on Linux (WebKitGTK).
 
     npm install
-    tools/fetch-data.sh --gazetteer
-    npx tauri dev                 # builds the WASM module, then opens the app
-    cargo test -p coords          # the parser's test tables, ported from the Python selftest
-    npm run diff                  # Rust vs Python over ~190k inputs; exit 0 = no unexplained disagreement
-    npm test                      # the overlay's pure layout and statistics
-    MAPS_BENCH=1 target/debug/maps-tauri   # the pan benchmark against a running `npm run dev`
-    tools/search_diff.py          # the whole search path vs serve.py on the real index, feature by feature
+    npx tauri dev                          # MapLibre renderer
+    MAPS_RENDERER=rust npx tauri dev       # native renderer
+    tools/check.sh                         # format, lint, tests, decoder and mesher checks
 
-## Dev tools
-- **F4**: the profiler overlay. A row per measurement (average, worst over the last 120 frames,
-  a bar against one frame): frame interval, MapLibre's render CPU time, tile fetch round trip
-  through `tiles://`, the Rust handler's own time, and tile request-to-decoded time. Then frames
-  drawn with tiles still missing (the gray boxes), memory per process from `/proc` (WebKitGTK
-  renders in separate processes), and a 120-frame graph with the budget line. Drag it anywhere.
-- **F6**: the pan benchmark, a fixed fast pan at zoom 15 run cold then warm. `MAPS_BENCH=1` runs
-  it at startup, prints one `[bench]` JSON line and exits. Results to compare against live in
-  `bench/`.
+The benchmarks (`tools/bench.sh`, `tools/zoombench.sh`, `tools/stress.sh`) and the release-build
+gates (`tools/offline.sh` for the content security policy, `tools/cache.sh` for the disk cache)
+are described at the top of each script. F4 in the app opens the profiler overlay.
 
-Benchmark switches (environment variables, no rebuild needed with `SKIP_BUILD=1`):
-`MAPS_CACHE_ZOOMS`, `MAPS_WORKERS`, `MAPS_PREFETCH`, `MAPS_FADE_MS`, `MAPS_WARM_ZOOM`,
-`MAPS_NO_LABELS=1`, `MAPS_CACHED_PARENTS=0`, `MAPS_TILE_DELAY_MS` (a control: slows every tile),
-and `MAPS_PIXEL_CHECK=1` (magenta background, counts it in every frame: coverage truth, timings
-invalid). The investigation and every result are written up in `docs/JOURNAL.md`.
+## Licence
 
-## MapLibre patch
-`src/maplibre-patch.js` makes MapLibre draw a loaded parent from its cache while a newly visible
-tile decodes, instead of the background (gray boxes in 30% of first-visit frames before, 0%
-after). It overrides a private method, so it applies only to MapLibre 6.7.0. See the journal.
-
-## Known differences from the Python
-The full search path matches `serve.py` exactly: 156 queries, 896 features, identical.
-
-`tools/diff.py` lists them on every run:
-- The port reads ASCII digits only. Python's `\d` and `float()` also accept `١٢` or `１２`, so
-  the port refuses some inputs Python reads as coordinates. Refusing sends the text to the
-  gazetteer, the safe direction by `serve.py`'s own rule.
-- `fts_query` keeps combining marks (Indic vowel signs, Arabic harakat) inside words where Python
-  splits at them. FTS5's `unicode61` tokenizer re-splits the phrase, so both find the same rows.
+Code: MIT or Apache-2.0, at your option. Map data © OpenStreetMap contributors (ODbL), basemap
+schema and assets by Protomaps. `src/maplibre-patch.js` changes a private MapLibre 6.7.0 method and
+does nothing on any other version.

@@ -944,3 +944,21 @@ the cache off, 0.2% with a cache filled by the timing run just before, 0.4% full
 The warm worst frame is still all background after a teleport: reading and meshing the target
 tiles takes longer than a frame when no coarser tile is on the GPU. The cache removes the network
 from that, not the gap; keeping low zooms resident is still the fix.
+
+## Preparing the repository to publish
+
+A scan of every file in every commit found two things that could not go public: the home map
+service's hostname, as the default in 33 versions of `tools/fetch-data.sh`, and absolute paths
+under the home directory in two benchmark results. The script now takes the service from
+`MAPS_SRC` and refuses to run without it; the paths are relative. Comments that pointed into the
+private repository the Python service lives in now say what it is instead. The history itself is
+rewritten in a separate clone for publishing, so this working repository keeps its own.
+
+The scan also found a licence gap: the native renderer showed no credit for the map data, which
+OpenStreetMap's licence requires. It now draws "© OpenStreetMap contributors, Protomaps" in the
+corner as plain text (a link would navigate the app's only window). The end-to-end search reports
+the credit's text and whether it lies inside the window, and `tools/offline.sh` requires both; with
+the credit planted out of the page, the gate failed.
+
+The code is licensed MIT or Apache-2.0, and the README now describes the whole app, how it was
+built, and how to get the data from public sources.

@@ -6,6 +6,9 @@ random strings), asks both implementations about every input, and prints each di
 grouped by function. Exit status is 0 only when they agree on everything.
 
     tools/diff.py [--fuzz N] [--seed S]       SERVE_PY overrides the path to serve.py
+
+The Python original is not in this repository; by default it is looked for in a sibling
+checkout of the private repository it lives in.
 """
 
 import argparse
