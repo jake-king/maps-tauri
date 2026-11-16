@@ -16,7 +16,7 @@ if [[ ${SKIP_BUILD:-0} != 1 ]]; then
 fi
 db=logs/weather-e2e.sqlite
 rm -f "$db" "$db-wal" "$db-shm"
-MAPS_ARCHIVE=westla.pmtiles MAPS_LOCAL_ONLY=1 MAPS_BENCH=1 MAPS_RENDERER=rust MAPS_WEATHER=1 MAPS_WEATHER_CACHE=$db \
+MAPS_ARCHIVE=westla.pmtiles MAPS_LOCAL_ONLY=1 MAPS_BENCH=1 MAPS_F4=0 MAPS_RENDERER=rust MAPS_WEATHER=1 MAPS_WEATHER_CACHE=$db \
   systemd-run --user --scope -q -p MemoryMax=10G timeout 200 ./target/release/maps-tauri >logs/weather-e2e.log 2>&1 || true
 python3 - logs/weather-e2e.log <<'PY'
 import json, math, re, sys

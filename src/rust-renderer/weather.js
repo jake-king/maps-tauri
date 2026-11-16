@@ -139,10 +139,11 @@ export class WeatherLayer {
     this.map = map;
     this.onChange = onChange;
     this.radarOn = false;
-    this.loop = true; // animate the frames; false holds the newest
+    this.looping = true; // animate the frames; false holds the newest
     this.hazardsOn = false;
     this.state = null;
-    this.frames = new Map(); // time -> texture
+    this.frames = new Map(); // time -> texture, on the GPU
+    this.fetching = new Set(); // times being fetched from Rust
     this.loading = false;
     this.shown = null; // time of the frame drawn last
     this.loopStart = performance.now();
@@ -165,6 +166,8 @@ export class WeatherLayer {
     this.ctx = c.getContext("2d");
     map.overlays.push(this);
     map.on("render", () => this.drawHazards());
+    // every frame: is a different radar frame due? (the loop as a pure function of time)
+    map.loop.addUpdater((now) => this.radarOn && this.frameNow(now) !== this.shown);
   }
 
   /** Turn layers on or off. The first time either goes on, Rust starts fetching. */
@@ -178,7 +181,6 @@ export class WeatherLayer {
       await listen("wx-changed", () => this.refresh());
       this.state = await invoke("wx_enable");
       this.timer = setInterval(() => this.refresh(), 60000);
-      this.tick = setInterval(() => this.animate(), 100);
       await this.refresh();
     } else {
       this.onChange?.(this.state);
@@ -208,44 +210,65 @@ export class WeatherLayer {
     this.state = await invoke("wx_state");
     if (this.state.hazards?.length) this.marks.hazards ??= performance.now();
     await this.sync();
-    if (this.state.frames.length >= 10 && this.frames.size === this.state.frames.length) this.marks.allFrames ??= performance.now();
     this.onChange?.(this.state);
     this.map.triggerRepaint();
   }
 
-  /** Upload frames not yet on the GPU, one at a time; free the ones Rust no longer holds. */
+  /** Fetch the frames not yet held, one at a time (each is ~6 MB over IPC); each goes onto the GPU
+   *  inside a frame through the map's loop, the newest first. Frames Rust no longer holds are freed
+   *  there too: nothing here touches WebGL outside a frame. */
   async sync() {
     if (this.loading || !this.state) return;
     this.loading = true;
     try {
-      const gl = this.map.gl;
       const want = new Set(this.state.frames);
-      for (const [t, tex] of this.frames) {
-        if (!want.has(t)) {
-          gl.deleteTexture(tex.tex);
-          this.gpuBytes -= tex.bytes;
-          this.frames.delete(t);
-        }
-      }
+      const stale = [...this.frames.keys()].filter((t) => !want.has(t));
+      if (stale.length) this.map.loop.arrive(() => this.free(stale), 0);
       const g = this.state.grid;
-      for (const t of this.state.frames) {
-        if (this.frames.has(t) || !g) continue;
-        const buf = new Uint8Array(await invoke("wx_frame", { time: t }));
-        if (buf.length !== g.ni * g.nj) throw new Error(`radar frame ${t}: ${buf.length} bytes for a ${g.ni} x ${g.nj} grid`);
-        const tex = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, tex);
-        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, g.ni, g.nj, 0, gl.RED, gl.UNSIGNED_BYTE, buf);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
-        this.frames.set(t, { tex, bytes: buf.length, grid: g });
-        this.gpuBytes += buf.length;
-        this.marks.firstFrame ??= performance.now();
-        this.map.triggerRepaint();
+      const newest = this.state.frames.at(-1);
+      for (const t of [...this.state.frames].reverse()) {
+        if (this.frames.has(t) || this.fetching.has(t) || !g) continue;
+        this.fetching.add(t);
+        try {
+          const buf = new Uint8Array(await invoke("wx_frame", { time: t }));
+          if (buf.length !== g.ni * g.nj) throw new Error(`radar frame ${t}: ${buf.length} bytes for a ${g.ni} x ${g.nj} grid`);
+          // the newest frame is what the user is waiting for: ahead of everything but visible tiles
+          this.map.loop.arrive(() => this.uploadFrame(t, buf, g), t === newest ? 500 : 3000);
+        } finally {
+          this.fetching.delete(t);
+        }
       }
     } finally {
       this.loading = false;
+    }
+  }
+
+  /** Inside a frame. */
+  uploadFrame(t, buf, g) {
+    if (this.frames.has(t)) return;
+    const gl = this.map.gl;
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, g.ni, g.nj, 0, gl.RED, gl.UNSIGNED_BYTE, buf);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    this.frames.set(t, { tex, bytes: buf.length, grid: g });
+    this.gpuBytes += buf.length;
+    this.marks.firstFrame ??= performance.now();
+    const all = this.state?.frames ?? [];
+    if (all.length >= 10 && all.every((x) => this.frames.has(x))) this.marks.allFrames ??= performance.now();
+  }
+
+  /** Inside a frame. */
+  free(times) {
+    for (const t of times) {
+      const f = this.frames.get(t);
+      if (!f) continue;
+      this.map.gl.deleteTexture(f.tex);
+      this.gpuBytes -= f.bytes;
+      this.frames.delete(t);
     }
   }
 
@@ -253,16 +276,10 @@ export class WeatherLayer {
   frameNow(now = performance.now()) {
     const times = [...this.frames.keys()].sort((a, b) => a - b);
     if (!times.length) return null;
-    if (!this.loop) return times.at(-1);
+    if (!this.looping) return times.at(-1);
     const period = (times.length - 1) * 400 + 2000;
     const k = (now - this.loopStart) % period;
     return times[Math.min(times.length - 1, Math.floor(k / 400))];
-  }
-
-  animate() {
-    if (!this.radarOn) return;
-    const t = this.frameNow();
-    if (t !== this.shown) this.map.triggerRepaint();
   }
 
   /** Called by the renderer after the map, before the labels. */
@@ -354,8 +371,8 @@ export class WeatherLayer {
     const gl = this.map.gl;
     const n = 41, d = 0.001;
     const grid = { ni: n, nj: n, lat0: ll[1] + 20 * d, lon0: ll[0] - 20 * d, dlat: d, dlon: d };
-    const saved = { frames: this.frames, loop: this.loop, radarOn: this.radarOn };
-    Object.assign(this, { loop: false, radarOn: true });
+    const saved = { frames: this.frames, looping: this.looping, radarOn: this.radarOn };
+    Object.assign(this, { looping: false, radarOn: true });
     this.map.jumpTo({ center: ll, zoom: 15, bearing: 0 });
     await new Promise((r) => (this.map.areTilesLoaded() ? r() : this.map.once("idle", r)));
     const shot = async (lit) => {

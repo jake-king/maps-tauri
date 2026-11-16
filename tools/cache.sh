@@ -20,7 +20,7 @@ ops=${OPS:-60}
 port=18765
 db=logs/cache-e2e.sqlite
 rm -f "$db" "$db-wal" "$db-shm"
-export MAPS_ARCHIVE_URL="http://127.0.0.1:$port/westla.pmtiles" MAPS_DISK_CACHE=$db MAPS_BENCH=1 \
+export MAPS_ARCHIVE_URL="http://127.0.0.1:$port/westla.pmtiles" MAPS_DISK_CACHE=$db MAPS_BENCH=1 MAPS_F4=0 \
   MAPS_RENDERER=rust MAPS_STRESS=$ops MAPS_STRESS_SEED=${SEED:-1}
 unset MAPS_LOCAL_ONLY
 server=

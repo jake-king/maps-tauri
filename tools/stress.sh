@@ -11,6 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export MAPS_ARCHIVE=${MAPS_ARCHIVE:-westla.pmtiles}
+export MAPS_F4=${MAPS_F4:-0} # the dev overlay closed: open, it draws every frame and skews timings
 if [ "${REMOTE:-0}" = 1 ]; then unset MAPS_LOCAL_ONLY; else export MAPS_LOCAL_ONLY=1; fi
 ops=${OPS:-150}
 seed=${SEED:-1}

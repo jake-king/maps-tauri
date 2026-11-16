@@ -1017,3 +1017,49 @@ carries progress, and the panel shows "starting…" on the click, then "radar: l
 After: first frame 1.3 s, hazards 2.6 s, all ten frames 7.1 s. A backend test records the state at
 every signal and requires the newest frame alone first and the hazards before any older frame;
 fetching oldest first, planted, failed it.
+
+## One frame loop: tick every frame, redraw on change
+
+The weather bug (data ready in Rust, shown 15 seconds later) was a symptom of a renderer with no
+single place where things happen: tiles were uploaded to the GPU in their network callbacks, radar
+frames on events, the radar animation on a 100 ms timer, and a repaint was requested from wherever.
+The model from my own game engine fixes that: one loop, every display frame, takes in what arrived,
+updates (animations as a function of time), and draws.
+
+Whether it should draw every frame was measured, not assumed. Idle CPU at rest: on demand 4.0% of a
+core, ticking every frame without drawing 4.0%, drawing every frame 65.7%. So it ticks every frame and
+redraws only when something changed.
+
+The measurement first said 36% at rest for every mode, which sent me after the wrong cause: I blamed
+the dev tools' own animation-frame loop, gated it, and saw no change. The gate had never engaged. The
+F4 overlay remembers being open between sessions, so it was open in every measurement run, drawing
+every frame and polling process memory every second. With it closed: 4.0%. `MAPS_F4=0|1` now forces
+it, and every benchmark and gate script sets it closed. The idle memory figure moves too: 337 MB with
+the overlay closed, against the 355 recorded earlier with it open.
+
+`src/rust-renderer/loop.js` is the loop: an inbox of arrivals uploaded inside the frame, most urgent
+first, within a 4 ms budget (at least one per frame, so a large arrival cannot starve the queue);
+updaters that report whether the picture changed; a redraw only when it did; and a frame clock (ticks,
+draws, frames later than 1.5x the median interval). It is pure, with a clock passed in, and its nine
+tests run in Node; four planted defects (redraw every frame, no budget, least urgent first, arrivals
+uploaded in the frame they arrive) each failed them. Tile responses and radar frames now arrive as
+jobs in that inbox, and a tile counts as loaded when it is drawable, not when its bytes arrive.
+
+Before and after, the same stress script (150 operations, seed 1), the overlay closed, the old build
+from a worktree of the previous commit:
+
+| | before | after (two runs) |
+|---|---|---|
+| missed refreshes | 28 (0.9%) | 19, 23 (0.6%, 0.7%) |
+| frames over 50 ms | 2 | 0, 0 |
+| frame interval p99 / worst | 25 / 55 ms | 23 / 41, 24 / 40 ms |
+| render p99 / worst | 8 / 18 ms | 7 / 14, 7 / 11 ms |
+| background frames | 0 | 0, 0 |
+| idle CPU | 3.4% | 4.0%, 3.8% |
+| idle memory (three runs each) | 335-337 MB | 336-337 MB |
+
+The worst frames improved, as the upload budget would predict: a burst of tiles is spread over frames
+instead of landing in one. Peak memory in the stress runs read 17-57 MB higher, but the two runs of
+the new build differed by 38 MB between themselves, and the idle probe, three interleaved runs each,
+shows no difference; I read it as run-to-run noise. The zoom benchmark's one zoom-out frame with 1-2%
+background is there in both builds: the known gap, not a new one.

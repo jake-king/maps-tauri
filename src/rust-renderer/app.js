@@ -131,7 +131,7 @@ map.whenIdle().then(async () => {
         await new Promise((r) => setTimeout(r, 100));
       }
       statuses.add(wxStatus.textContent);
-      weather.loop = false;
+      weather.looping = false;
       const path = await snapshot(map, "weather", { center: [-97, 38.5], zoom: 3.6 }, (ctx) => ctx.drawImage(weather.canvas, 0, 0, ctx.canvas.width, ctx.canvas.height));
       const probe = await weather.probe();
       return invoke("bench_done", { result: { weather: weather.report(), wait_ms: Math.round(performance.now() - t0), statuses: [...statuses], probe, snapshot: path } });

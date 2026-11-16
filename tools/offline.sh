@@ -13,7 +13,7 @@ if [ "${SKIP_BUILD:-0}" != 1 ]; then
   systemd-run --user --scope -q -p MemoryMax=12G npx tauri build --no-bundle >logs/offline-build.log 2>&1 \
     || { tail -20 logs/offline-build.log >&2; exit 1; }
 fi
-export MAPS_ARCHIVE=${MAPS_ARCHIVE:-westla.pmtiles} MAPS_LOCAL_ONLY=1 MAPS_BENCH=1
+export MAPS_ARCHIVE=${MAPS_ARCHIVE:-westla.pmtiles} MAPS_LOCAL_ONLY=1 MAPS_BENCH=1 MAPS_F4=0
 fail=0
 app() { # name, then env assignments
   local name=$1

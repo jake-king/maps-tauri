@@ -5,6 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # benchmarks run on the small reference cutout unless told otherwise, so results stay comparable
 export MAPS_ARCHIVE=${MAPS_ARCHIVE:-basemap.pmtiles}
+export MAPS_F4=${MAPS_F4:-0} # the dev overlay closed: open, it draws every frame and skews timings
 export MAPS_LOCAL_ONLY=${MAPS_LOCAL_ONLY:-1} # never the remote planet unless asked
 stage=${1:?blank or idle}
 log="logs/memprobe-$stage.log"

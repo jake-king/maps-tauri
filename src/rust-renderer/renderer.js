@@ -11,6 +11,7 @@
 import { Camera, lngLatToWorld, worldToLngLat, visibleTiles, ringTiles, tileRect, ancestor, interpolate, parseMeshHeader, parseLabels, tileZoom, clampCamera } from "./geo.js";
 import { LabelLayer } from "./labels.js";
 import palette from "./palette.json" with { type: "json" };
+import { FrameLoop } from "./loop.js";
 
 const EXTENT = 4096;
 const MAX_INFLIGHT = 8;
@@ -94,7 +95,6 @@ export class RustMap {
     this.frame = 0;
     this.tilesVisible = true;
     this.anim = null;
-    this.scheduled = false;
     this.idleFired = false;
 
     const canvas = document.createElement("canvas");
@@ -145,7 +145,29 @@ export class RustMap {
       this.triggerRepaint();
     });
     this.bindInput();
-    this.triggerRepaint();
+    // One loop, every display frame: what arrived is uploaded inside the frame, then the map is
+    // redrawn only if something changed (src/rust-renderer/loop.js). The upload budget keeps a burst
+    // of tiles from making one frame late.
+    this.loop = new FrameLoop({
+      render: (t) => this._render(t), // through the property, so the dev tools' wrapper sees it
+      upload: (job) => job(), // each arrival is the work that puts it on the GPU
+      onError: (error) => this.fire("error", { error }),
+    });
+    const frame = (now) => {
+      requestAnimationFrame(frame); // first: nothing thrown below can stop the loop
+      this.tick(now);
+    };
+    requestAnimationFrame(frame);
+  }
+
+  /** One display frame. The camera animation advances in _render; while it runs, every frame draws. */
+  tick(now) {
+    this.loop.tick(now);
+    if (this.anim) this.loop.invalidate();
+    else if (!this.idleFired && this.loop.quiet && this.inflight === 0 && this.queue.length === 0) {
+      this.idleFired = true;
+      this.fire("idle");
+    }
   }
 
   // --- events (MapLibre-shaped) ---
@@ -231,22 +253,17 @@ export class RustMap {
     };
     this.triggerRepaint();
   }
+  /** The picture is out of date: the next frame redraws it (however many calls before then). */
   triggerRepaint() {
     this.idleFired = false;
-    if (this.scheduled) return;
-    this.scheduled = true;
-    this.scheduledAt = performance.now();
-    requestAnimationFrame((now) => {
-      this.scheduled = false;
-      this._render(now);
-    });
+    this.loop?.invalidate();
   }
 
   /** Resolves when the map is idle: at once if it already is, else at the next "idle". An "idle"
    *  that fired before a listener was attached is gone (as MapLibre never replays "load"), and a
    *  startup handler registered after an `await` once missed it about one run in five. */
   whenIdle() {
-    const idle = this.idleFired && !this.scheduled && !this.anim && this.inflight === 0 && this.queue.length === 0;
+    const idle = this.idleFired && this.loop.quiet && !this.anim && this.inflight === 0 && this.queue.length === 0;
     return idle ? Promise.resolve() : new Promise((r) => this.once("idle", r));
   }
 
@@ -324,27 +341,40 @@ export class RustMap {
       const res = await fetch(`${this.baseUrl}/mesh/${t.z}/${t.x}/${t.y}`);
       if (res.status === 204) {
         t.state = "empty";
+        this.reportWait(t);
+        this.fire("data", { sourceId: "protomaps", tile: { tileID } });
       } else if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       } else {
         const buf = await res.arrayBuffer();
         this.onFetched?.(performance.now() - t0);
-        this.upload(t, buf); // the ArrayBuffer is dropped after this: only the GPU copy remains
-        t.state = "loaded";
-      }
-      // the wait a user saw: from the moment the tile was needed on screen to now
-      if (t.neededAt !== undefined && !t.waitReported) {
-        t.waitReported = true;
-        this.onVisibleWait?.(performance.now() - t.neededAt);
+        // not uploaded here: it waits for the next frame with room (FrameLoop's inbox)
+        t.state = "arrived";
+        this.loop.arrive(() => this.uploadArrived(t, buf), t.priority);
       }
     } catch (e) {
       t.state = "error";
       this.fire("error", { error: e });
+      this.fire("data", { sourceId: "protomaps", tile: { tileID } });
     } finally {
       this.inflight -= 1;
-      this.fire("data", { sourceId: "protomaps", tile: { tileID } });
       this.pump();
       this.triggerRepaint();
+    }
+  }
+  /** Inside a frame: an arrived tile onto the GPU, unless it was evicted while it waited. */
+  uploadArrived(t, buf) {
+    if (this.tiles.get(t.key) !== t || t.state !== "arrived") return;
+    this.upload(t, buf); // the ArrayBuffer is dropped after this: only the GPU copy remains
+    t.state = "loaded";
+    this.reportWait(t);
+    this.fire("data", { sourceId: "protomaps", tile: { tileID: { key: t.key } } });
+  }
+  /** The wait a user saw: from the moment the tile was needed on screen until it could be drawn. */
+  reportWait(t) {
+    if (t.neededAt !== undefined && !t.waitReported) {
+      t.waitReported = true;
+      this.onVisibleWait?.(performance.now() - t.neededAt);
     }
   }
   upload(t, buf) {
@@ -607,12 +637,6 @@ export class RustMap {
     drawn.labelMs = performance.now() - lt0;
     drawn.labelMisses = this.labelLayer.frameMisses;
     this.fire("render");
-
-    if (this.anim) this.triggerRepaint();
-    else if (this.inflight === 0 && this.queue.length === 0 && !this.idleFired) {
-      this.idleFired = true;
-      this.fire("idle");
-    }
   }
 
   // --- input: drag to pan, right-drag to rotate (MapLibre's gesture), wheel to zoom about the cursor

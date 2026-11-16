@@ -47,6 +47,7 @@ export function startDevtools({ map, flags, renderer, bounds, rows, describe = (
   let overlay = null;
   const active = () => benching || (overlay?.isVisible() ?? false);
   const sample = instrument(map, stats, { pixelCheck: flags.pixelCheck, active });
+  if (flags.f4 != null) localStorage.setItem("f4", flags.f4 ? "1" : "0");
   overlay = createOverlay(stats);
   const frame = (now) => {
     sample(now);
