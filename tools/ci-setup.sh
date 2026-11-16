@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # What a fresh Ubuntu 24.04 machine needs before tools/check.sh can run: the WebKitGTK and other
-# system libraries Tauri links against, shellcheck, and ruff at the version the dev box uses. On a
+# system libraries Tauri links against, shellcheck (Ubuntu's 0.9; the dev box runs 0.11, and the
+# scripts must pass both), and ruff at the version the dev box uses. On a
 # bare container (tools/ci-local.sh) it also installs rustup and Node; GitHub's runner has rustup,
 # and the workflow sets Node up itself. Rust's version comes from rust-toolchain.toml either way.
 set -euo pipefail

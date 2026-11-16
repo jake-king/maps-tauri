@@ -34,7 +34,10 @@ serve() { # etag, log
   echo "rangeserve did not start (see $2)" >&2
   exit 1
 }
-stop() { [ -n "$server" ] && kill "$server" 2>/dev/null && wait "$server" 2>/dev/null || true; server=; }
+stop() {
+  if [ -n "$server" ]; then kill "$server" 2>/dev/null || true; wait "$server" 2>/dev/null || true; fi
+  server=
+}
 trap stop EXIT
 app() { # name, then env assignments
   env "${@:2}" systemd-run --user --scope -q -p MemoryMax=10G timeout 300 ./target/release/maps-tauri >"logs/cache-$1.log" 2>&1 || true
