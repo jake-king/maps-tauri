@@ -962,3 +962,42 @@ the credit planted out of the page, the gate failed.
 
 The code is licensed MIT or Apache-2.0, and the README now describes the whole app, how it was
 built, and how to get the data from public sources.
+
+## Weather: NOAA radar and hazard areas
+
+Before writing code I fetched one of everything and read it. The MRMS base reflectivity mosaic is a
+0.7 MB gzipped GRIB2 file every two minutes: one message, a regular latitude/longitude grid of
+7000 x 3500 cells at 0.01° (template 3.0), values packed as a 16-bit PNG (template 5.41), dBZ =
+(raw - 9990) / 10. The G-AIRMET feed is GeoJSON, but asking for it without a forecast hour returned
+only the snapshot six hours ahead; the API's schema shows a `fore` parameter (0, 3, 6, 9, 12), and
+each hour is a separate snapshot valid at one instant. The first request for hour 0 failed with a 504.
+So the design took three facts from the data rather than from assumption: fetch all five hours and
+show the nearest, keep the last good copy when a request fails, and read only the two GRIB2 templates
+MRMS uses, refusing anything else by name.
+
+`crates/wx` decodes and reduces a frame in about 0.1 s (decode 63 ms, thin 38 ms). Thinning keeps
+the strongest echo of each 2 x 2 block: averaging would wash out a storm's core. Its tests build
+synthetic GRIB2 messages around real PNG encodings; five planted defects (a two's complement
+latitude where GRIB2 uses sign and magnitude, a flipped binary scale, thinning that kept the weakest
+echo, longitude left in 0-360, the wrong snapshot on a tie) each failed them. A real frame and real
+hazard responses pass through the same parser under an environment variable.
+
+The backend's fetching sits behind a small trait so its tests run a fake NOAA that fails, recovers
+and moves on. The first version merged every forecast hour's features into the "nearest" snapshot,
+which the fake caught by drawing one area five times. The same bug was reachable for real: a new
+package issued between two of a round's requests leaves two hours valid at the same time. The fix
+shows exactly one forecast hour.
+
+The radar is drawn in one pass over the screen. Every pixel goes back through the camera's rotation
+and scale to Web Mercator, then to latitude and longitude, then to a cell index; nothing is
+reprojected on the CPU. The first country-wide picture looked right, but looking right at zoom 3.6
+cannot show an error of a few cells. The check that can: draw a synthetic frame whose only lit cell
+holds Santa Monica Pier, at zoom 15, twice (lit and unlit), and find the pixels that changed. Their
+centre must be where the map's own projection puts the pier. The first run of this probe found
+nothing at all, which looked like a broken shader but was the probe: its texture had no filter set,
+WebGL's default wants mipmaps, and an incomplete texture reads as zero. With that fixed: offset 0, 0
+px; 46 x 56 px for a cell that should be 47 x 56.7 (1/cos 34°). An inverted latitude and a
+one-cell longitude shift, planted in the shader, both failed `tools/weather.sh`.
+
+Nothing is fetched until a box is ticked, so the benchmarks and the offline gate stay offline; the
+fetching is in Rust, so the content security policy is unchanged.

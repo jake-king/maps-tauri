@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-wx-enable"
+description = "Enables the wx_enable command without any pre-configured scope."
+commands.allow = ["wx_enable"]
+
+[[permission]]
+identifier = "deny-wx-enable"
+description = "Denies the wx_enable command without any pre-configured scope."
+commands.deny = ["wx_enable"]

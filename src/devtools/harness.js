@@ -39,7 +39,7 @@ export async function memprobeBlank(flags, renderer) {
  * Start the shared dev tools for `map`. `rows()` gives the bytes-per-block rows; `describe()` the
  * renderer's own fields for a benchmark result; `stats`, if given, is one already being fed (the
  * MapLibre app's timed tile source writes into it before the map exists). Returns `{ stats, active, runModes }`: call
- * `runModes(extra)` once the map is first idle; `extra.search`, if given, runs for MAPS_SEARCH.
+ * `runModes(extra)` once the map is first idle; `extra.search`, if given, runs for MAPS_SEARCH; `extra.weather` for MAPS_WEATHER.
  */
 export function startDevtools({ map, flags, renderer, bounds, rows, describe = () => ({}), stats = createStats() }) {
   setBenchSpeed(flags.benchSpeed ?? 0);
@@ -90,6 +90,7 @@ export function startDevtools({ map, flags, renderer, bounds, rows, describe = (
 
   async function runModes(extra = {}) {
     if (flags.search && extra.search) return extra.search();
+    if (flags.weather && extra.weather) return extra.weather();
     if (flags.zoomBench) {
       const result = await exclusive(() => runZoomBench(map, stats, PIER, `zoombench-${renderer}`));
       return invoke("bench_done", { result: { zoom_bench: true, renderer, ...result } });

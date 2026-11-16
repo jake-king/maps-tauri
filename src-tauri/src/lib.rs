@@ -2,6 +2,7 @@ mod devstats;
 mod diskcache;
 pub mod search;
 mod tiles;
+mod weather;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -69,6 +70,8 @@ fn dev_flags() -> serde_json::Value {
         "memprobe": std::env::var("MAPS_MEMPROBE").ok(),
         // MAPS_RENDERER=rust: the native renderer (Rust decodes and meshes, WebGL draws)
         "renderer": std::env::var("MAPS_RENDERER").ok(),
+        // MAPS_WEATHER=1: weather on at startup, then settle and snapshot it (an end-to-end check)
+        "weather": std::env::var("MAPS_WEATHER").is_ok_and(|v| v == "1"),
         // MAPS_NO_FALLBACK=1: the native renderer draws nothing for a tile still loading (a control)
         "noFallback": std::env::var("MAPS_NO_FALLBACK").is_ok_and(|v| v == "1"),
         // MAPS_PREFETCH_RING=<n>: tiles beyond the view the native renderer fetches ahead (default 1)
@@ -288,6 +291,38 @@ fn data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../data")))
 }
 
+/// Turn the weather layer on: the first call starts fetching from NOAA (nothing does before it).
+#[tauri::command]
+fn wx_enable(w: tauri::State<'_, Arc<weather::Weather>>) -> Value {
+    w.enable(Arc::new(weather::Noaa::new()));
+    w.state(unix_now())
+}
+
+/// Radar frame times, the grid, the hazard snapshot nearest now, and how fresh each is.
+#[tauri::command]
+fn wx_state(w: tauri::State<'_, Arc<weather::Weather>>) -> Value {
+    w.state(unix_now())
+}
+
+/// One radar frame's cells, one byte each (wx::radar's code), as raw bytes rather than JSON.
+#[tauri::command]
+fn wx_frame(
+    time: i64,
+    w: tauri::State<'_, Arc<weather::Weather>>,
+) -> Result<tauri::ipc::Response, String> {
+    let r = w
+        .frame(time)
+        .ok_or_else(|| format!("no radar frame at {time}"))?;
+    Ok(tauri::ipc::Response::new(r.codes.clone()))
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 pub fn run() {
     let data = data_dir();
     let gazetteer = match search::open(&data.join("geonames.db")) {
@@ -349,6 +384,9 @@ pub fn run() {
         .manage(tile_times)
         .manage(stage_times)
         .manage(mesh_cache)
+        .manage(Arc::new(weather::Weather::open(
+            weather::configured_path().as_deref(),
+        )))
         // Asynchronous so a file read never runs on the UI thread: the handler hands the request
         // to a blocking-pool thread and answers through the responder when the read is done.
         .register_asynchronous_uri_scheme_protocol("tiles", move |_ctx, request, responder| {
@@ -404,7 +442,10 @@ pub fn run() {
             dev_flags,
             bench_done,
             archive_info,
-            save_snapshot
+            save_snapshot,
+            wx_enable,
+            wx_state,
+            wx_frame
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

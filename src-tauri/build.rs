@@ -10,6 +10,9 @@ fn main() {
             "bench_done",
             "archive_info",
             "save_snapshot",
+            "wx_enable",
+            "wx_state",
+            "wx_frame",
         ]),
     ))
     .expect("failed to run tauri-build");

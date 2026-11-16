@@ -1835,12 +1835,15 @@ name = "maps-tauri"
 version = "0.1.0"
 dependencies = [
  "coords",
+ "flate2",
+ "png",
  "rusqlite",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "vtile",
+ "wx",
 ]
 
 [[package]]
@@ -4666,6 +4669,16 @@ dependencies = [
  "windows-core",
  "windows-version",
  "x11-dl",
+]
+
+[[package]]
+name = "wx"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "png",
+ "serde_json",
+ "ureq",
 ]
 
 [[package]]

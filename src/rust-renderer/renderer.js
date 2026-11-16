@@ -103,6 +103,8 @@ export class RustMap {
     parent.appendChild(canvas);
     this.canvas = canvas;
     this.labelLayer = new LabelLayer(parent); // a 2D canvas over the map
+    /** Layers drawn over the map and under the labels (the weather): each has draw(gl, map). */
+    this.overlays = [];
     this.labelLayer.visible = labels;
     this.labelLayer.onSprites = () => this.triggerRepaint(); // icons arrive after the first frames
     // a stencil buffer: each tile is clipped to its own square through it (scissor rectangles cannot
@@ -592,6 +594,7 @@ export class RustMap {
     this.lastDrawn = drawn;
     gl.disable(gl.STENCIL_TEST);
     gl.bindVertexArray(null);
+    for (const o of this.overlays) o.draw(gl, this);
     const lt0 = performance.now();
     // labels in true screen positions: a tile point -> world -> screen, through the turned camera
     const cam = this.cam;

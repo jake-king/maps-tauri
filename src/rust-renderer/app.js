@@ -11,6 +11,7 @@ import { say, memprobeBlank, startDevtools } from "../devtools/harness.js";
 import { createSearchBox } from "./search.js";
 import initCoords, { coordFeatures } from "../wasm/coords.js";
 import { once } from "./once.js";
+import { WeatherLayer, age } from "./weather.js";
 
 const flags = await invoke("dev_flags");
 const gpu = installGpuLedger(WebGL2RenderingContext.prototype, new GpuLedger());
@@ -60,6 +61,40 @@ const creditShown = () => {
   const inside = r.width > 0 && r.height > 0 && r.right <= innerWidth && r.bottom <= innerHeight;
   return { text: credit.textContent, inside };
 };
+// Weather: NOAA radar and G-AIRMET hazards, off until a box is ticked (nothing is fetched before).
+const wxPanel = document.createElement("div");
+wxPanel.style.cssText = "position:absolute;left:10px;bottom:10px;z-index:20;padding:6px 10px;background:#fffe;border-radius:6px;" +
+  "box-shadow:0 1px 4px #0003;font:12px 'Noto Sans',sans-serif;color:#222;";
+const wxBox = (label) => {
+  const l = document.createElement("label");
+  l.style.cssText = "margin-right:10px;cursor:pointer;";
+  const b = document.createElement("input");
+  b.type = "checkbox";
+  b.style.cssText = "vertical-align:middle;margin:0 4px 0 0;";
+  l.append(b, label);
+  wxPanel.append(l);
+  return b;
+};
+const radarBox = wxBox("Radar");
+const hazardBox = wxBox("G-AIRMET hazards");
+const wxStatus = document.createElement("div");
+wxStatus.style.cssText = "margin-top:3px;color:#555;font-size:11px;";
+wxPanel.append(wxStatus);
+document.getElementById("map").appendChild(wxPanel);
+const weather = new WeatherLayer(map, {
+  onChange: (s) => {
+    const now = s.now;
+    const parts = [];
+    if (radarBox.checked) parts.push(`radar ${age(s.frames.at(-1), now)} (${s.frames.length} frames)`);
+    if (hazardBox.checked) parts.push(`hazards valid ${age(s.hazardsValid, now)}`);
+    if (s.fromDisk) parts.push("offline: last fetched");
+    if (s.errors.length) parts.push(`${s.errors.length} fetch errors`);
+    wxStatus.textContent = parts.join(" · ");
+  },
+});
+const wxSet = () => weather.set({ radar: radarBox.checked, hazards: hazardBox.checked }).catch((e) => say(`map error: weather: ${e.message ?? e}`));
+radarBox.addEventListener("change", wxSet);
+hazardBox.addEventListener("change", wxSet);
 // pixel check: a magenta background, so any uncovered screen area is countable
 if (flags.pixelCheck) map.setBackground([1, 0, 1, 1]);
 map.on("error", (e) => say(`map error: ${e.error?.message ?? e}`));
@@ -90,6 +125,23 @@ map.whenIdle().then(async () => {
       await new Promise((r) => setTimeout(r, 200));
       const path = await snapshot(map, "search", { center: map.getCenter(), zoom: map.getZoom() }, (ctx, dpr) => search.paint(ctx, dpr));
       return invoke("bench_done", { result: { search: flags.search, results: names, box: search.boxStyle(), credit: creditShown(), center: map.getCenter(), snapshot: path } });
+    },
+    // MAPS_WEATHER=1: both layers on, wait for every frame and the hazards (90 s at most), then a
+    // picture of the whole country with the loop held on the newest frame
+    weather: async () => {
+      radarBox.checked = hazardBox.checked = true;
+      await wxSet();
+      const t0 = performance.now();
+      while (performance.now() - t0 < 90000) {
+        await weather.refresh();
+        const s = weather.state;
+        if (s.frames.length && weather.frames.size === s.frames.length && s.hazardsOk) break;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      weather.loop = false;
+      const path = await snapshot(map, "weather", { center: [-97, 38.5], zoom: 3.6 }, (ctx) => ctx.drawImage(weather.canvas, 0, 0, ctx.canvas.width, ctx.canvas.height));
+      const probe = await weather.probe();
+      return invoke("bench_done", { result: { weather: weather.report(), wait_ms: Math.round(performance.now() - t0), probe, snapshot: path } });
     },
   });
 });

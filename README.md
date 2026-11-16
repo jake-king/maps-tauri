@@ -23,6 +23,9 @@ problem, the measurements that turned out to be wrong, and what fixed them.
 - `crates/coords`: the search box's coordinate parser, name folding and FTS5 query builder, ported
   from the Python service and compiled to WebAssembly for the frontend. `tools/diff.py` runs the
   port and the original over about 190,000 inputs and lists every disagreement.
+- `crates/wx`: NOAA weather. A GRIB2 reader for the MRMS radar mosaic (the regular latitude/longitude
+  grid with PNG-packed values that MRMS uses; anything else is refused by name), the reduction of a
+  frame to one byte per cell for the GPU, and the G-AIRMET hazard GeoJSON.
 - `src-tauri`: the backend. Tiles are served through a `tiles://` URI scheme with range support;
   meshes go to the webview in a compact binary format; `search` queries a GeoNames FTS5 index with
   rusqlite; `diskcache.rs` is the SQLite cache for the remote archive. Commands need capability
@@ -45,6 +48,26 @@ showing" counts frames where any of the screen was not yet drawn, read back from
 
 Against the remote planet over a LAN, the disk cache took frames with background from 7.8% to
 0.4%. The journal has how each number was measured and what was wrong with the first attempts.
+
+## Weather
+
+Two layers for the native renderer, off until their boxes are ticked; nothing is fetched from NOAA
+before that. Rust fetches on a background thread, every two minutes for radar and every fifteen for
+hazards, and keeps what it fetched in a small SQLite file, so the last weather still shows offline,
+labelled with its age.
+
+- Radar: the newest ten MRMS base reflectivity mosaics (about 20 minutes), animated. Each frame is
+  0.7 MB of GRIB2, decoded and thinned to a 3500 x 1750 grid of one-byte cells (0.02°) and uploaded
+  once as a texture, 61 MB on the GPU for the ten. It is drawn in one full-screen pass: the shader
+  takes each pixel back to latitude and longitude through the camera and Web Mercator and looks its
+  cell up, so the radar grid is never reprojected on the CPU. Colours are the NWS reflectivity scale.
+- Hazards: the G-AIRMET snapshot nearest the present (turbulence, icing, IFR, mountain obscuration,
+  surface wind), outlined and labelled with severity and flight levels.
+
+`tools/weather.sh` checks it end to end against NOAA: real data must arrive with no errors, and a
+synthetic one-cell frame at a known point must land where the map's own projection puts that point,
+one cell wide and 1/cos(latitude) cells tall. The shader and the map's projection are separate code,
+so each checks the other.
 
 ## Data
 
@@ -84,5 +107,6 @@ are described at the top of each script. F4 in the app opens the profiler overla
 ## Licence
 
 Code: MIT or Apache-2.0, at your option. Map data © OpenStreetMap contributors (ODbL), basemap
-schema and assets by Protomaps. `src/maplibre-patch.js` changes a private MapLibre 6.7.0 method and
+schema and assets by Protomaps. Weather from NOAA: MRMS radar (NCEP) and G-AIRMETs
+(aviationweather.gov); not for flight planning. `src/maplibre-patch.js` changes a private MapLibre 6.7.0 method and
 does nothing on any other version.
