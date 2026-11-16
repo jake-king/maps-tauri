@@ -3,10 +3,12 @@
 // streaks run along the wind and longer streaks mean stronger wind.
 //
 // The simulation is plain JavaScript on Float64 positions in longitude/latitude (pure, tested in
-// tests/wind.test.js); each frame the moved segments are projected to screen pixels and drawn on the
-// GPU into a trail texture that fades a little every frame, then composited over the map. A particle
-// moves a fixed number of screen pixels per m/s at any zoom, so the picture reads the same zoomed in
-// or out; the trails are cleared whenever the camera moves.
+// tests/wind.test.js). Each particle keeps its last TRAIL positions in world coordinates, and every
+// frame those paths are projected through the current camera and drawn as lines fading from head to
+// tail. Nothing is kept in screen space, so a pan, zoom or turn moves the trails exactly with the map;
+// an earlier version kept the trails in a texture and resampled it each frame, which blurred them and
+// left ghost copies during a zoom. A particle moves a fixed number of screen pixels per m/s at any
+// zoom, so the picture reads the same zoomed in or out.
 
 /** Screen pixels a particle moves per frame for each m/s of wind: 50 m/s is 2 px a frame. */
 export const PX_PER_MPS = 0.04;
@@ -45,8 +47,21 @@ export function speedColor(s) {
   return [0.75, 0.09, 0.36, 0.95];
 }
 
+/** Points of history a trail keeps: about a quarter of a second at 60 frames a second. */
+export const TRAIL = 16;
+
+const toWorldX = (lon) => (lon + 180) / 360;
+const toWorldY = (lat) => {
+  const t = Math.sin((lat * Math.PI) / 180);
+  return 0.5 - Math.log((1 + t) / (1 - t)) / (4 * Math.PI);
+};
+
 export class Particles {
   constructor(n, rng = Math.random) {
+    // the recent path, in world coordinates (Web Mercator, [0, 1)): a ring of TRAIL points each
+    this.hist = new Float64Array(n * TRAIL * 2);
+    this.histHead = new Uint16Array(n);
+    this.histLen = new Uint16Array(n);
     this.n = n;
     this.rng = rng;
     this.lon = new Float64Array(n);
@@ -63,6 +78,23 @@ export class Particles {
     this.lat[i] = this.prevLat[i] = s + this.rng() * (n - s);
     this.age[i] = 0;
     this.speed[i] = 0;
+    this.histLen[i] = 0;
+    this.record(i);
+  }
+
+  /** Add the particle's position to the head of its path. */
+  record(i) {
+    const h = (this.histHead[i] + 1) % TRAIL;
+    this.histHead[i] = h;
+    this.hist[(i * TRAIL + h) * 2] = toWorldX(this.lon[i]);
+    this.hist[(i * TRAIL + h) * 2 + 1] = toWorldY(this.lat[i]);
+    if (this.histLen[i] < TRAIL) this.histLen[i] += 1;
+  }
+
+  /** Point `k` of particle `i`'s path (0 = where it is now), in world coordinates. */
+  point(i, k) {
+    const at = (i * TRAIL + ((this.histHead[i] - k + TRAIL) % TRAIL)) * 2;
+    return [this.hist[at], this.hist[at + 1]];
   }
 
   /** One frame: each particle moves with the wind; one that has lived its life, left the view or left
@@ -86,25 +118,40 @@ export class Particles {
       this.lat[i] = lat + (v * PX_PER_MPS * Math.cos((lat * Math.PI) / 180)) / pxPerDeg;
       this.speed[i] = Math.hypot(u, v);
       this.age[i] += 1;
+      this.record(i);
     }
   }
 }
 
-const QUAD_VS = `#version 300 es
-void main() {
-  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
-  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
-}`;
-// the previous trails, a little fainter each frame
-const FADE_FS = `#version 300 es
-precision mediump float;
-uniform sampler2D u_tex;
-uniform vec2 u_size;
-uniform float u_fade;
-out vec4 o;
-void main() {
-  o = texture(u_tex, gl_FragCoord.xy / u_size) * u_fade;
-}`;
+/** The trails as line segments for the GPU: [x, y (CSS px), r, g, b, a] per vertex, two per segment,
+ *  from each particle's head back along its path, fading to nothing at the tail. Projected through
+ *  `cam` every frame, so a trail is where its places are on the map now, whatever the camera did:
+ *  nothing is carried over in screen space. Returns the number of vertices written. */
+export function trailVertices(p, cam, out) {
+  const c = Math.cos(cam.bearing), s = Math.sin(cam.bearing);
+  const scale = cam.scale, cx = cam.cx, cy = cam.cy, hw = cam.w / 2, hh = cam.h / 2;
+  let v = 0;
+  for (let i = 0; i < p.n; i += 1) {
+    const len = p.histLen[i];
+    if (len < 2) continue;
+    const [r, g, b, a] = speedColor(p.speed[i]);
+    let prevX = 0, prevY = 0;
+    for (let k = 0; k < len; k += 1) {
+      const at = (i * TRAIL + ((p.histHead[i] - k + TRAIL) % TRAIL)) * 2;
+      const dx = (p.hist[at] - cx) * scale, dy = (p.hist[at + 1] - cy) * scale;
+      const x = dx * c + dy * s + hw, y = -dx * s + dy * c + hh;
+      if (k > 0) {
+        const a0 = a * (1 - (k - 1) / (TRAIL - 1)), a1 = a * (1 - k / (TRAIL - 1));
+        out.set([prevX, prevY, r, g, b, a0, x, y, r, g, b, a1], v * 6);
+        v += 2;
+      }
+      prevX = x;
+      prevY = y;
+    }
+  }
+  return v;
+}
+
 const SEG_VS = `#version 300 es
 in vec2 a_px;      // CSS px, y down
 in vec4 a_color;
@@ -137,136 +184,49 @@ function program(gl, vs, fs, attribs = []) {
   return p;
 }
 
-/** The GPU side: trails in two textures used in turn, segments drawn into the newer one. */
+/** The GPU side: each frame, every trail as fading line segments straight onto the screen. */
 export class WindRenderer {
   constructor(gl, count = 5000) {
     this.gl = gl;
     this.particles = new Particles(count);
     this.field = null;
-    this.fadeProg = program(gl, QUAD_VS, FADE_FS);
-    this.segProg = program(gl, SEG_VS, SEG_FS, ["a_px", "a_color"]);
-    this.quadVao = gl.createVertexArray();
-    this.segVao = gl.createVertexArray();
-    this.segBuf = gl.createBuffer();
-    gl.bindVertexArray(this.segVao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.segBuf);
+    this.prog = program(gl, SEG_VS, SEG_FS, ["a_px", "a_color"]);
+    this.uCss = gl.getUniformLocation(this.prog, "u_css");
+    this.vao = gl.createVertexArray();
+    this.buf = gl.createBuffer();
+    gl.bindVertexArray(this.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 24, 0);
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 24, 8);
     gl.bindVertexArray(null);
-    this.verts = new Float32Array(count * 2 * 6);
-    this.targets = null;
-    this.camKey = null;
+    this.verts = new Float32Array(count * TRAIL * 2 * 6);
     this.frames = 0;
   }
 
   setField(f) {
     this.field = f;
-    this.clear();
   }
 
-  /** Two colour textures the size of the canvas, each with a framebuffer. */
-  ensureTargets(w, h) {
-    const gl = this.gl;
-    if (this.targets && this.targets.w === w && this.targets.h === h) return;
-    if (this.targets) for (const t of this.targets.list) {
-      gl.deleteTexture(t.tex);
-      gl.deleteFramebuffer(t.fb);
-    }
-    const make = () => {
-      const tex = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      const fb = gl.createFramebuffer();
-      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-      return { tex, fb };
-    };
-    this.targets = { w, h, list: [make(), make()], cur: 0 };
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    this.clear();
-  }
-
-  clear() {
-    this.cleared = true;
-  }
-
-  /** One frame: step the particles, fade the old trails, draw the new segments, put it on screen.
-   *  Called inside the map's frame, after the map and the radar. */
+  /** One frame: step the particles, draw their trails. Inside the map's frame, after the radar. */
   draw(gl, map) {
     if (!this.field) return;
     const cam = map.cam;
-    const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
-    this.ensureTargets(W, H);
-    // trails belong to one view: any camera change starts them again
-    const key = `${cam.cx},${cam.cy},${cam.zoom},${cam.bearing},${W},${H}`;
-    if (key !== this.camKey) {
-      this.camKey = key;
-      this.cleared = true;
-    }
-    const q = cam.viewQuad(0).map(([x, y]) => {
-      const lng = x * 360 - 180;
-      const lat = (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI;
-      return [lng, lat];
-    });
+    const q = cam.viewQuad(0).map(([x, y]) => [x * 360 - 180, (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI]);
     const view = [Math.min(...q.map((p) => p[0])), Math.min(...q.map((p) => p[1])), Math.max(...q.map((p) => p[0])), Math.max(...q.map((p) => p[1]))];
-    const P = this.particles;
-    P.step(this.field, view, cam.scale);
-    let n = 0;
-    const v = this.verts;
-    for (let i = 0; i < P.n; i += 1) {
-      if (P.prevLon[i] === P.lon[i] && P.prevLat[i] === P.lat[i]) continue; // just respawned
-      const a = map.project([P.prevLon[i], P.prevLat[i]]), b = map.project([P.lon[i], P.lat[i]]);
-      const c = speedColor(P.speed[i]);
-      v.set([a.x, a.y, ...c, b.x, b.y, ...c], n * 12);
-      n += 1;
-    }
-    const t = this.targets;
-    const prev = t.list[t.cur], next = t.list[1 - t.cur];
-    gl.bindFramebuffer(gl.FRAMEBUFFER, next.fb);
-    gl.viewport(0, 0, W, H);
-    gl.disable(gl.BLEND);
-    if (this.cleared) {
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      this.cleared = false;
-    } else {
-      gl.useProgram(this.fadeProg);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, prev.tex);
-      gl.uniform1i(gl.getUniformLocation(this.fadeProg, "u_tex"), 0);
-      gl.uniform2f(gl.getUniformLocation(this.fadeProg, "u_size"), W, H);
-      gl.uniform1f(gl.getUniformLocation(this.fadeProg, "u_fade"), 0.94);
-      gl.bindVertexArray(this.quadVao);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
-    }
+    this.particles.step(this.field, view, cam.scale);
+    const n = trailVertices(this.particles, cam, this.verts);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    gl.useProgram(this.segProg);
-    gl.uniform2f(gl.getUniformLocation(this.segProg, "u_css"), cam.w, cam.h);
-    gl.bindVertexArray(this.segVao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.segBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, v.subarray(0, n * 12), gl.STREAM_DRAW);
-    gl.lineWidth(1);
-    gl.drawArrays(gl.LINES, 0, n * 2);
-    // the trails onto the screen, over the map and the radar
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, W, H);
-    gl.useProgram(this.fadeProg);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, next.tex);
-    // set here too: after a clear the fade pass did not run, and its uniforms may never have been set
-    gl.uniform1i(gl.getUniformLocation(this.fadeProg, "u_tex"), 0);
-    gl.uniform2f(gl.getUniformLocation(this.fadeProg, "u_size"), W, H);
-    gl.uniform1f(gl.getUniformLocation(this.fadeProg, "u_fade"), 1.0);
-    gl.bindVertexArray(this.quadVao);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.useProgram(this.prog);
+    gl.uniform2f(this.uCss, cam.w, cam.h);
+    gl.bindVertexArray(this.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
+    gl.bufferData(gl.ARRAY_BUFFER, this.verts.subarray(0, n * 6), gl.STREAM_DRAW);
+    gl.drawArrays(gl.LINES, 0, n);
     gl.bindVertexArray(null);
-    t.cur = 1 - t.cur;
     this.frames += 1;
-    this.lastSegments = n;
+    this.lastSegments = n / 2;
   }
 }

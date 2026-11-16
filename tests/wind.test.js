@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { decodeWind, sampleWind, Particles, PX_PER_MPS, speedColor } from "../src/rust-renderer/wind.js";
+import { decodeWind, sampleWind, Particles, PX_PER_MPS, speedColor, TRAIL, trailVertices } from "../src/rust-renderer/wind.js";
 
 /** An encoded field as Rust's wx::wind::encode writes it. */
 function encoded({ ni, nj, lat0, lon0, dlat, dlon, run = 1_794_830_400, fhr = 7, hpa = 250 }, uv) {
@@ -91,3 +91,40 @@ function mulberry(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+test("each particle keeps its recent path in world coordinates, and a respawn starts a new one", () => {
+  const f = field();
+  const p = new Particles(2, mulberry(3));
+  const view = [-98, 51, -82, 59];
+  p.step(f, view, 512 * 16); // all respawn
+  assert.deepEqual([p.histLen[0], p.histLen[1]], [1, 1]);
+  for (let k = 0; k < 30; k++) p.step(f, view, 512 * 16);
+  assert.ok(p.histLen[0] <= TRAIL && p.histLen[0] > 1, `history ${p.histLen[0]} of at most ${TRAIL}`);
+  const [hx, hy] = p.point(0, 0);
+  assert.ok(Math.abs(hx - (p.lon[0] + 180) / 360) < 1e-12, "the newest point is where the particle is");
+  assert.ok(hy > 0 && hy < 1);
+  p.age[1] = Infinity;
+  p.step(f, view, 512 * 16);
+  assert.equal(p.histLen[1], 1, "a respawned particle has no path behind it");
+});
+
+test("the trail vertices: one segment per step of history, fading from head to tail, through any camera", async () => {
+  const { Camera } = await import("../src/rust-renderer/geo.js");
+  const f = field();
+  const p = new Particles(3, mulberry(4));
+  const view = [-98, 51, -82, 59];
+  for (let k = 0; k < 6; k++) p.step(f, view, 512 * 16);
+  const cam = new Camera(0.24, 0.32, 4, 1200, 800, 0.3);
+  const out = new Float32Array(p.n * TRAIL * 2 * 6);
+  const n = trailVertices(p, cam, out);
+  const want = [0, 1, 2].reduce((a, i) => a + Math.max(0, p.histLen[i] - 1), 0);
+  assert.equal(n, want * 2, "two vertices per segment");
+  const first = [0, 1, 2].find((i) => p.histLen[i] > 1);
+  const [wx, wy] = p.point(first, 0);
+  const [sx, sy] = cam.worldToScreen(wx, wy);
+  assert.ok(Math.abs(out[0] - sx) < 1e-3 && Math.abs(out[1] - sy) < 1e-3, `${out[0]},${out[1]} vs ${sx},${sy}`);
+  const alphas = [];
+  for (let v = 0; v < (p.histLen[first] - 1) * 2; v += 2) alphas.push(out[v * 6 + 5]);
+  assert.ok(alphas.length > 1 && alphas.every((a, i) => i === 0 || a < alphas[i - 1]), `alphas ${alphas}`);
+});
+

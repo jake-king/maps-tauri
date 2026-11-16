@@ -77,8 +77,9 @@ Center's GFA does it, and off until their boxes are ticked: nothing is fetched f
   trails, coloured by speed. The field (U and V on a 0.25° grid, cut by NOAA's NOMADS filter, about
   150 KB) comes from the newest run that serves the chosen time, or the run before if that one is not
   published yet. Particles move a fixed number of screen pixels per m/s at any zoom; the simulation is
-  JavaScript, the trails a pair of textures on the GPU that fade a little each frame. With winds alone
-  on, the map holds 60 frames a second, redraw p50 7 ms, p99 13 ms.
+  JavaScript. Each particle keeps its last 16 positions on the map, and every frame those paths are
+  projected through the camera and drawn as fading lines, so the trails stay put on the map through a
+  pan, zoom or turn. With winds alone on, the map holds 60 frames a second, redraw p50 9 ms, p99 11 ms.
 - Hazards: the G-AIRMET snapshot valid nearest the chosen time (turbulence, icing, IFR, mountain
   obscuration, surface wind), outlined and labelled, filtered by flight level as GFA does: an area
   shows if the level is within 3,000 ft of its base or top. A snapshot more than 90 minutes from the

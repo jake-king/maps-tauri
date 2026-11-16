@@ -73,6 +73,8 @@ fn dev_flags() -> serde_json::Value {
         "renderer": std::env::var("MAPS_RENDERER").ok(),
         // MAPS_WEATHER=1: weather on at startup, then settle and snapshot it (an end-to-end check)
         "weather": std::env::var("MAPS_WEATHER").is_ok_and(|v| v == "1"),
+        // MAPS_WIND_MOTION=1: winds alone, then a pan and a zoom, frames saved during and after each
+        "windMotion": std::env::var("MAPS_WIND_MOTION").is_ok_and(|v| v == "1"),
         // MAPS_F4=0|1: the overlay closed or open, whatever the last session left (it is remembered,
         // and an open overlay draws every frame: every benchmark sets it)
         "f4": std::env::var("MAPS_F4").ok().map(|v| v == "1"),

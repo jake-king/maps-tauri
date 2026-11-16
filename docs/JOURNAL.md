@@ -1189,3 +1189,28 @@ errors and no snapshot selected: the hazards had simply not arrived yet. When ha
 90 minutes, "no snapshot near this time" became a valid answer for readiness, but before the first
 fetch completes it means "not loaded" too, and the check could not tell them apart. It now requires a
 completed hazard fetch (or hazards from disk) before none counts. Three runs after the fix passed.
+
+### Trails that stay through a pan
+
+By hand, the user found two things: panning reset the trails every frame, and zooming did too, with
+what looked like doubled wind. A dev mode (MAPS_WIND_MOTION=1) now pans and zooms (scripted, then with
+real wheel events) and saves frames during and after each. The first capture confirmed the reset: I
+cleared the trail texture on every camera change, so mid-move only one-frame dashes were left.
+
+The first fix kept the texture and carried it with the map: world to screen is a similarity
+transform, so last frame's pixels map to this frame's by one exact 2x2 matrix and offset (computed in
+double precision, tested against the camera for pans, zooms and turns). The captures showed what that
+costs. Resampling a texture every frame with linear filtering blurs it a little each time, so a pan
+left a smeared wash behind the streaks; and during a zoom the old trails were magnified while new sharp
+ones were drawn beside them: a doubled look, probably what the user had seen.
+
+So the texture went. Each particle keeps its last 16 positions in world coordinates, and every frame
+those paths are projected through the current camera and drawn as lines fading from head to tail.
+Nothing lives in screen space, so nothing is resampled or left behind. The gate counts trail segments
+drawn during the moves: before 64,000, mid-pan 67,000, mid-zoom 51,000-54,000 (particles leaving a
+shrinking view start again). With histories planted to be wiped on every camera move, mid-pan fell to
+4,961 and the gate failed. Cost with winds alone: still 60 frames a second, redraw p50 9 ms, p99 11 ms.
+
+Two mistakes of mine on the way: a test-file splice that left a duplicate helper, and a shell command
+that inserted gate text containing its own heredoc terminator, so the shell ran the remainder,
+launching the app. The text now goes through a file.

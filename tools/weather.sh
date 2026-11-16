@@ -4,6 +4,7 @@
 # then the same 3 hours back, then these checks:
 #   - both times fully loaded (radar loop, satellite image, hazards), nothing from after the chosen time,
 #     and the flight-level filter narrowing the hazards
+#   - the wind trails through a pan and a wheel zoom (a second run): kept, not started again
 #   - registration: a synthetic one-cell frame at Santa Monica Pier must land where the map's own
 #     projection puts the pier, within half a cell, and be one cell wide and 1/cos(lat) cells tall
 #   - nothing reported an error, and real data arrived (frames, hazards)
@@ -102,3 +103,20 @@ if fail:
     sys.exit(1)
 print("weather: all passed")
 PY
+
+# the trails through a pan and a wheel zoom: they must stay, not start again with every move
+MAPS_ARCHIVE=westla.pmtiles MAPS_LOCAL_ONLY=1 MAPS_BENCH=1 MAPS_F4=0 MAPS_RENDERER=rust MAPS_WIND_MOTION=1 MAPS_WEATHER_CACHE=$db \
+  systemd-run --user --scope -q -p MemoryMax=10G timeout 120 ./target/release/maps-tauri >logs/weather-wind-motion.log 2>&1 || true
+python3 - logs/weather-wind-motion.log <<'CHECK'
+import json, sys
+bench = [l for l in open(sys.argv[1], encoding="utf-8").read().split("\n") if l.startswith("[bench] ")]
+if not bench:
+    sys.exit("wind motion: FAILED: no [bench] line (logs/weather-wind-motion.log)")
+c = json.loads(bench[0][8:])["coverage"]
+before = c["0-before"]
+low = {k: v for k, v in c.items() if k != "0-before" and v < 0.6 * before}
+print(f"wind motion: trail segments {c}")
+if before < 10000 or low:
+    sys.exit(f"wind motion: FAILED: trails lost through a move (under 60% of {before}): {low}")
+print("wind motion: trails kept through pan and zoom")
+CHECK

@@ -153,6 +153,64 @@ map.whenIdle().then(async () => {
     },
     // MAPS_WEATHER=1: both layers on, wait for every frame and the hazards (90 s at most), then a
     // picture of the whole country with the loop held on the newest frame
+    // MAPS_WIND_MOTION=1: winds alone over the country; 3 s for the trails, then a 1 s pan and a 1 s
+    // zoom, with frames saved during and after each (logs/snapshot-wind-*.png)
+    windMotion: async () => {
+      windBox.checked = true;
+      await wxSet();
+      map.jumpTo({ center: [-97, 38.5], zoom: 3.6, bearing: 0 });
+      const t0 = performance.now();
+      while (!weather.windGl?.field && performance.now() - t0 < 60000) await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 3000));
+      const grab = (name) =>
+        new Promise((resolve) =>
+          map.once("render", () => {
+            const gl = map.gl, w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+            const px = new Uint8ClampedArray(w * h * 4);
+            gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+            const flip = new Uint8ClampedArray(px.length);
+            for (let y = 0; y < h; y++) flip.set(px.subarray((h - 1 - y) * w * 4, (h - y) * w * 4), y * w * 4);
+            const c = document.createElement("canvas");
+            c.width = w;
+            c.height = h;
+            c.getContext("2d").putImageData(new ImageData(flip, w, h), 0, 0);
+            resolve(invoke("save_snapshot", { name: `wind-${name}`, dataUrl: c.toDataURL("image/png") }));
+          }),
+        );
+      // each shot also records how many trail segments were drawn: a pan or zoom that threw the trails
+      // away would show as a collapse against the count before it
+      const cov = {};
+      const shot = async (name) => {
+        const path = await grab(name);
+        cov[name] = weather.windGl?.lastSegments ?? 0;
+        return path;
+      };
+      const shots = [await shot("0-before")];
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      map.easeTo({ center: [-92, 38.5], duration: 1000 });
+      await wait(400);
+      shots.push(await shot("1-pan-mid"));
+      await wait(900);
+      shots.push(await shot("2-pan-after"));
+      await wait(1500);
+      map.easeTo({ zoom: 4.6, duration: 1000 });
+      await wait(400);
+      shots.push(await shot("3-zoom-mid"));
+      await wait(900);
+      shots.push(await shot("4-zoom-after"));
+      await wait(1500);
+      shots.push(await shot("5-zoom-settled"));
+      // a hand on the wheel: real wheel events at the centre, 60 ms apart
+      const canvas = map.getCanvas(), r = canvas.getBoundingClientRect();
+      for (let k = 0; k < 8; k++) {
+        canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: -120, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true }));
+        await wait(60);
+        if (k === 3) shots.push(await shot("6-wheel-mid"));
+      }
+      await wait(300);
+      shots.push(await shot("7-wheel-after"));
+      return invoke("bench_done", { result: { windMotion: shots, coverage: cov, segments: weather.windGl?.lastSegments } });
+    },
     // MAPS_WEATHER=1: all three layers on; wait for the present (its radar loop, satellite image and
     // hazards, 90 s at most), picture it; then 3 hours back, the same; then the registration probe
     weather: async () => {

@@ -92,6 +92,7 @@ export function startDevtools({ map, flags, renderer, bounds, rows, describe = (
   async function runModes(extra = {}) {
     if (flags.search && extra.search) return extra.search();
     if (flags.weather && extra.weather) return extra.weather();
+    if (flags.windMotion && extra.windMotion) return extra.windMotion();
     if (flags.zoomBench) {
       const result = await exclusive(() => runZoomBench(map, stats, PIER, `zoombench-${renderer}`));
       return invoke("bench_done", { result: { zoom_bench: true, renderer, ...result } });
