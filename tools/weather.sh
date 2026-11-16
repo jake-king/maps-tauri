@@ -112,11 +112,24 @@ import json, sys
 bench = [l for l in open(sys.argv[1], encoding="utf-8").read().split("\n") if l.startswith("[bench] ")]
 if not bench:
     sys.exit("wind motion: FAILED: no [bench] line (logs/weather-wind-motion.log)")
-c = json.loads(bench[0][8:])["coverage"]
+r = json.loads(bench[0][8:])
+c, st = r["coverage"], r["stats"]
 before = c["0-before"]
-low = {k: v for k, v in c.items() if k != "0-before" and v < 0.6 * before}
-print(f"wind motion: trail segments {c}")
+# the slow moves keep their trails; the fast ones start some again in the revealed area, which is fine,
+# but at every moment the particles must cover the screen evenly and no trail may be stretched
+slow = ["1-pan-mid", "2-pan-after", "3-zoom-mid", "4-zoom-after", "6-wheel-mid", "7-wheel-after"]
+low = {k: c[k] for k in slow if c[k] < 0.6 * before}
+bunched = {k: v["cv"] for k, v in st.items() if v["cv"] is None or v["cv"] > 0.35}
+stretched = {k: v["long"] for k, v in st.items() if v["long"]}
+print("wind motion: " + ", ".join(f"{k} {v['segments']} seg cv {v['cv']}" for k, v in sorted(st.items(), key=lambda x: int(x[0].split("-")[0]))))
+fail = []
 if before < 10000 or low:
-    sys.exit(f"wind motion: FAILED: trails lost through a move (under 60% of {before}): {low}")
-print("wind motion: trails kept through pan and zoom")
+    fail.append(f"trails lost through a slow move (under 60% of {before}): {low}")
+if bunched:
+    fail.append(f"particles bunched (evenness over 0.35): {bunched}")
+if stretched:
+    fail.append(f"trail segments stretched by the camera: {stretched}")
+if fail:
+    sys.exit("wind motion: FAILED:\n  " + "\n  ".join(fail))
+print("wind motion: trails kept, even, unstretched through slow and fast pans and zooms")
 CHECK

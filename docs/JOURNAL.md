@@ -1214,3 +1214,24 @@ shrinking view start again). With histories planted to be wiped on every camera 
 Two mistakes of mine on the way: a test-file splice that left a duplicate helper, and a shell command
 that inserted gate text containing its own heredoc terminator, so the shell ran the remainder,
 launching the app. The text now goes through a file.
+
+### Fast moves: wind bunched where the old view was
+
+"Really try zooming and panning fast." The slow scripted moves had passed; fast ones had not been
+tried. Two numbers per frame now say what a picture shows: evenness (the coefficient of variation of
+particle heads over a 4 x 4 grid of the screen; about 0.15 at rest) and the count of trail segments
+longer than any one-frame move. Through a fast zoom out, evenness went to 1.6-1.8 and stayed there:
+every particle was still inside the old view's rectangle, a dense patch in the middle of an empty map,
+because particles only restart when they age out or leave the view, and a zoom out leaves none. That is
+the doubling where the previous tiles were. A fast pan reached 0.51, the incoming side empty.
+
+Respawning now knows the view moved. Particles that leave the view restart in the part just revealed;
+on a zoom out, a share of the rest follows them, sized so the revealed part gets its fair proportion.
+Trails are cut at any segment longer than 8 px (a 100 m/s wind moves 4 px a frame), so a zoom in no
+longer stretches old history into long streaks. The unit tests reproduced the app's own numbers before
+the fix (1.73 after a zoom out, 0.41 after a pan), and one of them first passed against a stub because
+it compared to the very constant it was checking; it uses a fixed bound now.
+
+After: evenness 0.05-0.09 through every move, no stretched segments. A fast zoom costs a quarter of a
+second of shorter trails while the moved particles build history. The gate now fails on bunching or
+stretching at any captured moment; with the fix planted out it reported 1.5-1.8.

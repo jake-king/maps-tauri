@@ -177,16 +177,27 @@ map.whenIdle().then(async () => {
             resolve(invoke("save_snapshot", { name: `wind-${name}`, dataUrl: c.toDataURL("image/png") }));
           }),
         );
-      // each shot also records how many trail segments were drawn: a pan or zoom that threw the trails
-      // away would show as a collapse against the count before it
-      const cov = {};
+      // each shot records the trail segments drawn (a move that threw the trails away shows as a
+      // collapse), how evenly the particles cover the screen, and how many segments the camera stretched
+      const cov = {}, stats = {};
+      weather.windGl.measure = true;
       const shot = async (name) => {
         const path = await grab(name);
         cov[name] = weather.windGl?.lastSegments ?? 0;
+        stats[name] = weather.windGl?.lastStats;
         return path;
       };
-      const shots = [await shot("0-before")];
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const canvas = map.getCanvas(), r = canvas.getBoundingClientRect();
+      const wheel = async (dy, n, every, midName) => {
+        for (let k = 0; k < n; k++) {
+          canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: dy, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true }));
+          await wait(every);
+          if (k === Math.floor(n / 2) && midName) shots.push(await shot(midName));
+        }
+      };
+      const shots = [await shot("0-before")];
+      // slow moves first, as before
       map.easeTo({ center: [-92, 38.5], duration: 1000 });
       await wait(400);
       shots.push(await shot("1-pan-mid"));
@@ -200,16 +211,26 @@ map.whenIdle().then(async () => {
       shots.push(await shot("4-zoom-after"));
       await wait(1500);
       shots.push(await shot("5-zoom-settled"));
-      // a hand on the wheel: real wheel events at the centre, 60 ms apart
-      const canvas = map.getCanvas(), r = canvas.getBoundingClientRect();
-      for (let k = 0; k < 8; k++) {
-        canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: -120, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true }));
-        await wait(60);
-        if (k === 3) shots.push(await shot("6-wheel-mid"));
-      }
+      await wheel(-120, 8, 60, "6-wheel-mid");
       await wait(300);
       shots.push(await shot("7-wheel-after"));
-      return invoke("bench_done", { result: { windMotion: shots, coverage: cov, segments: weather.windGl?.lastSegments } });
+      // then fast, as a hand does it: a third of the screen in 300 ms, wheel bursts in and out
+      await wait(1500);
+      const c0 = map.getCenter();
+      map.easeTo({ center: [c0.lng - 12, c0.lat], duration: 300 });
+      await wait(150);
+      shots.push(await shot("8-fastpan-mid"));
+      await wait(200);
+      shots.push(await shot("9-fastpan-after"));
+      await wait(1200);
+      await wheel(-240, 10, 16, "10-fastzoomin-mid");
+      shots.push(await shot("11-fastzoomin-after"));
+      await wait(1200);
+      await wheel(240, 14, 16, "12-fastzoomout-mid");
+      shots.push(await shot("13-fastzoomout-after"));
+      await wait(250);
+      shots.push(await shot("14-fastzoomout-250ms"));
+      return invoke("bench_done", { result: { windMotion: shots, coverage: cov, stats, segments: weather.windGl?.lastSegments } });
     },
     // MAPS_WEATHER=1: all three layers on; wait for the present (its radar loop, satellite image and
     // hazards, 90 s at most), picture it; then 3 hours back, the same; then the registration probe

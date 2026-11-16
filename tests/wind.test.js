@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { decodeWind, sampleWind, Particles, PX_PER_MPS, speedColor, TRAIL, trailVertices } from "../src/rust-renderer/wind.js";
+import { decodeWind, sampleWind, Particles, PX_PER_MPS, speedColor, TRAIL, trailVertices, MAX_SEGMENT_PX } from "../src/rust-renderer/wind.js";
 
 /** An encoded field as Rust's wx::wind::encode writes it. */
 function encoded({ ni, nj, lat0, lon0, dlat, dlon, run = 1_794_830_400, fhr = 7, hpa = 250 }, uv) {
@@ -128,3 +128,61 @@ test("the trail vertices: one segment per step of history, fading from head to t
   assert.ok(alphas.length > 1 && alphas.every((a, i) => i === 0 || a < alphas[i - 1]), `alphas ${alphas}`);
 });
 
+
+/** How evenly particles cover `view`: coefficient of variation of their count over a 4 x 4 grid. */
+function evenness(p, [w, s, e, n]) {
+  const cells = new Array(16).fill(0);
+  let k = 0;
+  for (let i = 0; i < p.n; i++) {
+    const x = (p.lon[i] - w) / (e - w), y = (p.lat[i] - s) / (n - s);
+    if (x < 0 || y < 0 || x >= 1 || y >= 1) continue;
+    cells[Math.floor(y * 4) * 4 + Math.floor(x * 4)] += 1;
+    k += 1;
+  }
+  const mean = k / 16;
+  return Math.sqrt(cells.reduce((a, c) => a + (c - mean) ** 2, 0) / 16) / mean;
+}
+
+// still air everywhere: particles only move by respawning, so evenness is the respawn rule alone
+const still = () => decodeWind(encoded({ ni: 2, nj: 2, lat0: 80, lon0: -170, dlat: 160, dlon: 160 }, new Array(8).fill(0)));
+
+test("a fast zoom out spreads the particles over the whole new view at once", () => {
+  const p = new Particles(4000, mulberry(5));
+  const small = [-100, 35, -90, 41], big = [-120, 23, -70, 53]; // 25 times the area
+  p.step(still(), small, 512 * 64);
+  for (let k = 0; k < 5; k++) p.step(still(), small, 512 * 64, small);
+  p.step(still(), big, 512 * 8, small);
+  const e = evenness(p, big);
+  assert.ok(e < 0.25, `evenness ${e.toFixed(2)} after zooming out: bunched where the old view was`);
+});
+
+test("a fast pan fills the newly shown side as densely as the rest", () => {
+  const p = new Particles(4000, mulberry(6));
+  const a = [-100, 35, -90, 41], b = [-97, 35, -87, 41]; // a third of the screen east
+  p.step(still(), a, 512 * 64);
+  for (let k = 0; k < 5; k++) p.step(still(), a, 512 * 64, a);
+  p.step(still(), b, 512 * 64, a);
+  const e = evenness(p, b);
+  assert.ok(e < 0.25, `evenness ${e.toFixed(2)} after a pan`);
+});
+
+test("a trail stops at a segment longer than any one-frame move: the camera stretched it, not the wind", async () => {
+  const { Camera } = await import("../src/rust-renderer/geo.js");
+  const p = new Particles(1, mulberry(7));
+  p.lon[0] = -95;
+  p.lat[0] = 40;
+  p.histLen[0] = 0;
+  p.record(0);
+  p.lon[0] = -94.99;
+  p.record(0); // a short step
+  p.lon[0] = -94.98;
+  p.record(0);
+  const cam = new Camera((-94.98 + 180) / 360, 0.38, 12, 1200, 800, 0); // zoomed far in: steps are now long
+  const out = new Float32Array(TRAIL * 2 * 6);
+  const n = trailVertices(p, cam, out);
+  for (let v = 0; v < n; v += 2) {
+    const len = Math.hypot(out[(v + 1) * 6] - out[v * 6], out[(v + 1) * 6 + 1] - out[v * 6 + 1]);
+    assert.ok(len <= 12, `a ${len.toFixed(0)} px segment was drawn`);
+  }
+  assert.ok(MAX_SEGMENT_PX >= 4 && MAX_SEGMENT_PX <= 12, "the cap sits above the fastest real move (100 m/s is 4 px) and well under a stretched trail");
+});

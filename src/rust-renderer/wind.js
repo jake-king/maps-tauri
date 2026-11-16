@@ -49,6 +49,9 @@ export function speedColor(s) {
 
 /** Points of history a trail keeps: about a quarter of a second at 60 frames a second. */
 export const TRAIL = 16;
+/** A trail segment longer than this (CSS px) was stretched by the camera, not drawn by the wind (100
+ *  m/s moves 4 px a frame): the trail is cut there. */
+export const MAX_SEGMENT_PX = 8;
 
 const toWorldX = (lon) => (lon + 180) / 360;
 const toWorldY = (lat) => {
@@ -73,9 +76,17 @@ export class Particles {
     this.speed = new Float32Array(n);
   }
 
-  respawn(i, [w, s, e, n]) {
-    this.lon[i] = this.prevLon[i] = w + this.rng() * (e - w);
-    this.lat[i] = this.prevLat[i] = s + this.rng() * (n - s);
+  /** Start particle `i` again somewhere in the view; outside `avoid` (the previous view) if given,
+   *  which puts it in the part of the view just revealed. */
+  respawn(i, [w, s, e, n], avoid = null) {
+    let lon, lat;
+    for (let tries = 0; tries < 30; tries++) {
+      lon = w + this.rng() * (e - w);
+      lat = s + this.rng() * (n - s);
+      if (!avoid || lon < avoid[0] || lon > avoid[2] || lat < avoid[1] || lat > avoid[3]) break;
+    }
+    this.lon[i] = this.prevLon[i] = lon;
+    this.lat[i] = this.prevLat[i] = lat;
     this.age[i] = 0;
     this.speed[i] = 0;
     this.histLen[i] = 0;
@@ -98,29 +109,73 @@ export class Particles {
   }
 
   /** One frame: each particle moves with the wind; one that has lived its life, left the view or left
-   *  the field starts again somewhere in the view. `view` is [west, south, east, north] in degrees,
-   *  `scale` the camera's CSS px per world unit. */
-  step(f, view, scale) {
+   *  the field starts again. `view` is [west, south, east, north] in degrees, `scale` the camera's CSS
+   *  px per world unit, `prevView` the last frame's view. When the view moved, the restarts go to the
+   *  part just revealed, and on a zoom out a share of the rest follows them, so the particles cover
+   *  the new view evenly at once instead of staying bunched where the old view was. */
+  step(f, view, scale, prevView = null) {
     const pxPerDeg = scale / 360;
+    const area = (b) => Math.max(0, b[2] - b[0]) * Math.max(0, b[3] - b[1]);
+    const shown = prevView
+      ? 1 - area([Math.max(view[0], prevView[0]), Math.max(view[1], prevView[1]), Math.min(view[2], prevView[2]), Math.min(view[3], prevView[3])]) / area(view)
+      : 0;
+    const avoid = shown > 0.01 ? prevView : null;
+    const u = (this.u ??= new Float32Array(this.n)), v = (this.v ??= new Float32Array(this.n));
+    const leave = (this.leave ??= new Uint8Array(this.n));
+    let leaving = 0;
     for (let i = 0; i < this.n; i += 1) {
       const lon = this.lon[i], lat = this.lat[i];
       const out = lon < view[0] || lon > view[2] || lat < view[1] || lat > view[3];
       const uv = out || this.age[i] > this.maxAge[i] ? null : sampleWind(f, lon, lat);
-      if (!uv) {
-        this.respawn(i, view);
+      leave[i] = uv ? 0 : 1;
+      if (uv) [u[i], v[i]] = uv;
+      else leaving += 1;
+    }
+    // the revealed part's fair share of particles, beyond those already restarting into it
+    const extra = avoid ? Math.max(0, shown * this.n - leaving) : 0;
+    const q = extra > 0 ? extra / Math.max(1, this.n - leaving) : 0;
+    for (let i = 0; i < this.n; i += 1) {
+      if (leave[i] || (q > 0 && this.rng() < q)) {
+        this.respawn(i, view, avoid);
         continue;
       }
-      const [u, v] = uv;
+      const lon = this.lon[i], lat = this.lat[i];
       this.prevLon[i] = lon;
       this.prevLat[i] = lat;
       // Web Mercator stretches latitude by 1/cos: a degree of latitude spans more pixels
-      this.lon[i] = lon + (u * PX_PER_MPS) / pxPerDeg;
-      this.lat[i] = lat + (v * PX_PER_MPS * Math.cos((lat * Math.PI) / 180)) / pxPerDeg;
-      this.speed[i] = Math.hypot(u, v);
+      this.lon[i] = lon + (u[i] * PX_PER_MPS) / pxPerDeg;
+      this.lat[i] = lat + (v[i] * PX_PER_MPS * Math.cos((lat * Math.PI) / 180)) / pxPerDeg;
+      this.speed[i] = Math.hypot(u[i], v[i]);
       this.age[i] += 1;
       this.record(i);
     }
   }
+}
+
+/** How a frame's wind looks, for the dev tools: how evenly the particle heads cover the screen (the
+ *  coefficient of variation of their count over a 4 x 4 grid: 0 is even, 1 is badly bunched), and how
+ *  many trail segments are longer than `maxPx` (no particle moves that far in one frame: a longer
+ *  segment is a trail stretched by the camera, not by the wind). */
+export function frameStats(p, cam, verts, nVerts, maxPx = 12) {
+  const cells = new Float64Array(16);
+  const c = Math.cos(cam.bearing), s = Math.sin(cam.bearing);
+  let heads = 0;
+  for (let i = 0; i < p.n; i += 1) {
+    const [wx, wy] = p.point(i, 0);
+    const dx = (wx - cam.cx) * cam.scale, dy = (wy - cam.cy) * cam.scale;
+    const x = dx * c + dy * s + cam.w / 2, y = -dx * s + dy * c + cam.h / 2;
+    if (x < 0 || y < 0 || x >= cam.w || y >= cam.h) continue;
+    cells[Math.floor((y / cam.h) * 4) * 4 + Math.floor((x / cam.w) * 4)] += 1;
+    heads += 1;
+  }
+  const mean = heads / 16;
+  const sd = Math.sqrt(cells.reduce((a, n) => a + (n - mean) ** 2, 0) / 16);
+  let long = 0;
+  for (let v = 0; v < nVerts; v += 2) {
+    const ax = verts[v * 6], ay = verts[v * 6 + 1], bx = verts[(v + 1) * 6], by = verts[(v + 1) * 6 + 1];
+    if (Math.hypot(bx - ax, by - ay) > maxPx) long += 1;
+  }
+  return { cv: mean ? Math.round((sd / mean) * 1000) / 1000 : null, heads, long, segments: nVerts / 2 };
 }
 
 /** The trails as line segments for the GPU: [x, y (CSS px), r, g, b, a] per vertex, two per segment,
@@ -140,6 +195,8 @@ export function trailVertices(p, cam, out) {
       const at = (i * TRAIL + ((p.histHead[i] - k + TRAIL) % TRAIL)) * 2;
       const dx = (p.hist[at] - cx) * scale, dy = (p.hist[at + 1] - cy) * scale;
       const x = dx * c + dy * s + hw, y = -dx * s + dy * c + hh;
+      // a long segment is the camera's doing (a zoom since it was recorded): the trail ends here
+      if (k > 0 && (x - prevX) ** 2 + (y - prevY) ** 2 > MAX_SEGMENT_PX ** 2) break;
       if (k > 0) {
         const a0 = a * (1 - (k - 1) / (TRAIL - 1)), a1 = a * (1 - k / (TRAIL - 1));
         out.set([prevX, prevY, r, g, b, a0, x, y, r, g, b, a1], v * 6);
@@ -215,7 +272,8 @@ export class WindRenderer {
     const cam = map.cam;
     const q = cam.viewQuad(0).map(([x, y]) => [x * 360 - 180, (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI]);
     const view = [Math.min(...q.map((p) => p[0])), Math.min(...q.map((p) => p[1])), Math.max(...q.map((p) => p[0])), Math.max(...q.map((p) => p[1]))];
-    this.particles.step(this.field, view, cam.scale);
+    this.particles.step(this.field, view, cam.scale, this.prevView);
+    this.prevView = view;
     const n = trailVertices(this.particles, cam, this.verts);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -228,5 +286,6 @@ export class WindRenderer {
     gl.bindVertexArray(null);
     this.frames += 1;
     this.lastSegments = n / 2;
+    if (this.measure) this.lastStats = frameStats(this.particles, cam, this.verts, n);
   }
 }
