@@ -8,15 +8,17 @@ const DEBOUNCE_MS = 120;
 export function createSearchBox(map, { invoke, coordFeatures, container }) {
   const root = document.createElement("div");
   root.style.cssText = "position:absolute;top:10px;left:10px;z-index:20;width:300px;font:13px 'Noto Sans',sans-serif;";
-  root.innerHTML = `
-    <input type="search" placeholder="Search places or type a coordinate" autocomplete="off" spellcheck="false"
-      style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #bbb;border-radius:6px;
-             background:#fff;box-shadow:0 1px 4px #0002;font:inherit;outline:none">
-    <ul style="list-style:none;margin:4px 0 0;padding:0;background:#fff;border-radius:6px;box-shadow:0 2px 8px #0003;
-               overflow:hidden;display:none"></ul>`;
+  // Styles are set through the element's style object: the content security policy refuses inline
+  // style="" attributes (markup), not styles set from script.
+  const input = document.createElement("input");
+  Object.assign(input, { type: "search", placeholder: "Search places or type a coordinate", autocomplete: "off", spellcheck: false });
+  input.style.cssText = "width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #bbb;border-radius:6px;" +
+    "background:#fff;box-shadow:0 1px 4px #0002;font:inherit;outline:none";
+  const list = document.createElement("ul");
+  list.style.cssText = "list-style:none;margin:4px 0 0;padding:0;background:#fff;border-radius:6px;box-shadow:0 2px 8px #0003;" +
+    "overflow:hidden;display:none";
+  root.append(input, list);
   container.appendChild(root);
-  const input = root.querySelector("input");
-  const list = root.querySelector("ul");
   let results = [];
   let active = -1;
   let seq = 0;
@@ -131,6 +133,10 @@ export function createSearchBox(map, { invoke, coordFeatures, container }) {
         ctx.fill();
       }
       ctx.restore();
+    },
+    /** The box's computed style, for MAPS_SEARCH: proves its styles applied (the snapshot paints its own box). */
+    boxStyle() {
+      return { padding: getComputedStyle(input).paddingLeft, list: getComputedStyle(list).display };
     },
     async run(text) {
       input.value = text;

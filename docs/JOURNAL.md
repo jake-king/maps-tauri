@@ -883,3 +883,33 @@ Of the search box's 22 MB, 17 MB is the coordinate parser's WASM module, compile
 Startup awaits nothing before the map exists, so the earlier idle race cannot come back. At rest:
 355 MB. Coordinate and place searches checked end to end afterwards. The curved-name 18 MB is not
 yet broken down.
+
+## Lessons from dugout: a policy, a retry, errors before results
+
+Dugout (the baseball site) is local-first in a browser, and three of its bugs apply here.
+
+Its bundled database engine fetched a component from the internet on first use, and the test meant
+to catch that passed, because it checked content the page already had before the action ran. This
+app had `"csp": null`, so nothing stopped the page reaching out. It now has a content security
+policy: the page may load its own assets and talk to the Rust backend and `tiles://`, nothing else
+(the remote planet is read by Rust, outside the page's reach). Every refusal is printed.
+`tools/offline.sh` runs a stress run on each renderer and both kinds of search on the release
+build and fails on any refusal.
+
+The control run makes one request the policy must refuse. Its first run failed, and that was the
+check working: the refusal lines start with `[frontend] `, so my pattern counted nothing, and the
+four green runs before it were vacuous. With the pattern fixed, the policy turned up a real fault:
+the search box's input and list were built from markup with `style=""` attributes, which the policy
+refuses, so they rendered unstyled. They are now built with script-set styles. The search snapshot
+could not have shown this, because it paints its own copy of the box, so the search run now reports
+the input's computed style and the gate checks it.
+
+Dugout's lazy database load guarded on the finished connection, so a call during the load started a
+second one. The coordinate parser's lazy load already shared one promise, but kept a failed load
+forever. `once()` (src/rust-renderer/once.js) drops a failed load so the next search retries;
+tested, with both planted defects caught.
+
+Errors before results: `offline.sh` fails on any reported uncaught error, unhandled rejection,
+failed search or map error before it looks at a result, and `tools/stress.sh` now exits non-zero
+on camera errors, listener or uncaught errors, policy refusals, a non-finite view or a failure to
+settle. Two planted defects (the old markup box; a search that throws) each failed the gate.

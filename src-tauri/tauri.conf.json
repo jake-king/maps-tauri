@@ -10,8 +10,45 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "label": "main", "title": "Maps", "width": 1200, "height": 800 }],
-    "security": { "csp": null }
+    "windows": [
+      {
+        "label": "main",
+        "title": "Maps",
+        "width": 1200,
+        "height": 800
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "connect-src": "'self' ipc: http://ipc.localhost tiles: http://tiles.localhost",
+        "script-src": "'self' 'wasm-unsafe-eval'",
+        "worker-src": "'self' blob:",
+        "img-src": "'self' data: blob:",
+        "style-src": "'self' 'unsafe-inline'",
+        "font-src": "'self' data:",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'"
+      },
+      "devCsp": {
+        "default-src": "'self' http://localhost:1420",
+        "connect-src": "'self' ipc: http://ipc.localhost tiles: http://tiles.localhost http://localhost:1420 ws://localhost:1420",
+        "script-src": "'self' 'wasm-unsafe-eval' http://localhost:1420",
+        "worker-src": "'self' blob: http://localhost:1420",
+        "img-src": "'self' data: blob: http://localhost:1420",
+        "style-src": "'self' 'unsafe-inline' http://localhost:1420",
+        "font-src": "'self' data: http://localhost:1420",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'"
+      }
+    }
   },
-  "bundle": { "active": false, "icon": ["icons/icon.png"] }
+  "bundle": {
+    "active": false,
+    "icon": [
+      "icons/icon.png"
+    ]
+  }
 }

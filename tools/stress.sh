@@ -37,6 +37,7 @@ def result(path):
     return json.loads(lines[0][8:])
 
 print(f"stress: {ops} operations, seed {seed}")
+problems = []
 for r in renderers:
     t, p = result(f"logs/stress-{r}-timing.log"), result(f"logs/stress-{r}-pixels.log")
     fi, rd, px = t["frame_interval"], t["render"], p["pixel"]
@@ -51,8 +52,20 @@ for r in renderers:
           f" | at rest {px['at_rest_pct']}% | stand-in frames {p['stand_in_frames']}, coarser {p['coarse_frames']}")
     print(f"  camera calls that threw: {t['op_errors']} (pixel run {p['op_errors']}) | first non-finite view: {t['first_bad_view'] or 'none'}")
     print(f"  settled {t['settled']} in {t['settle_ms']} ms | listener errors {t['listener_errors']}, uncaught {t['uncaught_errors']}"
-          f" (pixel run: {p['listener_errors']}, {p['uncaught_errors']})")
+          f" (pixel run: {p['listener_errors']}, {p['uncaught_errors']}) | csp violations {t.get('csp_violations')} (pixel run {p.get('csp_violations')})")
     print(f"  memory MB: start {mem[0]['mb']}, peak {max(m['mb'] for m in mem)}, end {mem[-2]['mb']}, 10 s later {mem[-1]['mb']}")
     if px.get("worst_frame"):
         print(f"  worst frame: {px['worst_frame']}")
+    # the verdict: errors fail the run whatever the timings say (frame counts and background are measurements)
+    for k in ("op_errors", "listener_errors", "uncaught_errors", "csp_violations"):
+        for name, run in (("timing", t), ("pixels", p)):
+            if run.get(k):
+                problems.append(f"{r} {name}: {k} {run[k]}")
+    if t["first_bad_view"] or p["first_bad_view"]:
+        problems.append(f"{r}: non-finite view {t['first_bad_view'] or p['first_bad_view']}")
+    if not (t["settled"] and p["settled"]):
+        problems.append(f"{r}: did not settle")
+if problems:
+    sys.exit("stress: FAILED: " + "; ".join(problems))
+print("stress: no errors")
 PY

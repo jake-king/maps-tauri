@@ -149,6 +149,7 @@ export async function runStress(map, stats, script, { name = "stress", pixelChec
   };
   const errors0 = map.listenerErrors ?? 0;
   const uncaught0 = window.__uncaughtErrors ?? 0;
+  const csp0 = window.__cspViolations ?? 0;
   const canvas = map.getCanvas();
   const memory = [{ t_s: 0, mb: await totalMb() }];
   const t0 = performance.now();
@@ -245,6 +246,7 @@ export async function runStress(map, stats, script, { name = "stress", pixelChec
     first_bad_view: firstBadView,
     op_error_examples: opErrors.slice(0, 5),
     uncaught_errors: (window.__uncaughtErrors ?? 0) - uncaught0,
+    csp_violations: (window.__cspViolations ?? 0) - csp0,
     memory_mb: memory,
     final_view: { center: map.getCenter(), zoom: r1(map.getZoom()), bearing: r1(map.getBearing()) },
   };

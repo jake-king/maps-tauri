@@ -10,6 +10,7 @@ import { snapshot } from "../devtools/snapshot.js";
 import { say, memprobeBlank, startDevtools } from "../devtools/harness.js";
 import { createSearchBox } from "./search.js";
 import initCoords, { coordFeatures } from "../wasm/coords.js";
+import { once } from "./once.js";
 
 const flags = await invoke("dev_flags");
 const gpu = installGpuLedger(WebGL2RenderingContext.prototype, new GpuLedger());
@@ -39,10 +40,10 @@ const map = new RustMap({
 });
 // The coordinate parser (WASM) loads on the first search, not at startup: compiled, it holds about
 // 17 MB of the web process (measured 2026-11-15), which a map nobody searches should not pay for.
-let coordsReady = null;
+// A failed load is retried on the next search rather than kept.
+const coordsReady = once(initCoords);
 const coordFeaturesLazy = async (text, limit) => {
-  coordsReady ??= initCoords();
-  await coordsReady;
+  await coordsReady();
   return coordFeatures(text, limit);
 };
 const search = createSearchBox(map, { invoke, coordFeatures: coordFeaturesLazy, container: document.getElementById("map") });
@@ -75,7 +76,7 @@ map.whenIdle().then(async () => {
       if (!map.areTilesLoaded()) await new Promise((r) => map.once("idle", r));
       await new Promise((r) => setTimeout(r, 200));
       const path = await snapshot(map, "search", { center: map.getCenter(), zoom: map.getZoom() }, (ctx, dpr) => search.paint(ctx, dpr));
-      return invoke("bench_done", { result: { search: flags.search, results: names, center: map.getCenter(), snapshot: path } });
+      return invoke("bench_done", { result: { search: flags.search, results: names, box: search.boxStyle(), center: map.getCenter(), snapshot: path } });
     },
   });
 });

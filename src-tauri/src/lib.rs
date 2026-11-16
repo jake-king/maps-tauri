@@ -91,6 +91,9 @@ fn dev_flags() -> serde_json::Value {
         "stressSeed": num("MAPS_STRESS_SEED"),
         // MAPS_SEARCH=<query>: run the native search box end to end and snapshot the result
         "search": std::env::var("MAPS_SEARCH").ok(),
+        // MAPS_CSP_PROBE=1: try one request the content security policy must refuse (a control for
+        // tools/offline.sh); the address is TEST-NET-1, never routed, in case the policy lets it out
+        "cspProbe": std::env::var("MAPS_CSP_PROBE").is_ok_and(|v| v == "1"),
         // MAPS_EMPTY_STYLE=1: a background layer only, no source, tiles or fonts (a memory control)
         "emptyStyle": std::env::var("MAPS_EMPTY_STYLE").is_ok_and(|v| v == "1"),
         // on unless MAPS_CACHED_PARENTS=0 (bench/2026-11-15-px-parents*.json)
