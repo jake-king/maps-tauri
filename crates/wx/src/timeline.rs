@@ -14,6 +14,10 @@ pub const LOOP_STEP: i64 = 600;
 pub const RADAR_SLACK: i64 = 240;
 /// A satellite image older than this, relative to the chosen time, is not shown (seconds).
 pub const SAT_MAX_AGE: i64 = 30 * 60;
+/// A hazard snapshot further than this from the chosen time is not shown (seconds). Snapshots are 3
+/// hours apart, so wherever forecasts exist one is always within reach; past their range, none is
+/// better than the nearest one from many hours away.
+pub const HAZARD_REACH: i64 = 90 * 60;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Selection {
@@ -50,7 +54,11 @@ pub fn select(at: i64, radar: &[i64], satellite: &[i64], hazards: &[i64]) -> Sel
         .checked_sub(1)
         .map(|k| satellite[k])
         .filter(|&t| at - t <= SAT_MAX_AGE);
-    let hz = hazards.iter().copied().min_by_key(|&t| ((t - at).abs(), t));
+    let hz = hazards
+        .iter()
+        .copied()
+        .filter(|&t| (t - at).abs() <= HAZARD_REACH)
+        .min_by_key(|&t| ((t - at).abs(), t));
     Selection {
         radar: loop_times,
         satellite: sat,
@@ -115,6 +123,21 @@ mod tests {
         assert_eq!(s.radar, Vec::<i64>::new());
         assert_eq!(s.satellite, None);
         assert_eq!(s.hazards, Some(NOW + 5 * 3600));
+    }
+
+    #[test]
+    fn hazards_only_from_a_snapshot_near_the_chosen_time() {
+        let hz = vec![0, 10_800];
+        assert_eq!(
+            select(10_800 + HAZARD_REACH, &[], &[], &hz).hazards,
+            Some(10_800)
+        );
+        assert_eq!(
+            select(10_800 + HAZARD_REACH + 1, &[], &[], &hz).hazards,
+            None,
+            "17 hours away is not the hazard picture then"
+        );
+        assert_eq!(select(-HAZARD_REACH - 1, &[], &[], &hz).hazards, None);
     }
 
     #[test]

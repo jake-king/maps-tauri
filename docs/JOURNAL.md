@@ -1101,3 +1101,41 @@ reads "Radar 22:00Z obs · Satellite 21:58Z obs · Hazards 21:00Z issued", and t
 history back to its start, satellite from 15Z, hazard snapshots at 21Z to 09Z and the red now line.
 `tools/weather.sh`: the present ready in 5.6 s, three hours back in 4.3 s, the flight-level filter
 taking 21 hazard areas to 11-18 depending on the level, registration still exact.
+
+## A review of the time bar, and METARs
+
+An independent review of the time bar change, given the code and the spec but not my reasoning, found
+five defects and two judgement calls; each was reproduced before it was fixed.
+
+- Changing the time while frames were loading did nothing until every fetch for the old time had
+  finished, and meanwhile the map showed the old picture under the new label. The guard meant to stop
+  this compared a state object that could not change during the loop. Now every change of time bumps
+  a generation; the fetch loop stops after the current request and a frame for an abandoned time is
+  dropped before it reaches the GPU. The end-to-end check picks 6 hours back, then 4 hours back 30 ms
+  later: it settles on 4 hours back in under 3 s with nothing uploaded for 6 hours back. With the
+  guard planted out, 6 textures for the abandoned time reached the GPU and the gate failed.
+- The step button did nothing from live: the first step landed less than a step from now, which reads
+  as live. A pure function now steps to the nearest mark a whole step away; the old arithmetic,
+  planted back, fails its test.
+- A panic inside a fetch left its key marked in flight, and every later request for that time waited
+  forever, the webview's refresh with it. A guard now releases the key however the fetch ends. The
+  first version of the test hung rather than failed (a scoped thread waits for the stuck one); it now
+  fails at a 5-second timeout.
+- A change of radar grid cleared memory but not the disk, and rows dropped past the cap at load were
+  never deleted, so both came back at every start.
+- The two fetch commands ran blocking network calls on the async runtime's workers. My comment said a
+  sync command marked async runs on a thread pool; the macro's source says it is spawned onto the
+  runtime. They are async now and run their work on the blocking pool.
+- Hazards had no distance limit: 17 hours back showed today's snapshot labelled as issued. A snapshot
+  is now shown only within 90 minutes of the chosen time (snapshots are 3 hours apart, so one is
+  always in reach where forecasts exist), and the stamp says when none is near. That broke my own
+  end-to-end check, which waited for hazards at a time that now correctly has none: the definition of
+  ready was wrong, not the code.
+
+METARs: airport observations coloured by flight category. The API caps a request at 400 observations;
+one past hour over the US took 30 requests (box split until no box was full) and 80 seconds,
+including a 504 retried. Doing that across an 18-hour bar is not reasonable to ask of AWC's service.
+So the present comes from AWC's bulk cache file (2,903 stations, 0.25 MB, 0.3 s), and history is
+what this app collected from it every five minutes while it ran, kept on disk; before collection
+began, the stamp says so. A click on a station opens its report. On the national picture the cluster
+of MVFR stations in Texas sits on the forecast IFR area.

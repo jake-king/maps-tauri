@@ -112,14 +112,47 @@ export function relative(t, now) {
 }
 
 /** The valid-time line over the map: what each layer shows and when it is from. */
-export function stamp(s, { radar, satellite, hazards }) {
+export function stamp(s, { radar, satellite, hazards, metars = false }, m = null) {
   if (!s) return "";
   const sel = s.selection ?? {};
   const parts = [];
   if (radar) parts.push(sel.radar?.length ? `Radar ${zulu(sel.radar.at(-1))} obs` : s.at > s.now + 300 ? "Radar: observations only" : "Radar: none at this time");
   if (satellite) parts.push(sel.satellite != null ? `Satellite ${zulu(sel.satellite)} obs` : s.at > s.now + 300 ? "Satellite: observations only" : "Satellite: none at this time");
-  if (hazards) parts.push(s.hazardsValid != null ? `Hazards ${zulu(s.hazardsValid)} ${s.hazardsValid > s.now ? `fcst ${relative(s.hazardsValid, s.now)}` : "issued"}` : "Hazards: none");
+  if (hazards) parts.push(s.hazardsValid != null ? `Hazards ${zulu(s.hazardsValid)} ${s.hazardsValid > s.now ? `fcst ${relative(s.hazardsValid, s.now)}` : "issued"}` : "Hazards: none near this time");
+  if (metars) parts.push(metarStamp(m, s.at, s.now));
   return parts.join(" · ");
+}
+
+/** Flight category colours as aviation displays use them; index = wx::metar category. */
+export const CATEGORY = [
+  { name: "not reported", color: "#9ca3af" },
+  { name: "VFR", color: "#16a34a" },
+  { name: "MVFR", color: "#2563eb" },
+  { name: "IFR", color: "#dc2626" },
+  { name: "LIFR", color: "#c026d3" },
+];
+
+/** The METAR part of the valid-time line: how many stations report at the chosen time, or why none. */
+export function metarStamp(m, at, now) {
+  if (!m) return "METARs: loading…";
+  if (m.stations.length) return `METARs ${m.stations.length} stations`;
+  const [first] = m.range ?? [];
+  if (first != null && at < first) return `METARs: collected from ${zulu(first)}`;
+  return at > now + 300 ? "METARs: observations only" : "METARs: none";
+}
+
+/** The station nearest the screen point (x, y) within `radius` px, from [id, lon, lat, cat, t] rows. */
+export function nearestStation(stations, x, y, radius, project) {
+  let best = null, bestD = radius * radius;
+  for (const s of stations) {
+    const p = project([s[1], s[2]]);
+    const d = (p.x - x) ** 2 + (p.y - y) ** 2;
+    if (d <= bestD) {
+      best = s;
+      bestD = d;
+    }
+  }
+  return best;
 }
 
 /** The NWS reflectivity scale, by lower bound in dBZ. */
@@ -227,9 +260,12 @@ export class WeatherLayer {
     this.radarOn = false;
     this.satOn = false;
     this.hazardsOn = false;
+    this.metarOn = false;
+    this.metars = null; // wx_metars for the chosen time
     this.looping = true; // animate the radar loop; false holds its newest frame
     this.level = null; // flight level for hazards (hundreds of feet), null = all
     this.at = null; // the chosen time (Unix seconds), null = live: the present, following it
+    this.gen = 0; // bumped by every change of time: work for an older one stops
     this.state = null;
     this.frames = new Map(); // radar time -> { tex, bytes, grid, used }, on the GPU
     this.sats = new Map(); // satellite time -> { tex, bytes, used }
@@ -258,18 +294,29 @@ export class WeatherLayer {
     this.ctx = c.getContext("2d");
     map.overlays.push(this);
     map.on("render", () => this.drawHazards());
+    // a click without a drag asks for the nearest station's report; any move closes the box
+    let down = null;
+    map.canvas.addEventListener("mousedown", (e) => (down = [e.clientX, e.clientY]));
+    map.canvas.addEventListener("click", (e) => {
+      if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;
+      const r = map.canvas.getBoundingClientRect();
+      this.clicked(e.clientX - r.left, e.clientY - r.top).catch((err) => (this.lastError = String(err?.message ?? err)));
+    });
+    // the report box stays on its station as the map moves
+    map.on("render", () => this.placePopup());
     // every frame: is a different radar frame due, or a different satellite image?
     map.loop.addUpdater((now) => (this.radarOn && this.frameNow(now) !== this.shown) || (this.satOn && this.satNow() !== this.shownSat));
   }
 
   get anyOn() {
-    return this.radarOn || this.satOn || this.hazardsOn;
+    return this.radarOn || this.satOn || this.hazardsOn || this.metarOn;
   }
 
   /** Turn layers on or off. The first time any goes on, Rust starts fetching. */
-  async set({ radar = this.radarOn, satellite = this.satOn, hazards = this.hazardsOn }) {
+  async set({ radar = this.radarOn, satellite = this.satOn, hazards = this.hazardsOn, metars = this.metarOn }) {
     this.marks.enabled ??= performance.now();
-    Object.assign(this, { radarOn: radar, satOn: satellite, hazardsOn: hazards });
+    Object.assign(this, { radarOn: radar, satOn: satellite, hazardsOn: hazards, metarOn: metars });
+    if (!metars) this.closePopup();
     if (this.anyOn && !this.timer) {
       this.onChange?.(null); // "starting": shown before the first answer
       // Rust says when anything arrives; the slow poll is only a safety net (and moves "now")
@@ -284,6 +331,7 @@ export class WeatherLayer {
   /** Choose the time to show (Unix seconds), or null for live. */
   async setTime(at) {
     this.at = at;
+    this.gen += 1;
     this.loopStart = performance.now();
     await this.refresh();
   }
@@ -314,7 +362,13 @@ export class WeatherLayer {
   }
 
   async refreshOnce() {
+    const gen = this.gen;
     this.state = await invoke("wx_state", { at: this.at });
+    if (this.metarOn) {
+      const m = await invoke("wx_metars", { at: this.at });
+      if (this.gen === gen) this.metars = m;
+      if (m.stations.length) this.marks.metars ??= performance.now();
+    }
     if (this.state.hazards?.length) this.marks.hazards ??= performance.now();
     this.onChange?.(this.state);
     this.map.triggerRepaint();
@@ -327,6 +381,7 @@ export class WeatherLayer {
   async sync() {
     const s = this.state;
     if (!s) return;
+    const gen = this.gen;
     const sel = s.selection;
     const jobs = [];
     if (this.satOn && sel.satellite != null && !this.sats.has(sel.satellite)) jobs.push(["s", sel.satellite, 400]);
@@ -346,19 +401,21 @@ export class WeatherLayer {
         if (kind === "r") {
           const g = s.grid;
           if (buf.length !== g.ni * g.nj) throw new Error(`radar frame ${t}: ${buf.length} bytes for a ${g.ni} x ${g.nj} grid`);
-          this.map.loop.arrive(() => this.uploadRadar(t, buf, g), priority);
+          // a frame for a time already left behind is not worth a GPU slot
+          this.map.loop.arrive(() => this.gen === gen && this.uploadRadar(t, buf, g), priority);
         } else {
           const { width, height } = s.satellite;
           if (buf.length !== width * height) throw new Error(`satellite ${t}: ${buf.length} bytes for ${width} x ${height}`);
-          this.map.loop.arrive(() => this.uploadSat(t, buf, s.satellite), priority);
+          this.map.loop.arrive(() => this.gen === gen && this.uploadSat(t, buf, s.satellite), priority);
         }
       } catch (e) {
         this.lastError = String(e?.message ?? e);
       } finally {
         this.fetching.delete(key);
       }
-      // the chosen time moved on while this was fetched: stop fetching for the old one
-      if (this.state !== s) break;
+      // the chosen time moved on while this was fetched: stop fetching for the old one (refresh()
+      // has queued a rerun for the new time, which starts as soon as this returns)
+      if (this.gen !== gen) break;
     }
   }
 
@@ -502,7 +559,9 @@ export class WeatherLayer {
       c.width = Math.round(w * dpr);
       c.height = Math.round(h * dpr);
     }
-    const show = this.hazardsOn && this.state?.hazards?.length > 0;
+    const showHz = this.hazardsOn && this.state?.hazards?.length > 0;
+    const showMetars = this.metarOn && this.metars?.stations?.length > 0;
+    const show = showHz || showMetars;
     if (!show && !this.painted) return; // weather off: nothing to clear, no cost per frame
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, c.width, c.height);
@@ -516,7 +575,13 @@ export class WeatherLayer {
       const p = map.project([lng, lat]);
       return [p.x, p.y];
     };
-    for (const hz of this.state.hazards) {
+    // station dots first, so the hazard outlines and their labels stay readable on top
+    if (showMetars) {
+      this.drawMetars(ctx, w, h);
+      ctx.font = "bold 11px 'Noto Sans',sans-serif";
+      ctx.textAlign = "center";
+    }
+    for (const hz of showHz ? this.state.hazards : []) {
       if (hz.hazard === "FZLVL") continue; // freezing-level contours: lines across the whole map
       if (!atLevel(hz, this.level)) continue;
       const style = HAZARD_STYLE[hz.hazard] ?? { color: "#444" };
@@ -545,6 +610,63 @@ export class WeatherLayer {
         ctx.fillText(text, x, y);
       }
     }
+  }
+
+  /** Station dots coloured by flight category, over the hazard outlines; their IDs once zoomed in. */
+  drawMetars(ctx, w, h) {
+    const map = this.map;
+    const z = map.getZoom();
+    const r = z < 5 ? 2.5 : z < 8 ? 3.5 : 5;
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "#ffffff";
+    ctx.font = "10px 'Noto Sans',sans-serif";
+    ctx.textAlign = "left";
+    for (const s of this.metars.stations) {
+      const p = map.project([s[1], s[2]]);
+      if (p.x < -10 || p.y < -10 || p.x > w + 10 || p.y > h + 10) continue;
+      ctx.fillStyle = CATEGORY[s[3]]?.color ?? CATEGORY[0].color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+      if (z >= 8) {
+        ctx.fillStyle = "#222";
+        ctx.fillText(s[0], p.x + r + 2, p.y);
+      }
+    }
+  }
+
+  /** A click on the map: the nearest station's report in a small box (no drag, METARs on). */
+  async clicked(x, y) {
+    if (!this.metarOn || !this.metars) return;
+    const s = nearestStation(this.metars.stations, x, y, 10, (ll) => this.map.project(ll));
+    if (!s) return this.closePopup();
+    const r = await invoke("wx_metar", { id: s[0], at: this.at });
+    if (!r) return this.closePopup();
+    const [raw, t] = r;
+    if (!this.popup) {
+      this.popup = document.createElement("div");
+      this.popup.style.cssText = "position:absolute;z-index:25;max-width:360px;padding:6px 8px;background:#fff;border-radius:6px;" +
+        "box-shadow:0 2px 8px #0004;font:12px ui-monospace,monospace;color:#222;white-space:pre-wrap;pointer-events:none;";
+      this.map.canvas.parentElement.append(this.popup);
+    }
+    this.popup.textContent = `${s[0]} · ${CATEGORY[s[3]].name} · ${zulu(t)}\n${raw}`;
+    this.popupAt = [s[1], s[2]];
+    this.popup.style.display = "block";
+    this.placePopup();
+  }
+
+  placePopup() {
+    if (!this.popupAt || !this.popup) return;
+    const p = this.map.project(this.popupAt);
+    this.popup.style.left = `${Math.round(p.x + 12)}px`;
+    this.popup.style.top = `${Math.round(p.y - 10)}px`;
+  }
+
+  closePopup() {
+    this.popupAt = null;
+    if (this.popup) this.popup.style.display = "none";
   }
 
   /** Registration check: a synthetic frame on a 0.001° grid around `ll`, drawn at zoom 15 twice,
@@ -623,6 +745,8 @@ export class WeatherLayer {
       sats: [...this.sats.keys()].length,
       shown: this.shown,
       shown_sat: this.shownSat,
+      metars: this.metars?.stations?.length ?? null,
+      metar_range: this.metars?.range ?? null,
       last_error: this.lastError ?? null,
       gpu_bytes: this.gpuBytes,
       grid: s.grid,

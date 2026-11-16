@@ -244,19 +244,23 @@ impl Weather {
                 read_grid(&c),
             )
         };
+        let mut gone_radar = Vec::new();
+        let mut gone_sat = Vec::new();
         let mut g = self.lock();
         let g = &mut *g;
         if g.radar.data.is_empty() && grid.is_some() {
             g.grid = grid;
             for (t, d) in radar {
-                g.radar
-                    .put(t, Arc::new(d), &mut g.clock, self.radar_keep, &[]);
+                gone_radar.extend(
+                    g.radar
+                        .put(t, Arc::new(d), &mut g.clock, self.radar_keep, &[]),
+                );
                 g.from_disk = true;
             }
         }
         if g.sat.data.is_empty() {
             for (t, d) in sat {
-                g.sat.put(t, Arc::new(d), &mut g.clock, self.sat_keep, &[]);
+                gone_sat.extend(g.sat.put(t, Arc::new(d), &mut g.clock, self.sat_keep, &[]));
                 g.from_disk = true;
             }
         }
@@ -266,6 +270,9 @@ impl Weather {
                 g.from_disk = true;
             }
         }
+        // what did not fit under the caps leaves the disk too, or it would be reloaded every start
+        self.delete_blobs("radar", &gone_radar);
+        self.delete_blobs("satellite", &gone_sat);
     }
 
     /// The radar times that exist: the server's, plus any held (offline, or since rotated off).
@@ -334,12 +341,22 @@ impl Weather {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        let r = match held() {
+        // released however this ends, a panic included: a key left in flight would make every later
+        // ask for that time wait forever (and with it the webview's refresh)
+        struct Release<'a>(&'a Mutex<HashSet<(char, i64)>>, (char, i64));
+        impl Drop for Release<'_> {
+            fn drop(&mut self) {
+                self.0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&self.1);
+            }
+        }
+        let _release = Release(&self.inflight, key);
+        match held() {
             Some(v) => Ok(v),
             None => fetch(),
-        };
-        self.inflight.lock().expect("inflight").remove(&key);
-        r
+        }
     }
 
     /// One radar frame's cells (wx::radar codes), fetched if not held.
@@ -371,18 +388,24 @@ impl Weather {
             };
             let d = Arc::new(deflate(&r.codes));
             let pinned = self.pinned_radar();
+            let mut regrid = false;
             let gone = {
                 let mut g = self.lock();
                 let g = &mut *g;
                 if g.grid.is_some_and(|old| old != grid) {
-                    // a different grid upstream: the held frames no longer line up with the new one
+                    // a different grid upstream: the held frames no longer line up with the new one,
+                    // in memory or on disk (else a restart would load them under the new grid)
                     g.radar = Store::default();
+                    regrid = true;
                 }
                 g.grid = Some(grid);
                 g.from_disk = false;
                 g.radar
                     .put(t, d.clone(), &mut g.clock, self.radar_keep, &pinned)
             };
+            if regrid {
+                self.clear_table("radar");
+            }
             self.store_blob("radar", t, &d, &gone);
             self.store_grid(grid);
             Ok(d)
@@ -538,6 +561,27 @@ impl Weather {
             });
         if let Err(e) = r {
             eprintln!("[weather] {table} not kept on disk ({e})");
+        }
+    }
+
+    fn delete_blobs(&self, table: &str, times: &[i64]) {
+        if times.is_empty() {
+            return;
+        }
+        if let Some(db) = &self.db {
+            let c = db.lock().expect("weather db lock");
+            for t in times {
+                let _ = c.execute(&format!("DELETE FROM {table} WHERE time = ?1"), params![t]);
+            }
+        }
+    }
+
+    fn clear_table(&self, table: &str) {
+        if let Some(db) = &self.db {
+            let _ = db
+                .lock()
+                .expect("weather db lock")
+                .execute(&format!("DELETE FROM {table}"), []);
         }
     }
 
@@ -912,6 +956,106 @@ mod tests {
     }
 
     #[test]
+    fn a_fetch_that_panics_does_not_leave_its_time_stuck() {
+        struct Boom(Fake, AtomicBool);
+        impl Source for Boom {
+            fn index(&self) -> Result<Vec<(String, i64)>, String> {
+                self.0.index()
+            }
+            fn frame(&self, name: &str) -> Result<Vec<u8>, String> {
+                if !self.1.swap(true, Ordering::SeqCst) {
+                    panic!("malformed frame");
+                }
+                self.0.frame(name)
+            }
+            fn gairmet(&self, f: u32) -> Result<String, String> {
+                self.0.gairmet(f)
+            }
+            fn satellite_times(&self) -> Result<Vec<i64>, String> {
+                self.0.satellite_times()
+            }
+            fn satellite(&self, t: i64) -> Result<Vec<u8>, String> {
+                self.0.satellite(t)
+            }
+        }
+        let w = Arc::new(Weather::open(None));
+        let src = Arc::new(Boom(Fake::live(), AtomicBool::new(false)));
+        w.lock().index = src.0.radar.lock().unwrap().clone();
+        let t = NOW - 3 * 3600;
+        let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            w.radar_frame(src.as_ref(), t)
+        }));
+        assert!(first.is_err(), "the first fetch panicked");
+        // a detached thread: if the second ask hangs, the test fails at the timeout instead of hanging
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (w2, src2) = (w.clone(), src.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(w2.radar_frame(src2.as_ref(), t));
+        });
+        let second = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the second ask for that time hung");
+        assert_eq!(second.unwrap(), vec![radar::code(40.0)]);
+    }
+
+    #[test]
+    fn a_new_radar_grid_clears_the_old_frames_from_disk_too() {
+        let dir = std::env::temp_dir().join(format!("wx-grid-{}", std::process::id()));
+        let path = dir.join("weather.sqlite");
+        let _ = std::fs::remove_dir_all(&dir);
+        let src = Fake::live();
+        {
+            let w = Weather::open(Some(&path));
+            w.round(&src, NOW, &|| {});
+            // upstream changes its grid: what is held was cut on a different one
+            *w.lock().grid.as_mut().unwrap() = Grid {
+                ni: 9,
+                nj: 9,
+                lat0: 0.0,
+                lon0: 0.0,
+                dlat: 1.0,
+                dlon: 1.0,
+            };
+            w.radar_frame(&src, NOW - 4 * 3600).unwrap();
+            assert_eq!(
+                w.lock().radar.data.len(),
+                1,
+                "the old grid's frames dropped from memory"
+            );
+        }
+        let w = Weather::open(Some(&path));
+        w.load_from_disk();
+        assert_eq!(
+            w.lock().radar.data.keys().copied().collect::<Vec<_>>(),
+            vec![NOW - 4 * 3600],
+            "and from disk"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rows_dropped_past_the_cap_at_load_leave_the_disk() {
+        let dir = std::env::temp_dir().join(format!("wx-cap-{}", std::process::id()));
+        let path = dir.join("weather.sqlite");
+        let _ = std::fs::remove_dir_all(&dir);
+        let src = Fake::live();
+        {
+            let w = Weather::open(Some(&path));
+            w.round(&src, NOW, &|| {});
+        }
+        {
+            let w = Weather::open_with(Some(&path), 2, 2);
+            w.load_from_disk();
+        }
+        let c = Connection::open(&path).unwrap();
+        let n: i64 = c
+            .query_row("SELECT count(*) FROM radar", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 2, "the disk matches what memory kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_past_time_is_fetched_on_demand_once() {
         let w = Weather::open(None);
         let src = Fake::live();
@@ -1032,12 +1176,17 @@ mod tests {
             (T18, T18),
             (T18 + 3600, T18),
             (T18 + 2 * 3600, T18 + 3 * 3600),
-            (T18 + 40 * 3600, T18 + 12 * 3600),
+            (T18 + 13 * 3600, T18 + 12 * 3600),
         ] {
             let s = w.state(at, NOW);
             assert_eq!(s["hazards"].as_array().unwrap().len(), 1, "at {at}");
             assert_eq!(s["hazardsValid"], valid, "at {at}");
         }
+        let far = w.state(T18 + 40 * 3600, NOW);
+        assert!(
+            far["hazards"].as_array().unwrap().is_empty() && far["hazardsValid"].is_null(),
+            "no snapshot near: none shown"
+        );
         let mut by_fore = HashMap::new();
         for fore in [0, 3] {
             by_fore.insert(fore, hazards::parse(&turb(0)).unwrap().0);

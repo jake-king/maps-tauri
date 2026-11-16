@@ -17,7 +17,8 @@ if [[ ${SKIP_BUILD:-0} != 1 ]]; then
     || { tail -20 logs/weather-build.log >&2; exit 1; }
 fi
 db=logs/weather-e2e.sqlite
-rm -f "$db" "$db-wal" "$db-shm"
+# the METAR history file sits beside it: start without one, so "nothing collected yet" is certain
+rm -f "$db" "$db-wal" "$db-shm" logs/metars.sqlite logs/metars.sqlite-wal logs/metars.sqlite-shm
 MAPS_ARCHIVE=westla.pmtiles MAPS_LOCAL_ONLY=1 MAPS_BENCH=1 MAPS_F4=0 MAPS_RENDERER=rust MAPS_WEATHER=1 MAPS_WEATHER_CACHE=$db \
   systemd-run --user --scope -q -p MemoryMax=10G timeout 200 ./target/release/maps-tauri >logs/weather-e2e.log 2>&1 || true
 python3 - logs/weather-e2e.log <<'PY'
@@ -42,12 +43,25 @@ for name, x in (("live", w), ("3 h back", past)):
         fail.append(f"{name}: radar loop of {len(sel.get('radar') or [])} frames")
     if x["shown_sat"] is None:
         fail.append(f"{name}: no satellite image drawn")
-    if x["hazards"] < 1:
+    if name == "live" and x["hazards"] < 1:
         fail.append(f"{name}: no hazards")
+    if (sel.get("hazards") is None) != (x["hazards"] == 0):
+        fail.append(f"{name}: hazards {x['hazards']} for a snapshot of {sel.get('hazards')}")
 if any(t > r["back"] for t in past["selection"]["radar"]):
     fail.append(f"3 h back: a radar frame from after the chosen time: {past['selection']['radar']} > {r['back']}")
 if past["selection"]["satellite"] is None or past["selection"]["satellite"] > r["back"]:
     fail.append(f"3 h back: satellite {past['selection']['satellite']} is not at or before {r['back']}")
+if (w["metars"] or 0) < 1000:
+    fail.append(f"live: {w['metars']} METAR stations")
+if not (r["popup"] or "").startswith("KLAX"):
+    fail.append(f"a click on KLAX did not open its report: {r['popup']!r}")
+if past["metars"] != 0 or "collected from" not in past["stamp"]:
+    fail.append(f"3 h back, before any METAR was collected: {past['metars']} stations, stamp {past['stamp']!r}")
+c = r["changed"]
+if c["at"] != c["want"] or not c["ready"]:
+    fail.append(f"a change of time mid-load did not settle on the new time: {c}")
+if c["six_on_gpu"]:
+    fail.append(f"{c['six_on_gpu']} textures uploaded for the time abandoned mid-load")
 lv = r["levels"]
 if not (lv["all"] >= lv["180"] and lv["all"] > min(lv["100"], lv["180"], lv["340"])):
     fail.append(f"the flight-level filter changed nothing: {lv}")
@@ -62,7 +76,7 @@ else:
         fail.append(f"probe: cell drawn {dx}, {dy} px from the pier (half a cell is {cell / 2:.0f} x {tall / 2:.0f})")
     if abs(bw - cell) > 2 or abs(bh - tall) > 2:
         fail.append(f"probe: cell drawn {bw} x {bh} px, expected {cell} x {tall:.0f}")
-print(f"weather: live ready in {r['live_ms'] / 1000:.1f} s, 3 h back in {r['past_ms'] / 1000:.1f} s; GPU {past['gpu_bytes'] / 1e6:.0f} MB; hazards by level {lv}; probe {p}")
+print(f"weather: METARs {w['metars']} stations, popup {(r['popup'] or '')[:60]!r}; live ready in {r['live_ms'] / 1000:.1f} s, 3 h back in {r['past_ms'] / 1000:.1f} s, changed mid-load {c}; GPU {past['gpu_bytes'] / 1e6:.0f} MB; hazards by level {lv}; probe {p}")
 if fail:
     print("weather: FAILED:\n  " + "\n  ".join(fail))
     sys.exit(1)

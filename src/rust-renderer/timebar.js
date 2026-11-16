@@ -19,6 +19,16 @@ export function chosen(value, now) {
   return Math.abs(value - now) < STEP ? null : Math.floor(value / STEP) * STEP;
 }
 
+/** One step from `at` (null = live) in direction `dir`, kept inside the bar's range `[start, end]`.
+ *  From live the first step goes to the nearest mark a whole step away, so it always leaves live (a
+ *  mark less than a step from now would read as live again); a step that lands within a step of now
+ *  returns to live. */
+export function stepFrom(at, now, dir, [start, end]) {
+  let t = at == null ? (dir > 0 ? Math.ceil((now + STEP) / STEP) : Math.floor((now - STEP) / STEP)) * STEP : at + dir * STEP;
+  t = Math.max(start, Math.min(end, t));
+  return Math.abs(t - now) < STEP ? null : t;
+}
+
 /** Position of `t` along the bar, 0..1, clamped. */
 export function along(t, [start, end]) {
   return Math.max(0, Math.min(1, (t - start) / (end - start)));
@@ -75,19 +85,24 @@ export class TimeBar {
     this.radarStrip.title = "radar history";
     this.satStrip = el("div", "position:absolute;top:11px;height:5px;background:#2563eb99;border-radius:2px;");
     this.satStrip.title = "satellite history";
+    this.metarStrip = el("div", "position:absolute;top:18px;height:4px;background:#d97706aa;border-radius:2px;");
+    this.metarStrip.title = "METAR history collected";
     this.marks = el("div", "position:absolute;inset:0;pointer-events:none;");
     this.nowLine = el("div", "position:absolute;top:0;height:22px;width:2px;background:#dc2626;");
     this.ticks = el("div", "position:absolute;left:0;right:0;top:24px;height:14px;font-size:10px;color:#555;pointer-events:none;");
     this.input = el("input", "position:absolute;left:0;right:0;top:0;width:100%;height:22px;margin:0;background:transparent;cursor:pointer;");
     this.input.type = "range";
     this.input.step = String(STEP);
+    // while a hand is on the slider, updates from Rust must not move it back
+    this.input.addEventListener("pointerdown", () => (this.dragging = true));
+    for (const ev of ["pointerup", "pointercancel"]) window.addEventListener(ev, () => (this.dragging = false));
     this.input.addEventListener("input", () => {
       clearTimeout(this.debounce);
       const v = Number(this.input.value);
       this.showLabel(chosen(v, this.now) ?? this.now);
       this.debounce = setTimeout(() => this.pick(chosen(v, this.now)), 120);
     });
-    this.track.append(this.radarStrip, this.satStrip, this.marks, this.nowLine, this.input, this.ticks);
+    this.track.append(this.radarStrip, this.satStrip, this.metarStrip, this.marks, this.nowLine, this.input, this.ticks);
     this.root.append(this.track);
     container.append(this.root);
     this.at = null;
@@ -105,10 +120,7 @@ export class TimeBar {
   }
 
   step(dir) {
-    const from = this.at ?? Math.floor(this.now / STEP) * STEP;
-    const [start, end] = range(this.now, this.history ?? 18 * 3600);
-    const t = Math.max(start, Math.min(end, from + dir * STEP));
-    this.pick(Math.abs(t - this.now) < STEP ? null : t);
+    this.pick(stepFrom(this.at, this.now, dir, range(this.now, this.history ?? 18 * 3600)));
   }
 
   showLabel(t) {
@@ -116,11 +128,12 @@ export class TimeBar {
   }
 
   /** New state from Rust: move "now", the range, and what exists. */
-  update(s) {
+  update(s, metarRange) {
     if (!s) return;
     this.now = s.now;
     this.history = s.history;
     this.available = s.available;
+    this.metarRange = metarRange;
     this.layout();
   }
 
@@ -128,7 +141,7 @@ export class TimeBar {
     const r = range(this.now, this.history ?? 18 * 3600);
     this.input.min = String(r[0]);
     this.input.max = String(r[1]);
-    this.input.value = String(this.at ?? this.now);
+    if (!this.dragging) this.input.value = String(this.at ?? this.now);
     this.nowButton.disabled = this.at == null;
     this.showLabel(this.at ?? this.now);
     const pct = (t) => `${(along(t, r) * 100).toFixed(2)}%`;
@@ -141,6 +154,7 @@ export class TimeBar {
     };
     strip(this.radarStrip, this.available?.radar);
     strip(this.satStrip, this.available?.satellite);
+    strip(this.metarStrip, this.metarRange);
     this.nowLine.style.left = pct(this.now);
     this.marks.replaceChildren(...(this.available?.hazards ?? []).map((t) => {
       const m = el("div", `position:absolute;top:2px;width:3px;height:16px;background:#c026d3;left:${pct(t)};`);

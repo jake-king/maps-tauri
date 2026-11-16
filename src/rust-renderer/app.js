@@ -80,6 +80,7 @@ const wxBox = (label) => {
 const radarBox = wxBox("Radar");
 const satBox = wxBox("Satellite");
 const hazardBox = wxBox("Hazards");
+const metarBox = wxBox("METARs");
 const wxStatus = document.createElement("div");
 wxStatus.style.cssText = "margin-top:3px;color:#555;font-size:11px;min-height:14px;";
 wxPanel.append(wxStatus);
@@ -89,13 +90,13 @@ const wxStamp = document.createElement("div");
 wxStamp.style.cssText = "position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:20;padding:4px 10px;background:#fffe;" +
   "border-radius:6px;box-shadow:0 1px 4px #0003;font:600 12px 'Noto Sans',sans-serif;color:#222;display:none;pointer-events:none;";
 document.getElementById("map").appendChild(wxStamp);
-const layers = () => ({ radar: radarBox.checked, satellite: satBox.checked, hazards: hazardBox.checked });
+const layers = () => ({ radar: radarBox.checked, satellite: satBox.checked, hazards: hazardBox.checked, metars: metarBox.checked });
 const weather = new WeatherLayer(map, {
   onChange: (s) => {
     wxStatus.textContent = wxStatusText(s, layers(), weather.progress());
-    wxStamp.textContent = wxStampText(s, layers());
+    wxStamp.textContent = wxStampText(s, layers(), weather.metars);
     wxStamp.style.display = wxStamp.textContent ? "block" : "none";
-    timeBar.update(s);
+    timeBar.update(s, weather.metars?.range);
   },
 });
 const timeBar = new TimeBar(document.getElementById("map"), {
@@ -107,10 +108,10 @@ const timeBar = new TimeBar(document.getElementById("map"), {
   },
 });
 const wxSet = () => {
-  timeBar.show(radarBox.checked || satBox.checked || hazardBox.checked);
+  timeBar.show(radarBox.checked || satBox.checked || hazardBox.checked || metarBox.checked);
   return weather.set(layers()).catch((e) => say(`map error: weather: ${e.message ?? e}`));
 };
-for (const b of [radarBox, satBox, hazardBox]) b.addEventListener("change", wxSet);
+for (const b of [radarBox, satBox, hazardBox, metarBox]) b.addEventListener("change", wxSet);
 // pixel check: a magenta background, so any uncovered screen area is countable
 if (flags.pixelCheck) map.setBackground([1, 0, 1, 1]);
 map.on("error", (e) => say(`map error: ${e.error?.message ?? e}`));
@@ -147,12 +148,14 @@ map.whenIdle().then(async () => {
     // MAPS_WEATHER=1: all three layers on; wait for the present (its radar loop, satellite image and
     // hazards, 90 s at most), picture it; then 3 hours back, the same; then the registration probe
     weather: async () => {
-      radarBox.checked = satBox.checked = hazardBox.checked = true;
+      radarBox.checked = satBox.checked = hazardBox.checked = metarBox.checked = true;
       await wxSet();
       const statuses = new Set([wxStatus.textContent]);
       const ready = () => {
         const p = weather.progress(), sel = weather.state?.selection ?? {};
-        return sel.radar?.length > 0 && p.radar === sel.radar.length && p.satellite === true && weather.state.hazards?.length > 0;
+        // complete for that time: its radar loop, its satellite image if one exists, its hazards if a
+        // snapshot is in reach (none is the right answer far from any)
+        return sel.radar?.length > 0 && p.radar === sel.radar.length && (sel.satellite == null || p.satellite === true) && (sel.hazards == null || weather.state.hazards?.length > 0) && weather.metars != null;
       };
       // wait on the layer's own updates, as a user would: no extra polling from here
       const settle = async (limit) => {
@@ -169,18 +172,38 @@ map.whenIdle().then(async () => {
       const live = weather.report();
       const pic = (name) => snapshot(map, name, { center: [-97, 38.5], zoom: 3.6 }, (ctx) => ctx.drawImage(weather.canvas, 0, 0, ctx.canvas.width, ctx.canvas.height));
       const livePath = await pic("weather");
+      // a click on LAX's dot opens its report
+      const lax = weather.metars?.stations?.find((x) => x[0] === "KLAX");
+      let popup = null;
+      if (lax) {
+        map.jumpTo({ center: [lax[1], lax[2]], zoom: 9, bearing: 0 });
+        await new Promise((r) => map.once("render", r));
+        const p = map.project([lax[1], lax[2]]);
+        await weather.clicked(p.x, p.y);
+        popup = weather.popup?.style.display === "block" ? weather.popup.textContent : null;
+        weather.closePopup();
+      }
       const back = Math.floor((weather.state.now - 3 * 3600) / 600) * 600;
       const p0 = performance.now();
       timeBar.pick(back);
       await new Promise((r) => setTimeout(r, 50));
       const pastMs = await settle(90000);
-      const past = weather.report();
+      const past = { ...weather.report(), stamp: wxStamp.textContent };
       const pastPath = await pic("weather-past");
       const all = weather.state.hazards ?? [];
       const levels = Object.fromEntries([null, 100, 180, 340].map((fl) => [fl ?? "all", all.filter((h) => h.hazard !== "FZLVL" && atLevel(h, fl)).length]));
+      // a change of mind mid-load: 6 hours back, then 4 hours back 30 ms later. The view must settle on
+      // 4 hours back, and nothing fetched for 6 hours back may reach the GPU.
+      const six = back - 3 * 3600, four = back - 3600;
+      timeBar.pick(six);
+      await new Promise((r) => setTimeout(r, 30));
+      timeBar.pick(four);
+      const switchMs = await settle(90000);
+      const sixOnGpu = [...weather.frames.keys()].filter((t) => t > six - 2700 && t <= six).length + [...weather.sats.keys()].filter((t) => t > six - 1800 && t <= six).length;
+      const changed = { at: weather.state.at, want: four, ready: ready(), ms: switchMs, six_on_gpu: sixOnGpu };
       timeBar.pick(null);
       const probe = await weather.probe();
-      return invoke("bench_done", { result: { weather: live, live_ms: liveMs, past, past_ms: pastMs, past_wait_ms: Math.round(performance.now() - p0), back, levels, statuses: [...statuses], probe, snapshots: [livePath, pastPath] } });
+      return invoke("bench_done", { result: { weather: live, popup, live_ms: liveMs, past, past_ms: pastMs, past_wait_ms: Math.round(performance.now() - p0), back, levels, changed, statuses: [...statuses], probe, snapshots: [livePath, pastPath] } });
     },
   });
 });

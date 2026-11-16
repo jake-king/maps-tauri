@@ -82,3 +82,11 @@ pub fn satellite_image(agent: &ureq::Agent, t: i64) -> Result<Vec<u8>, String> {
     }
     Ok(body)
 }
+
+/// Every station's latest METAR (the AWC cache file), those in the box. The file is gzipped CSV.
+pub fn metars(agent: &ureq::Agent) -> Result<Vec<crate::metar::Metar>, String> {
+    let gz = get(agent, crate::metar::CACHE_URL, 16 << 20)?;
+    let csv = crate::radar::gunzip(&gz, 64 << 20)?;
+    let (m, _) = crate::metar::parse_cache(&String::from_utf8_lossy(&csv))?;
+    Ok(m)
+}

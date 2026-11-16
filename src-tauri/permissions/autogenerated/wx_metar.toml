@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-wx-metar"
+description = "Enables the wx_metar command without any pre-configured scope."
+commands.allow = ["wx_metar"]
+
+[[permission]]
+identifier = "deny-wx-metar"
+description = "Denies the wx_metar command without any pre-configured scope."
+commands.deny = ["wx_metar"]

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { lut, codeToDbz, hazardLabel, age, status, stamp, atLevel, flightLevel, zulu, relative, mercToWorld, DBZ_COLORS } from "../src/rust-renderer/weather.js";
-import { range, chosen, along } from "../src/rust-renderer/timebar.js";
+import { lut, codeToDbz, hazardLabel, age, status, stamp, metarStamp, nearestStation, atLevel, flightLevel, zulu, relative, mercToWorld, DBZ_COLORS } from "../src/rust-renderer/weather.js";
+import { range, chosen, along, stepFrom } from "../src/rust-renderer/timebar.js";
 
 test("codes map back to dBZ as wx::radar writes them", () => {
   assert.equal(codeToDbz(0), null);
@@ -108,4 +108,37 @@ test("the time bar: its range, a slider value to a time, positions", () => {
   assert.equal(along(r[0], r), 0);
   assert.equal(along(r[1] + 9999, r), 1);
   assert.ok(Math.abs(along(now, r) - 0.6) < 0.01, "now sits 18 of 30 hours along");
+});
+
+test("stepping: from live, one step goes a whole step away in either direction", () => {
+  const r = (now) => range(now, 18 * 3600);
+  for (const now of [Date.UTC(2026, 10, 16, 20, 7) / 1000, Date.UTC(2026, 10, 16, 20, 0, 1) / 1000, Date.UTC(2026, 10, 16, 20, 9, 59) / 1000, Date.UTC(2026, 10, 16, 20, 10) / 1000]) {
+    const fwd = stepFrom(null, now, 1, r(now));
+    const back = stepFrom(null, now, -1, r(now));
+    assert.ok(fwd !== null && fwd > now && fwd - now <= 1200 && fwd % 600 === 0, `forward from ${now}: ${fwd}`);
+    assert.ok(back !== null && back < now && now - back <= 1200 && back % 600 === 0, `back from ${now}: ${back}`);
+  }
+  const now = Date.UTC(2026, 10, 16, 20, 7) / 1000;
+  const t = stepFrom(null, now, -1, r(now));
+  assert.equal(stepFrom(t, now, 1, r(now)), null, "stepping back towards now lands on live");
+  assert.equal(stepFrom(r(now)[1], now, 1, r(now)), r(now)[1], "the end of the bar holds");
+  assert.equal(stepFrom(r(now)[0], now, -1, r(now)), r(now)[0], "and so does the start");
+});
+
+test("the METAR stamp: how many stations, or why none", () => {
+  const now = Date.UTC(2026, 10, 16, 22, 0) / 1000;
+  const m = (stations, range) => ({ stations, range });
+  assert.equal(metarStamp(null, now, now), "METARs: loading…");
+  assert.equal(metarStamp(m([["KLAX"], ["KSFO"]], [now - 600, now]), now, now), "METARs 2 stations");
+  assert.equal(metarStamp(m([], [now - 600, now]), now - 3 * 3600, now), "METARs: collected from 21:50Z", "before collection began");
+  assert.equal(metarStamp(m([], [now - 600, now]), now + 3 * 3600, now), "METARs: observations only");
+  assert.equal(metarStamp(m([], [null, null]), now, now), "METARs: none");
+});
+
+test("a click finds the nearest station within its radius", () => {
+  const project = ([lon, lat]) => ({ x: lon, y: lat }); // a trivial projection for the test
+  const st = [["A", 100, 100, 1, 0], ["B", 106, 100, 3, 0], ["C", 300, 300, 2, 0]];
+  assert.equal(nearestStation(st, 104, 100, 10, project)[0], "B");
+  assert.equal(nearestStation(st, 101, 101, 10, project)[0], "A");
+  assert.equal(nearestStation(st, 200, 200, 10, project), null, "nothing within reach");
 });

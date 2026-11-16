@@ -1,5 +1,6 @@
 mod devstats;
 mod diskcache;
+mod metars;
 pub mod search;
 mod tiles;
 mod weather;
@@ -296,13 +297,20 @@ fn data_dir() -> PathBuf {
 
 /// Turn the weather layer on: the first call starts fetching from NOAA (nothing does before it).
 #[tauri::command]
-fn wx_enable(app: tauri::AppHandle, w: tauri::State<'_, Arc<weather::Weather>>) -> Value {
+fn wx_enable(
+    app: tauri::AppHandle,
+    w: tauri::State<'_, Arc<weather::Weather>>,
+    m: tauri::State<'_, Arc<metars::Metars>>,
+) -> Value {
     use tauri::Emitter;
     // every frame and forecast hour that arrives: tell the webview at once rather than wait for a poll
     let changed = move || {
         let _ = app.emit("wx-changed", ());
     };
-    w.enable(Arc::new(weather::Noaa::new()), Arc::new(changed));
+    let changed: Arc<dyn Fn() + Send + Sync> = Arc::new(changed);
+    w.enable(Arc::new(weather::Noaa::new()), changed.clone());
+    let agent = wx::fetch::agent();
+    m.start(move || wx::fetch::metars(&agent), changed);
     w.state(unix_now(), unix_now())
 }
 
@@ -314,32 +322,56 @@ fn wx_state(at: Option<i64>, w: tauri::State<'_, Arc<weather::Weather>>) -> Valu
     w.state(at.unwrap_or(now), now)
 }
 
-/// One radar frame's cells, one byte each (wx::radar's code), as raw bytes rather than JSON.
-/// Fetched from NOAA first if not held: `async` runs it on Tauri's thread pool, off the UI thread.
-#[tauri::command(async)]
-fn wx_frame(
+/// One radar frame's cells, one byte each (wx::radar's code), as raw bytes rather than JSON,
+/// fetched from NOAA first if not held. The fetch blocks (up to a minute on a bad network), so it runs
+/// on the blocking pool: a sync command marked `async` would run on an async worker instead, which
+/// Tauri's other async commands share.
+#[tauri::command]
+async fn wx_frame(
     time: i64,
     w: tauri::State<'_, Arc<weather::Weather>>,
 ) -> Result<tauri::ipc::Response, String> {
+    let w = Arc::clone(&w);
     let src = w.source().ok_or("weather is off")?;
-    Ok(tauri::ipc::Response::new(
-        w.radar_frame(src.as_ref(), time)?,
-    ))
+    let bytes = tauri::async_runtime::spawn_blocking(move || w.radar_frame(src.as_ref(), time))
+        .await
+        .map_err(|e| format!("radar frame task: {e}"))??;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
-/// One satellite image's grey levels (wx::satellite), one byte a pixel, fetched first if not held.
-#[tauri::command(async)]
-fn wx_satellite(
+/// One satellite image's grey levels (wx::satellite), one byte a pixel, fetched first if not held;
+/// on the blocking pool, as wx_frame.
+#[tauri::command]
+async fn wx_satellite(
     time: i64,
     w: tauri::State<'_, Arc<weather::Weather>>,
 ) -> Result<tauri::ipc::Response, String> {
+    let w = Arc::clone(&w);
     let src = w.source().ok_or("weather is off")?;
-    Ok(tauri::ipc::Response::new(
-        w.satellite_image(src.as_ref(), time)?,
-    ))
+    let bytes = tauri::async_runtime::spawn_blocking(move || w.satellite_image(src.as_ref(), time))
+        .await
+        .map_err(|e| format!("satellite task: {e}"))??;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
-fn unix_now() -> i64 {
+/// The METARs in force at `at` (default now), compact: [id, lon, lat, category, time] each, with the
+/// range collected and a version that changes when anything new arrives.
+#[tauri::command]
+fn wx_metars(at: Option<i64>, m: tauri::State<'_, Arc<metars::Metars>>) -> Value {
+    m.at(at.unwrap_or_else(unix_now))
+}
+
+/// One station's report in force at `at`: its raw text and observation time.
+#[tauri::command]
+fn wx_metar(
+    id: String,
+    at: Option<i64>,
+    m: tauri::State<'_, Arc<metars::Metars>>,
+) -> Option<(String, i64)> {
+    m.report(&id, at.unwrap_or_else(unix_now))
+}
+
+pub(crate) fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -410,6 +442,11 @@ pub fn run() {
         .manage(Arc::new(weather::Weather::open(
             weather::configured_path().as_deref(),
         )))
+        .manage(Arc::new(metars::Metars::open(
+            weather::configured_path()
+                .map(|p| p.with_file_name("metars.sqlite"))
+                .as_deref(),
+        )))
         // Asynchronous so a file read never runs on the UI thread: the handler hands the request
         // to a blocking-pool thread and answers through the responder when the read is done.
         .register_asynchronous_uri_scheme_protocol("tiles", move |_ctx, request, responder| {
@@ -469,7 +506,9 @@ pub fn run() {
             wx_enable,
             wx_state,
             wx_frame,
-            wx_satellite
+            wx_satellite,
+            wx_metars,
+            wx_metar
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
