@@ -732,7 +732,10 @@ pub(crate) mod tests {
                 "not wind speeds"
             );
         }
-        assert!((g[0].lat0 - 60.0).abs() < 1e-6, "north row first");
+        assert!(
+            g[0].lat0 > g[0].lat0 - (g[0].nj - 1) as f64 * g[0].dlat && g[0].lat0 >= 60.0,
+            "north row first"
+        );
     }
 
     /// A real frame, when one has been downloaded: WX_FRAME=path/to/MRMS_...grib2 (not gzipped).

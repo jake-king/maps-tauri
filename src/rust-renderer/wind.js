@@ -27,16 +27,39 @@ export function decodeWind(buf) {
   return { ni, nj, lat0, lon0, dlat, dlon, run, fhr, hpa, valid: run + fhr * 3600, uv: new Float32Array(buf, HEADER) };
 }
 
-/** [u, v] (m/s) at a position, bilinear between grid points; null outside the grid. Row 0 is north. */
+/** Whether a field goes all the way round the world (then it wraps at the 0/360 seam). */
+export const isGlobal = (f) => Math.abs(f.ni * f.dlon - 360) < 1e-6;
+
+/** [u, v] (m/s) at a position, bilinear between grid points; null outside the grid. Row 0 is north.
+ *  A global field wraps: longitude is taken round the world, and the last column meets the first. */
 export function sampleWind(f, lon, lat) {
-  const x = (lon - f.lon0) / f.dlon, y = (f.lat0 - lat) / f.dlat;
-  if (!(x >= 0 && y >= 0 && x <= f.ni - 1 && y <= f.nj - 1)) return null;
-  const i = Math.min(Math.floor(x), f.ni - 2), j = Math.min(Math.floor(y), f.nj - 2);
+  const y = (f.lat0 - lat) / f.dlat;
+  if (!(y >= 0 && y <= f.nj - 1)) return null;
+  let x = (lon - f.lon0) / f.dlon, i, i1;
+  if (isGlobal(f)) {
+    x = ((x % f.ni) + f.ni) % f.ni;
+    i = Math.min(Math.floor(x), f.ni - 1);
+    i1 = (i + 1) % f.ni;
+  } else {
+    if (!(x >= 0 && x <= f.ni - 1)) return null;
+    i = Math.min(Math.floor(x), f.ni - 2);
+    i1 = i + 1;
+  }
+  const j = Math.min(Math.floor(y), f.nj - 2);
   const fx = x - i, fy = y - j;
   const at = (ii, jj, c) => f.uv[(jj * f.ni + ii) * 2 + c];
   const lerp = (c) =>
-    (at(i, j, c) * (1 - fx) + at(i + 1, j, c) * fx) * (1 - fy) + (at(i, j + 1, c) * (1 - fx) + at(i + 1, j + 1, c) * fx) * fy;
+    (at(i, j, c) * (1 - fx) + at(i1, j, c) * fx) * (1 - fy) + (at(i, j + 1, c) * (1 - fx) + at(i1, j + 1, c) * fx) * fy;
   return [lerp(0), lerp(1)];
+}
+
+/** The part of `view` the field has wind for, [west, south, east, north], or null. */
+export function covered(f, view) {
+  const north = f.lat0, south = f.lat0 - (f.nj - 1) * f.dlat;
+  const s = Math.max(view[1], south), n = Math.min(view[3], north);
+  if (isGlobal(f)) return n > s ? [view[0], s, view[2], n] : null;
+  const w = Math.max(view[0], f.lon0), e = Math.min(view[2], f.lon0 + (f.ni - 1) * f.dlon);
+  return n > s && e > w ? [w, s, e, n] : null;
 }
 
 /** Colour by speed (m/s), as [r, g, b, a] in 0..1: dark and faint when calm, magenta in the jet. */
@@ -102,6 +125,11 @@ export class Particles {
     if (this.histLen[i] < TRAIL) this.histLen[i] += 1;
   }
 
+  /** Whether particle `i` is in use this frame (see step). */
+  active(i) {
+    return i < (this.activeCount ?? this.n);
+  }
+
   /** Point `k` of particle `i`'s path (0 = where it is now), in world coordinates. */
   point(i, k) {
     const at = (i * TRAIL + ((this.histHead[i] - k + TRAIL) % TRAIL)) * 2;
@@ -120,10 +148,23 @@ export class Particles {
       ? 1 - area([Math.max(view[0], prevView[0]), Math.max(view[1], prevView[1]), Math.min(view[2], prevView[2]), Math.min(view[3], prevView[3])]) / area(view)
       : 0;
     const avoid = shown > 0.01 ? prevView : null;
+    // only as many particles as the part of the view with wind deserves, and only there: otherwise a
+    // strip of wind at the field's edge holds every particle and the streaks pile on each other
+    const cov = covered(f, view);
+    const active = cov ? Math.round((this.n * area(cov)) / area(view)) : 0;
+    this.activeCount = active;
+    const where = cov ?? view;
     const u = (this.u ??= new Float32Array(this.n)), v = (this.v ??= new Float32Array(this.n));
     const leave = (this.leave ??= new Uint8Array(this.n));
     let leaving = 0;
     for (let i = 0; i < this.n; i += 1) {
+      if (i >= active) {
+        // idle: not simulated, not drawn; it starts afresh when it is needed again
+        this.histLen[i] = 0;
+        this.age[i] = Infinity;
+        leave[i] = 0;
+        continue;
+      }
       const lon = this.lon[i], lat = this.lat[i];
       const out = lon < view[0] || lon > view[2] || lat < view[1] || lat > view[3];
       const uv = out || this.age[i] > this.maxAge[i] ? null : sampleWind(f, lon, lat);
@@ -132,11 +173,11 @@ export class Particles {
       else leaving += 1;
     }
     // the revealed part's fair share of particles, beyond those already restarting into it
-    const extra = avoid ? Math.max(0, shown * this.n - leaving) : 0;
-    const q = extra > 0 ? extra / Math.max(1, this.n - leaving) : 0;
-    for (let i = 0; i < this.n; i += 1) {
+    const extra = avoid ? Math.max(0, shown * active - leaving) : 0;
+    const q = extra > 0 ? extra / Math.max(1, active - leaving) : 0;
+    for (let i = 0; i < active; i += 1) {
       if (leave[i] || (q > 0 && this.rng() < q)) {
-        this.respawn(i, view, avoid);
+        this.respawn(i, where, avoid);
         continue;
       }
       const lon = this.lon[i], lat = this.lat[i];
@@ -161,6 +202,7 @@ export function frameStats(p, cam, verts, nVerts, maxPx = 12) {
   const c = Math.cos(cam.bearing), s = Math.sin(cam.bearing);
   let heads = 0;
   for (let i = 0; i < p.n; i += 1) {
+    if (!p.active(i)) continue;
     const [wx, wy] = p.point(i, 0);
     const dx = (wx - cam.cx) * cam.scale, dy = (wy - cam.cy) * cam.scale;
     const x = dx * c + dy * s + cam.w / 2, y = -dx * s + dy * c + cam.h / 2;

@@ -74,9 +74,9 @@ Center's GFA does it, and off until their boxes are ticked: nothing is fetched f
   from that file every five minutes while it ran, kept on disk, and the bar shows where it begins.
 - Winds: GFS winds at the chosen flight level (FL050 to FL450 mapped to standard pressure levels;
   FL340, 250 hPa, when none is chosen), as 5,000 particles that drift with the wind and leave fading
-  trails, coloured by speed. The field (U and V on a 0.25° grid, cut by NOAA's NOMADS filter, about
-  150 KB) comes from the newest run that serves the chosen time, or the run before if that one is not
-  published yet. Particles move a fixed number of screen pixels per m/s at any zoom; the simulation is
+  trails, coloured by speed. The field (U and V for the whole world on a 0.5° grid, cut by NOAA's
+  NOMADS filter, about 0.7 MB) comes from the newest run that serves the chosen time at the nearest
+  3-hourly step, or the run before if that one is not published yet. Particles move a fixed number of screen pixels per m/s at any zoom; the simulation is
   JavaScript. Each particle keeps its last 16 positions on the map, and every frame those paths are
   projected through the camera and drawn as fading lines, so the trails stay put on the map through a
   pan, zoom or turn. With winds alone on, the map holds 60 frames a second, redraw p50 9 ms, p99 11 ms.

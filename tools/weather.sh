@@ -62,7 +62,8 @@ wd = r["wind"] or {}
 if "run" not in wd:
     fail.append(f"no wind field: {wd}")
 else:
-    if abs(wd["valid"] - w["at"] if w["at"] else 0) > 1800 and w["at"]:
+    # the 0.5° files are every 3 hours: the nearest is at most 90 minutes away
+    if abs(wd["valid"] - w["at"] if w["at"] else 0) > 5400 and w["at"]:
         fail.append(f"wind valid {wd['valid']} is not near {w['at']}")
     if wd["hpa"] != 250 or wd["segments"] < 1000:
         fail.append(f"winds at FL340: {wd}")
@@ -117,7 +118,7 @@ c, st = r["coverage"], r["stats"]
 before = c["0-before"]
 # the slow moves keep their trails; the fast ones start some again in the revealed area, which is fine,
 # but at every moment the particles must cover the screen evenly and no trail may be stretched
-slow = ["1-pan-mid", "2-pan-after", "3-zoom-mid", "4-zoom-after", "6-wheel-mid", "7-wheel-after"]
+slow = ["1-pan-mid", "2-pan-after", "3-zoom-mid", "4-zoom-after", "6-wheel-mid", "7-wheel-after", "16-atlantic", "17-atlantic-fastpan-after"]
 low = {k: c[k] for k in slow if c[k] < 0.6 * before}
 bunched = {k: v["cv"] for k, v in st.items() if v["cv"] is None or v["cv"] > 0.35}
 stretched = {k: v["long"] for k, v in st.items() if v["long"]}

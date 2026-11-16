@@ -186,3 +186,29 @@ test("a trail stops at a segment longer than any one-frame move: the camera stre
   }
   assert.ok(MAX_SEGMENT_PX >= 4 && MAX_SEGMENT_PX <= 12, "the cap sits above the fastest real move (100 m/s is 4 px) and well under a stretched trail");
 });
+
+test("a global field wraps: western longitudes and the 0/360 seam sample like anywhere else", () => {
+  // 4 columns at 0, 90, 180, 270 east; u = 10, 20, 30, 40 on both rows
+  const f = decodeWind(encoded({ ni: 4, nj: 2, lat0: 45, lon0: 0, dlat: 90, dlon: 90 }, [10, 0, 20, 0, 30, 0, 40, 0, 10, 0, 20, 0, 30, 0, 40, 0]));
+  assert.deepEqual(sampleWind(f, -90, 0), [40, 0], "90 W is 270 E");
+  assert.deepEqual(sampleWind(f, -45, 0), [25, 0], "315 E: halfway between 270 E and 360 = 0 E");
+  assert.deepEqual(sampleWind(f, 315, 0), [25, 0]);
+  assert.deepEqual(sampleWind(f, 45, 0), [15, 0]);
+  assert.equal(sampleWind(f, 45, 60), null, "beyond the last row is still outside");
+});
+
+test("particles keep the same density where there is wind when only part of the view has any", () => {
+  const p = new Particles(4000, mulberry(8));
+  // wind only west of 95 W; the view runs 100 W to 90 W: half of it has wind
+  const half = decodeWind(encoded({ ni: 2, nj: 2, lat0: 41, lon0: -100, dlat: 6, dlon: 5 }, new Array(8).fill(0)));
+  const view = [-100, 35, -90, 41];
+  for (let k = 0; k < 120; k++) p.step(half, view, 512 * 64, view);
+  let active = 0, outside = 0;
+  for (let i = 0; i < p.n; i++) {
+    if (!p.active(i)) continue;
+    active += 1;
+    if (p.lon[i] > -95) outside += 1;
+  }
+  assert.equal(outside, 0, "no particle lives where there is no wind");
+  assert.ok(Math.abs(active - 2000) < 200, `${active} active for half the view, not all 4000 crowded into it`);
+});

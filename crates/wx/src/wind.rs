@@ -1,8 +1,10 @@
-//! Winds aloft from NOAA's GFS model: U and V at one pressure level over the box, cut out of a run
-//! by NOMADS's GRIB filter (0.25°, 321 x 181 points, about 150 KB a level).
+//! Winds aloft from NOAA's GFS model: U and V at one pressure level for the whole world, cut out of a
+//! run by NOMADS's GRIB filter (0.5°, 720 x 361 points, about 0.7 MB a level). Asked for as a
+//! subregion, even of the whole globe, NOMADS repacks the field simply (template 5.0), which wx::grib
+//! reads; the plain global file uses complex packing (5.3), which it does not.
 //!
 //! A run starts every six hours (00, 06, 12, 18Z) and appears on NOMADS about four hours later, with
-//! hourly forecast files out to 120 hours. For a chosen time the field comes from the newest run that
+//! forecast files every 3 hours at this resolution. For a chosen time the field comes from the newest run that
 //! has started by then and is published, at the nearest forecast hour: the past is a short forecast
 //! from the run before it, the future the newest run's forecast.
 
@@ -25,6 +27,8 @@ pub const DEFAULT_FL: u32 = 340;
 pub const PUBLISH_DELAY: i64 = 4 * 3600 + 30 * 60;
 pub const RUN_STEP: i64 = 6 * 3600;
 pub const MAX_FHR: i64 = 120;
+/// The 0.5° files exist every 3 forecast hours (f007 is a 404; measured 2026-11-16).
+pub const STEP_H: i64 = 3;
 
 /// The pressure level (hPa) nearest flight level `fl`.
 pub fn pressure_for(fl: u32) -> u32 {
@@ -45,20 +49,20 @@ pub fn runs_for(at: i64, now: i64) -> Vec<(i64, i64)> {
     (0..3)
         .map(|k| first - k * RUN_STEP)
         .filter_map(|run| {
-            let fhr = ((at - run) as f64 / 3600.0).round() as i64;
+            let fhr = ((at - run) as f64 / (STEP_H * 3600) as f64).round() as i64 * STEP_H;
             (0..=MAX_FHR).contains(&fhr).then_some((run, fhr))
         })
         .collect()
 }
 
 /// The NOMADS filter request for U and V at `hpa` from run `run` (Unix seconds), forecast hour `fhr`,
-/// over the box (latitude 15..60, longitude -135..-55, as 225..305 east).
+/// for the whole world.
 pub fn url(run: i64, fhr: i64, hpa: u32) -> String {
     let iso = crate::satellite::iso(run); // 2026-11-16T12:00:00Z
     let (date, hh) = (iso[0..10].replace('-', ""), &iso[11..13]);
     format!(
-        "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?dir=%2Fgfs.{date}%2F{hh}%2Fatmos&file=gfs.t{hh}z.pgrb2.0p25.f{fhr:03}\
-         &var_UGRD=on&var_VGRD=on&lev_{hpa}_mb=on&subregion=&toplat=60&leftlon=225&rightlon=305&bottomlat=15"
+        "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p50.pl?dir=%2Fgfs.{date}%2F{hh}%2Fatmos&file=gfs.t{hh}z.pgrb2full.0p50.f{fhr:03}\
+         &var_UGRD=on&var_VGRD=on&lev_{hpa}_mb=on&subregion=&toplat=90&leftlon=0&rightlon=359.5&bottomlat=-90"
     )
 }
 
@@ -152,51 +156,60 @@ mod tests {
 
     #[test]
     fn which_run_and_hour_serve_a_time() {
-        // now 22:00Z: 18Z started at 18:00 but is not published until ~22:30, so 12Z is newest
+        // now 22:00Z: 18Z started at 18:00 but is not published until ~22:30, so 12Z is newest; the
+        // 0.5° files are every 3 hours, so the hour is the nearest multiple of 3
         let now = T12 + 10 * 3600;
         assert_eq!(
             runs_for(now, now)[0],
-            (T12, 10),
-            "the present: 12Z, 10 hours on"
+            (T12, 9),
+            "the present: 12Z, 9 hours on (valid 21Z)"
         );
         assert_eq!(
             runs_for(now + 6 * 3600, now)[0],
-            (T12, 16),
+            (T12, 15),
             "the future: the newest run's forecast"
         );
         assert_eq!(
             runs_for(T12 - 5 * 3600, now)[0],
-            (T12 - 6 * 3600, 1),
-            "07Z: the 06Z run, an hour on"
+            (T12 - 6 * 3600, 0),
+            "07Z: the 06Z run's analysis"
         );
         assert_eq!(
-            runs_for(T12 - 5 * 3600 + 1799, now)[0].1,
-            1,
-            "rounded to the nearest hour"
+            runs_for(T12 - 6 * 3600 + 5399, now)[0].1,
+            0,
+            "rounded to the nearest 3 hours"
         );
-        assert_eq!(runs_for(T12 - 5 * 3600 + 1800, now)[0].1, 2);
+        assert_eq!(runs_for(T12 - 6 * 3600 + 5400, now)[0].1, 3);
         // the fallbacks: the runs before, their hours further on
         assert_eq!(
             runs_for(now, now),
-            vec![(T12, 10), (T12 - 6 * 3600, 16), (T12 - 12 * 3600, 22)]
+            vec![(T12, 9), (T12 - 6 * 3600, 15), (T12 - 12 * 3600, 21)]
         );
         // once 18Z is published (22:30Z), it serves times after 18Z
         assert_eq!(
             runs_for(T12 + 11 * 3600, T12 + 10 * 3600 + 1800)[0],
-            (T12 + 6 * 3600, 5)
+            (T12 + 6 * 3600, 6)
         );
+        for (_, fhr) in runs_for(now + 7 * 3600 + 1234, now) {
+            assert_eq!(fhr % 3, 0, "only hours the 0.5° files exist for");
+        }
     }
 
     #[test]
     fn the_request() {
         let u = url(T12, 9, 250);
         assert!(
-            u.contains("dir=%2Fgfs.20261116%2F12%2Fatmos")
-                && u.contains("file=gfs.t12z.pgrb2.0p25.f009")
+            u.contains("filter_gfs_0p50.pl")
+                && u.contains("dir=%2Fgfs.20261116%2F12%2Fatmos")
+                && u.contains("file=gfs.t12z.pgrb2full.0p50.f009")
                 && u.contains("lev_250_mb=on"),
             "{u}"
         );
-        assert!(u.contains("toplat=60&leftlon=225&rightlon=305&bottomlat=15"));
+        // the whole world, asked for as a subregion: NOMADS then repacks it simply (template 5.0)
+        assert!(
+            u.contains("subregion=&toplat=90&leftlon=0&rightlon=359.5&bottomlat=-90"),
+            "{u}"
+        );
     }
 
     #[test]
@@ -232,14 +245,14 @@ mod tests {
         );
     }
 
-    /// The real NOMADS response: WX_GFS=file.grib2 (UGRD and VGRD at 250 hPa)
+    /// The real NOMADS response: WX_GFS=file.grib2 (UGRD and VGRD at 250 hPa, the world at 0.5°)
     #[test]
     fn a_real_response() {
         let Ok(path) = std::env::var("WX_GFS") else {
             return;
         };
         let w = from_grib(&std::fs::read(path).unwrap(), 250).unwrap();
-        assert_eq!((w.ni, w.nj), (321, 181));
+        assert_eq!((w.ni, w.nj), (720, 361), "the world at 0.5°");
         let fastest =
             w.u.iter()
                 .zip(&w.v)

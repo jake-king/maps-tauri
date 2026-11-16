@@ -1235,3 +1235,20 @@ it compared to the very constant it was checking; it uses a fixed bound now.
 After: evenness 0.05-0.09 through every move, no stretched segments. A fast zoom costs a quarter of a
 second of shorter trails while the moved particles build history. The gate now fails on bunching or
 stretching at any captured moment; with the fix planted out it reported 1.5-1.8.
+
+### The doubling, from the user's screen recording
+
+The user recorded it. I cannot play video, so I took two frames a second out of it with ffmpeg and
+read them. They showed what no scripted move of mine had tried: panning off North America over the
+Atlantic. The wind field was my box (60N to 15N, 135W to 55W) and stopped at its edges, and when only
+a sliver of the view had wind, all 5,000 particles crowded into that sliver: dense, overlapping
+streaks against an empty map. That was the doubling.
+
+Two changes. The particles in use now scale with the part of the view the field covers, and restart
+only there, so a strip of wind is as dense as any other. And the field is the world: NOMADS's 0.5°
+GFS, 720 x 361, 0.7 MB. Asked for whole, NOMADS sends that grid in complex packing (template 5.3), which
+the decoder refuses by name; asked for as a subregion, even one that is the whole globe, it repacks it
+simply. The 0.5° files are every 3 hours (f007 is a 404), so the field is the nearest 3-hourly step and
+the stamp shows its valid time. Sampling wraps at the 0/360 seam. The real file decodes; the fastest
+wind at 250 hPa that evening was 200 knots. The gate now also jumps to the mid-Atlantic and pans
+there fast: trails present, evenness 0.09.

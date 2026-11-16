@@ -34,8 +34,8 @@ const HAZARDS_EVERY: i64 = 15 * 60;
 /// bar's 10-minute step is 108 radar frames; a radar frame compresses to a few hundred KB.
 pub const RADAR_KEEP: usize = 160;
 pub const SAT_KEEP: usize = 40;
-/// Wind fields kept (memory and disk): a level for each of 24 hours is about 11 MB uncompressed.
-pub const WIND_KEEP: usize = 24;
+/// Wind fields kept (memory and disk): each is the world at one level, about 2 MB uncompressed.
+pub const WIND_KEEP: usize = 12;
 
 /// Where the weather comes from: NOAA in the app, a fake in the tests.
 pub trait Source: Send + Sync {
@@ -1157,8 +1157,8 @@ mod tests {
         let (run, fhr, hpa) = wind_header(&b);
         assert_eq!(
             (run, fhr, hpa),
-            (T18 - 6 * 3600, 7, 250),
-            "12Z run, 7 hours on, FL340 = 250 hPa"
+            (T18 - 6 * 3600, 6, 250),
+            "12Z run, 6 hours on (the 0.5° files are 3-hourly), FL340 = 250 hPa"
         );
         w.wind(&src, now, Some(340), now).unwrap();
         assert_eq!(
@@ -1181,8 +1181,8 @@ mod tests {
         let b = w.wind(&src, NOW, Some(340), NOW).unwrap();
         assert_eq!(
             wind_header(&b),
-            (T18 - 12 * 3600, 13, 250),
-            "06Z, 13 hours on"
+            (T18 - 12 * 3600, 12, 250),
+            "06Z, 12 hours on"
         );
     }
 

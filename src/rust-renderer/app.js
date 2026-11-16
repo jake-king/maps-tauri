@@ -230,6 +230,16 @@ map.whenIdle().then(async () => {
       shots.push(await shot("13-fastzoomout-after"));
       await wait(250);
       shots.push(await shot("14-fastzoomout-250ms"));
+      // out over the Atlantic, where the North America box had no wind: the world field must have it
+      await wait(1000);
+      map.jumpTo({ center: [-40, 42], zoom: 5, bearing: 0 });
+      await wait(150);
+      shots.push(await shot("15-atlantic-jump"));
+      await wait(1500);
+      shots.push(await shot("16-atlantic"));
+      map.easeTo({ center: [-25, 42], duration: 300 });
+      await wait(600);
+      shots.push(await shot("17-atlantic-fastpan-after"));
       return invoke("bench_done", { result: { windMotion: shots, coverage: cov, stats, segments: weather.windGl?.lastSegments } });
     },
     // MAPS_WEATHER=1: all three layers on; wait for the present (its radar loop, satellite image and
