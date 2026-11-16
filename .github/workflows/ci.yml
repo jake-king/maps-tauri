@@ -1,0 +1,34 @@
+# The gate on every push and pull request: tools/check.sh, the same command run before every commit
+# on the dev box. The checks that need map data or the private Python service are skipped here, and
+# say so in the log; see the README.
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries and tools
+        run: tools/ci-setup.sh
+      - run: npm ci --no-audit --no-fund
+      - name: Gate
+        run: tools/check.sh
+      - name: Step logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-logs
+          path: logs/

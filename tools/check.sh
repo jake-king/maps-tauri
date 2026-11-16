@@ -8,12 +8,16 @@ cd "$(dirname "$0")/.." || exit 1
 fast=0
 [[ ${1:-} == --fast ]] && fast=1
 failed=()
+# Each step runs in its own memory-capped scope where a user systemd session exists (the dev box);
+# a CI runner has none and is thrown away after the job, so there the cap is skipped.
+cap=()
+if systemd-run --user --scope -q true 2>/dev/null; then cap=(systemd-run --user --scope -q -p MemoryMax=10G); fi
 run() {
   local name=$1 limit=$2
   shift 2
   printf '%-34s ' "$name"
   local t0=$SECONDS
-  if systemd-run --user --scope -q -p MemoryMax=10G timeout "$limit" "$@" >"logs/check-$name.log" 2>&1; then
+  if "${cap[@]}" timeout "$limit" "$@" >"logs/check-$name.log" 2>&1; then
     echo "ok ($((SECONDS - t0)) s)"
   else
     echo "FAILED (exit $?; logs/check-$name.log)"

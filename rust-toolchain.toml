@@ -1,0 +1,6 @@
+# The toolchain the gate is run with, here and in CI: a newer clippy brings new lints, so it moves
+# only on purpose.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
