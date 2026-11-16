@@ -1,4 +1,5 @@
 mod devstats;
+mod diskcache;
 pub mod search;
 mod tiles;
 
@@ -111,7 +112,8 @@ fn bench_done(result: serde_json::Value, app: tauri::AppHandle) {
     }
 }
 
-/// The archive the native renderer reads, and where it came from ("remote" or "local").
+/// The archive the native renderer reads, and where it came from ("remote", "cached": the remote
+/// planet's disk cache with no network, or "local").
 struct ArchiveState(Arc<Option<vtile::pmtiles::Archive>>, &'static str);
 
 /// The archive's bounds, center and zoom range, read by vtile from its header: what the native
@@ -143,6 +145,64 @@ fn remote_url() -> Option<String> {
         .or_else(|| std::fs::read_to_string(data_dir().join("remote.url")).ok())
         .map(|s| s.trim().to_owned())
         .filter(|s| s.starts_with("https://") || s.starts_with("http://"))
+}
+
+/// The remote planet through the disk cache ("remote"), or, when the server cannot be reached, the
+/// cache's copy of it ("cached": what was seen before, nothing else). None when neither opens.
+fn open_remote(url: &str) -> Option<(vtile::pmtiles::Archive, &'static str)> {
+    let cache_path = diskcache::configured_path();
+    let max = diskcache::configured_max_bytes();
+    let online = match &cache_path {
+        Some(path) => vtile::pmtiles::Archive::open_url_cached(url, |version| {
+            // a cache file that will not open costs the cache, never the planet
+            match diskcache::DiskCache::open(path, url, version, max) {
+                Ok(c) => {
+                    println!(
+                        "[cache] {} ({} MB stored for this version)",
+                        path.display(),
+                        c.bytes() >> 20
+                    );
+                    Ok(Box::new(c))
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[cache] {} will not open ({e}); reading without a cache",
+                        path.display()
+                    );
+                    Ok(Box::new(diskcache::NoCache))
+                }
+            }
+        }),
+        None => vtile::pmtiles::Archive::open_url(url),
+    };
+    let e = match online {
+        Ok(a) => {
+            println!(
+                "[archive] remote planet, zooms {}-{}",
+                a.header.min_zoom, a.header.max_zoom
+            );
+            return Some((a, "remote"));
+        }
+        Err(e) => e,
+    };
+    let cached = cache_path
+        .and_then(|p| diskcache::DiskCache::open_last(&p, url, max).ok().flatten())
+        .and_then(|c| {
+            let what = format!("version {}, {} MB", c.version(), c.bytes() >> 20);
+            vtile::pmtiles::Archive::open_cached(Box::new(c))
+                .ok()
+                .map(|a| (a, what))
+        });
+    match cached {
+        Some((a, what)) => {
+            eprintln!("[archive] remote planet unreachable ({e}); reading its cached copy ({what}), offline");
+            Some((a, "cached"))
+        }
+        None => {
+            eprintln!("[archive] remote planet unreachable ({e}); using the local extract");
+            None
+        }
+    }
 }
 
 /// Saves a frame the frontend captured (a PNG data URL) as logs/snapshot-<name>.png, for looking at
@@ -240,25 +300,23 @@ pub fn run() {
     // The native renderer reads the same archive through vtile; opened once, read with pread from
     // any thread.
     let archive_file = archive_name();
-    // The native renderer reads the remote planet when one is configured and reachable, else the
-    // local extract. The MapLibre app always reads the local file through tiles://basemap.pmtiles.
-    let (archive, source) = match remote_url().map(|u| vtile::pmtiles::Archive::open_url(&u)) {
-        Some(Ok(a)) => {
-            println!(
-                "[archive] remote planet, zooms {}-{}",
-                a.header.min_zoom, a.header.max_zoom
-            );
-            (Some(a), "remote")
-        }
-        other => {
-            if let Some(Err(e)) = other {
-                eprintln!("[archive] remote planet unreachable ({e}); using the local extract");
-            }
-            (
-                vtile::pmtiles::Archive::open(&data.join(&archive_file)).ok(),
-                "local",
-            )
-        }
+    // The native renderer reads the remote planet when one is configured and reachable (through the
+    // disk cache), else the cached copy of it with no network, else the local extract. The MapLibre
+    // app always reads the local file through tiles://basemap.pmtiles.
+    let (archive, source) = match remote_url() {
+        Some(url) => open_remote(&url).map_or_else(
+            || {
+                (
+                    vtile::pmtiles::Archive::open(&data.join(&archive_file)).ok(),
+                    "local",
+                )
+            },
+            |(a, s)| (Some(a), s),
+        ),
+        None => (
+            vtile::pmtiles::Archive::open(&data.join(&archive_file)).ok(),
+            "local",
+        ),
     };
     let archive = Arc::new(archive);
     let tile_times = Arc::new(devstats::TileTimes::default());

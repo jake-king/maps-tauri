@@ -913,3 +913,34 @@ Errors before results: `offline.sh` fails on any reported uncaught error, unhand
 failed search or map error before it looks at a result, and `tools/stress.sh` now exits non-zero
 on camera errors, listener or uncaught errors, policy refusals, a non-finite view or a failure to
 settle. Two planted defects (the old markup box; a search that throws) each failed the gate.
+
+## A disk cache for the planet: seen once, drawn offline
+
+Dugout keeps what it has fetched in the browser (a service worker cache, then a database in the
+browser's storage) and had to fight the browser for both. Here the same idea is Rust and a file.
+The remote planet's byte ranges go into a SQLite file (`src-tauri/src/diskcache.rs`; vtile's
+`RangeCache` trait keeps the crate free of SQLite). The header is always read from the network;
+its ETag names the version, a new version drops the old one's ranges, and every later request
+carries If-Range so a planet replaced mid-session is refused rather than mixed. Past a size cap
+(2 GB by default) the least recently used ranges go, never the header and root directory. With the
+server unreachable the app opens the planet from the cache alone and draws what it has seen.
+
+`tools/cache.sh` proves it against a local Range server (`tools/rangeserve.py`) the test can stop
+and restart: 239 requests cold, 1 warm (the header), 0% background offline over the same seeded
+60-operation run, the old version dropped under a new ETag, and a cache file of noise costing only
+the cache. A control with the cache off fails all of it. One thing the control taught: offline
+with no cache the app falls back to the local West LA extract, which also draws 0% background, so
+the pixel number alone proves nothing; the log line naming the cached copy does.
+
+A reviewer found five things I fixed before committing: a read-only or locked cache dropped hits
+it had already read (and so could not open offline at all); a cache file that would not open
+turned off the remote planet entirely; a server that ignores If-Range could have put bytes of a
+new build into the cache under the old version (now refused by comparing the response's ETag);
+a weak ETag in If-Range would make a compliant server answer every request with the whole file;
+and eviction's byte count could drift if a batch failed. Each has a test that a planted defect fails.
+
+Over the LAN, 150 operations against the real planet: background in 7.8% of pixel-run frames with
+the cache off, 0.2% with a cache filled by the timing run just before, 0.4% fully warm (52 MB).
+The warm worst frame is still all background after a teleport: reading and meshing the target
+tiles takes longer than a frame when no coarser tile is on the GPU. The cache removes the network
+from that, not the gap; keeping low zooms resident is still the fix.

@@ -172,57 +172,137 @@ pub fn gunzip(b: &[u8], out: &mut Vec<u8>) -> io::Result<()> {
     Ok(())
 }
 
-/// Where an archive's bytes come from: a local file (pread), or a URL (HTTP Range requests over one
-/// reused connection pool).
+/// Somewhere to keep byte ranges of ONE version of a remote archive between runs, so a region seen
+/// once is read from disk afterwards, and with no network at all. The archive asks for the same
+/// (offset, length) pairs every time (the header, directories and tiles are fixed ranges), so a
+/// range is the unit stored. Implementations swallow their own failures: a cache that cannot read
+/// or write is a slower archive, never a broken one.
+pub trait RangeCache: Send + Sync {
+    fn get(&self, offset: u64, len: usize) -> Option<Vec<u8>>;
+    fn put(&self, offset: u64, bytes: &[u8]);
+}
+
+/// Where an archive's bytes come from: a local file (pread), a URL (HTTP Range requests over one
+/// reused connection pool, through a disk cache when one is given), or only a disk cache (offline).
 enum Source {
     File(File),
     #[cfg(feature = "http")]
     Http {
         agent: ureq::Agent,
         url: String,
+        /// The version read at open; later requests carry it in If-Range, so a planet replaced on
+        /// the server mid-session answers 200 (refused below) instead of bytes of another build
+        etag: Option<String>,
+        cache: Option<Box<dyn RangeCache>>,
     },
+    Cached(Box<dyn RangeCache>),
+}
+
+/// The error a cache-only (offline) archive gives for a range it does not have.
+fn not_cached(offset: u64, len: usize) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("{len} bytes at {offset} are not in the offline cache"),
+    )
+}
+
+#[cfg(feature = "http")]
+fn http_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(10)))
+        .http_status_as_error(false) // a non-206 is reported by fetch
+        .build()
+        .into()
+}
+
+/// One Range request: exactly `len` bytes at `offset`, and the response's ETag.
+#[cfg(feature = "http")]
+fn fetch(
+    agent: &ureq::Agent,
+    url: &str,
+    offset: u64,
+    len: usize,
+    if_range: Option<&str>,
+) -> io::Result<(Vec<u8>, Option<String>)> {
+    if len == 0 {
+        return Ok((Vec::new(), None));
+    }
+    let range = format!("bytes={}-{}", offset, offset + len as u64 - 1);
+    let mut req = agent.get(url).header("Range", &range);
+    if let Some(tag) = if_range {
+        req = req.header("If-Range", tag);
+    }
+    let mut res = req.call().map_err(io::Error::other)?;
+    if res.status().as_u16() != 206 {
+        // a 200 here would be the whole planet (or, after If-Range, a different one): refuse it
+        return Err(bad(&format!(
+            "expected 206 Partial Content for {range}, got {}",
+            res.status()
+        )));
+    }
+    let etag = res
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let buf = res
+        .body_mut()
+        .with_config()
+        .limit(64 << 20)
+        .read_to_vec()
+        .map_err(io::Error::other)?;
+    if buf.len() != len {
+        return Err(bad(&format!(
+            "asked for {len} bytes at {offset}, got {}",
+            buf.len()
+        )));
+    }
+    Ok((buf, etag))
 }
 
 impl Source {
-    fn read(&self, offset: u64, len: usize) -> io::Result<Vec<u8>> {
+    /// The bytes, and whether they came from the network or a file (false: from the cache).
+    fn read(&self, offset: u64, len: usize) -> io::Result<(Vec<u8>, bool)> {
         match self {
             Source::File(f) => {
                 let mut buf = vec![0u8; len];
                 f.read_exact_at(&mut buf, offset)?;
-                Ok(buf)
+                Ok((buf, true))
             }
             #[cfg(feature = "http")]
-            Source::Http { agent, url } => {
-                if len == 0 {
-                    return Ok(Vec::new());
+            Source::Http {
+                agent,
+                url,
+                etag,
+                cache,
+            } => {
+                if let Some(hit) = cache.as_ref().and_then(|c| c.get(offset, len)) {
+                    if hit.len() == len {
+                        return Ok((hit, false));
+                    }
                 }
-                let range = format!("bytes={}-{}", offset, offset + len as u64 - 1);
-                let mut res = agent
-                    .get(url)
-                    .header("Range", &range)
-                    .call()
-                    .map_err(io::Error::other)?;
-                if res.status().as_u16() != 206 {
-                    // a 200 here would be the whole planet: refuse rather than read it
-                    return Err(bad(&format!(
-                        "expected 206 Partial Content for {range}, got {}",
-                        res.status()
-                    )));
+                // If-Range needs a strong ETag (RFC 9110 13.1.5): with a weak one a compliant
+                // server would answer every request with the whole file
+                let if_range = etag.as_deref().filter(|t| !t.starts_with("W/"));
+                let (buf, got) = fetch(agent, url, offset, len, if_range)?;
+                // and in case a server ignores If-Range: bytes of another version are refused here,
+                // before they can be used or cached under this one
+                if let (Some(want), Some(got)) = (etag, &got) {
+                    if want != got {
+                        return Err(bad(&format!(
+                            "the archive changed on the server (ETag {got}, opened as {want})"
+                        )));
+                    }
                 }
-                let buf = res
-                    .body_mut()
-                    .with_config()
-                    .limit(64 << 20)
-                    .read_to_vec()
-                    .map_err(io::Error::other)?;
-                if buf.len() != len {
-                    return Err(bad(&format!(
-                        "asked for {len} bytes at {offset}, got {}",
-                        buf.len()
-                    )));
+                if let Some(c) = cache {
+                    c.put(offset, &buf);
                 }
-                Ok(buf)
+                Ok((buf, true))
             }
+            Source::Cached(c) => match c.get(offset, len) {
+                Some(hit) if hit.len() == len => Ok((hit, false)),
+                _ => Err(not_cached(offset, len)),
+            },
         }
     }
 }
@@ -241,6 +321,8 @@ pub struct Archive {
     leaves: Mutex<LeafCache>,
     /// round trips made (header/root, leaves, tiles): for measuring a remote archive
     pub reads: std::sync::atomic::AtomicU64,
+    /// leaves and tiles answered by the disk cache instead
+    pub cache_hits: std::sync::atomic::AtomicU64,
 }
 
 impl Archive {
@@ -251,38 +333,71 @@ impl Archive {
     /// An archive served over HTTP(S) with Range support, e.g. a planet on the LAN.
     #[cfg(feature = "http")]
     pub fn open_url(url: &str) -> io::Result<Self> {
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(10)))
-            .http_status_as_error(false) // a non-206 is reported by Source::read
-            .build()
-            .into();
+        let agent = http_agent();
         Self::from_source(Source::Http {
             agent,
             url: url.to_owned(),
+            etag: None,
+            cache: None,
         })
     }
 
+    /// A remote archive read through a disk cache. The header always comes from the network: its
+    /// ETag names the version, `make_cache(version)` opens that version's cache, and every later
+    /// range is read from it when present. With no ETag the version is a hash of the header bytes
+    /// (a rebuilt archive has a different header), and requests go without If-Range.
+    #[cfg(feature = "http")]
+    pub fn open_url_cached(
+        url: &str,
+        make_cache: impl FnOnce(&str) -> io::Result<Box<dyn RangeCache>>,
+    ) -> io::Result<Self> {
+        let agent = http_agent();
+        let (head, etag) = fetch(&agent, url, 0, 127, None)?;
+        let version = etag.clone().unwrap_or_else(|| header_version(&head));
+        let cache = make_cache(&version)?;
+        cache.put(0, &head);
+        Self::from_source(Source::Http {
+            agent,
+            url: url.to_owned(),
+            etag,
+            cache: Some(cache),
+        })
+    }
+
+    /// An archive read only from a disk cache: what was seen before, with no network. A tile or
+    /// leaf it does not have reads as absent, so the renderer draws what it has.
+    pub fn open_cached(cache: Box<dyn RangeCache>) -> io::Result<Self> {
+        Self::from_source(Source::Cached(cache))
+    }
+
+    /// True for an archive opened from the cache alone.
+    pub fn offline(&self) -> bool {
+        matches!(self.source, Source::Cached(_))
+    }
+
     fn from_source(source: Source) -> io::Result<Self> {
-        let head = source.read(0, 127)?;
+        let (head, _) = source.read(0, 127)?;
         let header = parse_header(&head)?;
         if header.internal_compression != 2 || header.tile_compression != 2 {
             return Err(bad("this reader handles gzip-compressed archives only"));
         }
-        let root = Self::read_dir(&source, header.root_offset, header.root_length)?;
+        let (root, _) = Self::read_dir(&source, header.root_offset, header.root_length)?;
         Ok(Archive {
             source,
             header,
             root,
             leaves: Mutex::new(HashMap::new()),
             reads: Default::default(),
+            cache_hits: Default::default(),
         })
     }
 
-    fn read_dir(source: &Source, offset: u64, length: u64) -> io::Result<Vec<Entry>> {
-        let raw = source.read(offset, length as usize)?;
+    /// A directory, and whether it came over the network (false: from the cache).
+    fn read_dir(source: &Source, offset: u64, length: u64) -> io::Result<(Vec<Entry>, bool)> {
+        let (raw, net) = source.read(offset, length as usize)?;
         let mut dec = Vec::new();
         gunzip(&raw, &mut dec)?;
-        parse_directory(&dec)
+        Ok((parse_directory(&dec)?, net))
     }
 
     fn leaf(&self, offset: u64, length: u64) -> io::Result<Arc<Vec<Entry>>> {
@@ -294,13 +409,9 @@ impl Archive {
         {
             return Ok(l.clone());
         }
-        self.reads
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = Arc::new(Self::read_dir(
-            &self.source,
-            self.header.leaf_offset + offset,
-            length,
-        )?);
+        let (dir, net) = Self::read_dir(&self.source, self.header.leaf_offset + offset, length)?;
+        self.count(net);
+        let dir = Arc::new(dir);
         let mut c = self.leaves.lock().expect("leaf cache");
         if c.len() >= LEAF_CACHE {
             c.clear(); // crude, but bounded: refill on demand
@@ -309,8 +420,25 @@ impl Archive {
         Ok(dir)
     }
 
-    /// The decompressed tile at z/x/y, or None if the archive does not have it.
+    fn count(&self, network: bool) {
+        let c = if network {
+            &self.reads
+        } else {
+            &self.cache_hits
+        };
+        c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The decompressed tile at z/x/y, or None if the archive does not have it (or, offline, the
+    /// cache does not).
     pub fn tile(&self, z: u8, x: u32, y: u32) -> io::Result<Option<Vec<u8>>> {
+        match self.tile_inner(z, x, y) {
+            Err(e) if self.offline() && e.kind() == io::ErrorKind::NotFound => Ok(None),
+            r => r,
+        }
+    }
+
+    fn tile_inner(&self, z: u8, x: u32, y: u32) -> io::Result<Option<Vec<u8>>> {
         let id = zxy_to_tile_id(z, x, y);
         let mut leaf: Option<Arc<Vec<Entry>>> = None;
         for _depth in 0..4 {
@@ -325,11 +453,10 @@ impl Archive {
             if id >= e.tile_id + u64::from(e.run_length) {
                 return Ok(None);
             }
-            self.reads
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let raw = self
+            let (raw, net) = self
                 .source
                 .read(self.header.tile_data_offset + e.offset, e.length as usize)?;
+            self.count(net);
             let mut out = Vec::new();
             gunzip(&raw, &mut out)?;
             return Ok(Some(out));
@@ -344,11 +471,14 @@ impl Archive {
         while let Some(dir) = stack.pop() {
             for e in dir {
                 if e.run_length == 0 {
-                    stack.push(Self::read_dir(
-                        &self.source,
-                        self.header.leaf_offset + e.offset,
-                        u64::from(e.length),
-                    )?);
+                    stack.push(
+                        Self::read_dir(
+                            &self.source,
+                            self.header.leaf_offset + e.offset,
+                            u64::from(e.length),
+                        )?
+                        .0,
+                    );
                 } else {
                     for id in e.tile_id..e.tile_id + u64::from(e.run_length) {
                         out.push(tile_id_to_zxy(id));
@@ -359,6 +489,14 @@ impl Archive {
         out.sort_by_key(|&(z, x, y)| zxy_to_tile_id(z, x, y));
         Ok(out)
     }
+}
+
+/// A version name for an archive served without an ETag: FNV-1a of its header bytes.
+pub fn header_version(head: &[u8]) -> String {
+    let h = head.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
+    });
+    format!("h{h:016x}")
 }
 
 /// The inverse of [`zxy_to_tile_id`].
@@ -963,6 +1101,262 @@ mod tests {
             assert_eq!(seen[0], "bytes=0-126"); // the header: 127 bytes, end inclusive
             assert_eq!(seen[1], format!("bytes=127-{}", 127 + root_len - 1));
             assert_eq!(seen.len(), 5); // header, root, tile, leaf, tile
+        }
+
+        /// Stored ranges by (offset, length).
+        type Ranges = Arc<Mutex<HashMap<(u64, usize), Vec<u8>>>>;
+        /// Each request's (Range, If-Range), as the test server saw it.
+        type Requests = Arc<Mutex<Vec<(String, Option<String>)>>>;
+
+        /// A RangeCache in memory, shared with the test through clones; counts gets that hit.
+        #[derive(Clone, Default)]
+        struct MemCache {
+            map: Ranges,
+            hits: Arc<Mutex<usize>>,
+        }
+
+        impl RangeCache for MemCache {
+            fn get(&self, offset: u64, len: usize) -> Option<Vec<u8>> {
+                let v = self.map.lock().unwrap().get(&(offset, len)).cloned();
+                if v.is_some() {
+                    *self.hits.lock().unwrap() += 1;
+                }
+                v
+            }
+            fn put(&self, offset: u64, bytes: &[u8]) {
+                self.map
+                    .lock()
+                    .unwrap()
+                    .insert((offset, bytes.len()), bytes.to_vec());
+            }
+        }
+
+        /// Serves `bytes` like nginx: an ETag on every answer (None: no ETag), and a 200 with the
+        /// whole body when a request's If-Range is not the current ETag. Change `etag` to replace
+        /// the archive. Returns the URL and each request's (Range, If-Range).
+        fn serve_versioned(bytes: Vec<u8>, etag: Arc<Mutex<Option<String>>>) -> (String, Requests) {
+            serve_versioned_with(bytes, etag, true)
+        }
+
+        /// As serve_versioned; with `honour_if_range` false, a server that ignores If-Range and
+        /// always answers 206 with its current ETag.
+        fn serve_versioned_with(
+            bytes: Vec<u8>,
+            etag: Arc<Mutex<Option<String>>>,
+            honour_if_range: bool,
+        ) -> (String, Requests) {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/a.pmtiles", l.local_addr().unwrap());
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let log = seen.clone();
+            std::thread::spawn(move || {
+                for s in l.incoming() {
+                    let Ok(mut s) = s else { continue };
+                    let mut r = BufReader::new(s.try_clone().unwrap());
+                    let mut head = String::new();
+                    loop {
+                        let mut line = String::new();
+                        if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                        head.push_str(&line);
+                    }
+                    let if_range = head
+                        .lines()
+                        .find(|l| l.to_ascii_lowercase().starts_with("if-range:"))
+                        .map(|l| l.split_once(':').unwrap().1.trim().to_owned());
+                    let (a, b) = range_of(&head).unwrap();
+                    log.lock()
+                        .unwrap()
+                        .push((format!("bytes={a}-{b}"), if_range.clone()));
+                    let tag = etag.lock().unwrap().clone();
+                    let whole = honour_if_range && if_range.is_some() && if_range != tag;
+                    let (status, body) = if whole {
+                        ("200 OK", bytes.clone())
+                    } else {
+                        ("206 Partial Content", bytes[a..=b].to_vec())
+                    };
+                    let etag_line = tag.map(|t| format!("ETag: {t}\r\n")).unwrap_or_default();
+                    let _ = write!(
+                        s,
+                        "HTTP/1.1 {status}\r\n{etag_line}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = s.write_all(&body);
+                }
+            });
+            (url, seen)
+        }
+
+        fn tag(t: &str) -> Arc<Mutex<Option<String>>> {
+            Arc::new(Mutex::new(Some(t.to_owned())))
+        }
+
+        fn with(
+            cache: &MemCache,
+            version: &Arc<Mutex<String>>,
+        ) -> impl FnOnce(&str) -> io::Result<Box<dyn RangeCache>> {
+            let (cache, version) = (cache.clone(), version.clone());
+            move |v| {
+                *version.lock().unwrap() = v.to_owned();
+                Ok(Box::new(cache))
+            }
+        }
+
+        #[test]
+        fn cached_archive_reads_a_second_time_from_the_cache_with_only_the_header_from_the_network()
+        {
+            let etag = tag("\"v1\"");
+            let (url, seen) = serve_versioned(archive_bytes(), etag);
+            let cache = MemCache::default();
+            let version = Arc::new(Mutex::new(String::new()));
+            let a = Archive::open_url_cached(&url, with(&cache, &version)).unwrap();
+            assert_eq!(*version.lock().unwrap(), "\"v1\"");
+            assert_eq!(a.tile(1, 0, 1).unwrap().as_deref(), Some(T12));
+            assert_eq!(a.tile(2, 0, 0).unwrap().as_deref(), Some(T5));
+            let first = seen.lock().unwrap().len();
+            assert_eq!(first, 5); // header, root, tile, leaf, tile: as without a cache
+            assert_eq!(a.cache_hits.load(std::sync::atomic::Ordering::Relaxed), 0);
+
+            let b = Archive::open_url_cached(&url, with(&cache, &version)).unwrap();
+            assert_eq!(b.tile(1, 0, 1).unwrap().as_deref(), Some(T12));
+            assert_eq!(b.tile(2, 0, 0).unwrap().as_deref(), Some(T5));
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen.len(), first + 1, "{seen:?}");
+            assert_eq!(seen[first], ("bytes=0-126".to_owned(), None)); // the header asks without If-Range
+            assert_eq!(b.reads.load(std::sync::atomic::Ordering::Relaxed), 0);
+            assert_eq!(b.cache_hits.load(std::sync::atomic::Ordering::Relaxed), 3);
+            // tile, leaf, tile
+        }
+
+        #[test]
+        fn cached_archive_sends_the_version_in_if_range_after_the_header() {
+            let (url, seen) = serve_versioned(archive_bytes(), tag("\"v1\""));
+            let cache = MemCache::default();
+            let a = Archive::open_url_cached(&url, with(&cache, &Default::default())).unwrap();
+            a.tile(0, 0, 0).unwrap();
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen[0].1, None);
+            assert!(
+                seen[1..]
+                    .iter()
+                    .all(|(_, ir)| ir.as_deref() == Some("\"v1\"")),
+                "{seen:?}"
+            );
+        }
+
+        #[test]
+        fn an_archive_replaced_mid_session_is_refused_not_mixed() {
+            let etag = tag("\"v1\"");
+            let (url, _) = serve_versioned(archive_bytes(), etag.clone());
+            let a = Archive::open_url_cached(&url, with(&MemCache::default(), &Default::default()))
+                .unwrap();
+            *etag.lock().unwrap() = Some("\"v2\"".to_owned());
+            let e = err_text(a.tile(1, 0, 1));
+            assert!(
+                e.starts_with("expected 206 Partial Content for bytes=")
+                    && e.ends_with(", got 200 OK"),
+                "{e}"
+            );
+        }
+
+        #[test]
+        fn a_server_that_ignores_if_range_cannot_mix_versions_into_the_cache() {
+            let etag = tag("\"v1\"");
+            let (url, _) = serve_versioned_with(archive_bytes(), etag.clone(), false);
+            let cache = MemCache::default();
+            let a = Archive::open_url_cached(&url, with(&cache, &Default::default())).unwrap();
+            let stored = cache.map.lock().unwrap().len();
+            *etag.lock().unwrap() = Some("\"v2\"".to_owned());
+            assert_eq!(
+                err_text(a.tile(1, 0, 1)),
+                "the archive changed on the server (ETag \"v2\", opened as \"v1\")"
+            );
+            assert_eq!(
+                cache.map.lock().unwrap().len(),
+                stored,
+                "nothing of v2 was cached"
+            );
+        }
+
+        #[test]
+        fn a_weak_etag_names_the_version_but_is_not_sent_in_if_range() {
+            let (url, seen) = serve_versioned(archive_bytes(), tag("W/\"v1\""));
+            let version = Arc::new(Mutex::new(String::new()));
+            let a = Archive::open_url_cached(&url, with(&MemCache::default(), &version)).unwrap();
+            assert_eq!(a.tile(2, 0, 0).unwrap().as_deref(), Some(T5));
+            assert_eq!(*version.lock().unwrap(), "W/\"v1\"");
+            assert!(seen.lock().unwrap().iter().all(|(_, ir)| ir.is_none()));
+        }
+
+        #[test]
+        fn without_an_etag_the_version_is_the_header_hash_and_no_if_range_is_sent() {
+            let bytes = archive_bytes();
+            let want = header_version(&bytes[..127]);
+            let (url, seen) = serve_versioned(bytes, Arc::new(Mutex::new(None)));
+            let version = Arc::new(Mutex::new(String::new()));
+            let a = Archive::open_url_cached(&url, with(&MemCache::default(), &version)).unwrap();
+            assert_eq!(a.tile(1, 0, 1).unwrap().as_deref(), Some(T12));
+            assert_eq!(*version.lock().unwrap(), want);
+            assert!(want.starts_with('h') && want.len() == 17, "{want}");
+            assert!(seen.lock().unwrap().iter().all(|(_, ir)| ir.is_none()));
+        }
+
+        #[test]
+        fn header_version_changes_with_any_header_byte() {
+            let mut h = archive_bytes()[..127].to_vec();
+            let v = header_version(&h);
+            h[100] ^= 1;
+            assert_ne!(header_version(&h), v);
+        }
+
+        #[test]
+        fn offline_archive_reads_what_was_seen_and_nothing_else() {
+            let (url, _) = serve_versioned(archive_bytes(), tag("\"v1\""));
+            let cache = MemCache::default();
+            let a = Archive::open_url_cached(&url, with(&cache, &Default::default())).unwrap();
+            assert_eq!(a.tile(1, 0, 1).unwrap().as_deref(), Some(T12));
+            drop(a);
+            let off = Archive::open_cached(Box::new(cache.clone())).unwrap();
+            assert!(off.offline());
+            assert_eq!(off.tile(1, 0, 1).unwrap().as_deref(), Some(T12));
+            assert_eq!(off.tile(0, 0, 0).unwrap(), None); // in the archive, never fetched
+            assert_eq!(off.tile(2, 0, 0).unwrap(), None); // its leaf never fetched either
+            assert_eq!(off.reads.load(std::sync::atomic::Ordering::Relaxed), 0);
+        }
+
+        #[test]
+        fn offline_archive_with_an_empty_cache_does_not_open() {
+            let e = Archive::open_cached(Box::new(MemCache::default()))
+                .err()
+                .unwrap();
+            assert_eq!(e.kind(), io::ErrorKind::NotFound);
+            assert_eq!(e.to_string(), "127 bytes at 0 are not in the offline cache");
+        }
+
+        #[test]
+        fn a_cached_range_of_the_wrong_length_is_fetched_again() {
+            let (url, seen) = serve_versioned(archive_bytes(), tag("\"v1\""));
+            let cache = MemCache::default();
+            let a = Archive::open_url_cached(&url, with(&cache, &Default::default())).unwrap();
+            a.tile(1, 0, 1).unwrap();
+            // corrupt every stored range by one byte, keeping its key
+            for v in cache.map.lock().unwrap().values_mut() {
+                v.pop();
+            }
+            let n = seen.lock().unwrap().len();
+            assert_eq!(a.tile(1, 0, 1).unwrap().as_deref(), Some(T12));
+            assert_eq!(seen.lock().unwrap().len(), n + 1);
+        }
+
+        #[test]
+        fn a_file_archive_counts_reads_not_cache_hits() {
+            let s = Scratch::new("counts", &archive_bytes());
+            let a = Archive::open(&s.0).unwrap();
+            a.tile(2, 0, 0).unwrap();
+            assert!(!a.offline());
+            assert_eq!(a.reads.load(std::sync::atomic::Ordering::Relaxed), 2); // leaf, tile
+            assert_eq!(a.cache_hits.load(std::sync::atomic::Ordering::Relaxed), 0);
         }
 
         #[test]
