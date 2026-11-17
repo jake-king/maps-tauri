@@ -7,14 +7,21 @@ on, in one archive too large for git (about 90 MB), checked by its sha256 in too
   fixtures.py unpack ARCHIVE             verify it against the lock, then put the tape in
                                          fixtures/tape and the map in data/
 
-CI downloads the archive from the release the lock names (`gh release download`). The map is
+  fixtures.py fetch OUT_DIR              download the archive from the release the lock names, on
+                                         the forge the job runs on: $GITHUB_API_URL and
+                                         $GITHUB_REPOSITORY, with the token in $FIXTURES_TOKEN if set
+                                         (a header, never a URL or argument), and verify it
+
+GitHub's runners download it with `gh release download`; the forge's use `fetch`. The map is
 OpenStreetMap data (ODbL, attributed in the app); NOAA's data is public domain.
 """
 
 import hashlib
 import json
+import os
 import sys
 import tarfile
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -73,10 +80,45 @@ def unpack(archive):
     print(f"fixtures: unpacked into fixtures/tape and data/{MAP}")
 
 
+def fetch(out_dir):
+    lock = json.loads(LOCK.read_text())
+    api = os.environ["GITHUB_API_URL"].rstrip("/")
+    repo = os.environ["GITHUB_REPOSITORY"]
+    headers = {"Accept": "application/json"}
+    if os.environ.get("FIXTURES_TOKEN"):
+        headers["Authorization"] = "token " + os.environ["FIXTURES_TOKEN"]
+
+    def get(url):
+        return urllib.request.urlopen(
+            urllib.request.Request(url, headers=headers), timeout=60
+        )
+
+    with get(f"{api}/repos/{repo}/releases/tags/{lock['release']}") as r:
+        release = json.load(r)
+    assets = [a for a in release.get("assets", []) if a["name"] == lock["file"]]
+    if len(assets) != 1:
+        sys.exit(
+            f"fixtures: release {lock['release']} has no single asset {lock['file']}"
+        )
+    out = Path(out_dir) / lock["file"]
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with get(assets[0]["browser_download_url"]) as r, open(out, "wb") as f:
+        while chunk := r.read(1 << 20):
+            f.write(chunk)
+    got = sha256(out)
+    if got != lock["sha256"]:
+        sys.exit(
+            f"fixtures: downloaded {out} has sha256 {got}, the lock says {lock['sha256']}"
+        )
+    print(f"fixtures: {out} from release {lock['release']}, sha256 matches the lock")
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "pack":
         pack(sys.argv[2], sys.argv[3])
     elif len(sys.argv) == 3 and sys.argv[1] == "unpack":
         unpack(sys.argv[2])
+    elif len(sys.argv) == 3 and sys.argv[1] == "fetch":
+        fetch(sys.argv[2])
     else:
         sys.exit(__doc__)
