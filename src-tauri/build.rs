@@ -1,3 +1,5 @@
+//! Build script: generates Tauri's context and the app's command permissions.
+
 fn main() {
     // Declaring the app's commands makes each one a permission (allow-report, allow-search) that a
     // capability must grant. Without this list, every app command is callable by default.

@@ -165,7 +165,7 @@ pub fn parse_coords(raw: &str) -> Vec<(f64, f64)> {
 }
 
 /// Python's `str.split()` with no argument. It treats a few more characters as whitespace than
-/// Unicode's White_Space property (and so Rust's `split_whitespace`): the ASCII information
+/// Unicode's `White_Space` property (and so Rust's `split_whitespace`): the ASCII information
 /// separators U+001C..U+001F.
 fn split_whitespace_like_python(s: &str) -> Vec<&str> {
     s.split(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
@@ -181,9 +181,10 @@ pub fn fold(s: &str) -> String {
         .collect()
 }
 
-/// Turn arbitrary user text into one quoted FTS5 phrase with a prefix star, or `None` when there
-/// is nothing to search for. Only alphanumeric runs survive, so no operator (`"`, `*`, `^`,
-/// `NEAR`, `OR`) can reach the match expression as syntax.
+/// Turn arbitrary user text into one quoted FTS5 phrase with a prefix star.
+///
+/// Returns `None` when there is nothing to search for. Only alphanumeric runs survive, so no
+/// operator (`"`, `*`, `^`, `NEAR`, `OR`) can reach the match expression as syntax.
 pub fn fts_query(raw: &str) -> Option<String> {
     let tokens: Vec<&str> = raw
         .split(|c: char| !is_python_word_alnum(c))
@@ -196,7 +197,7 @@ pub fn fts_query(raw: &str) -> Option<String> {
 }
 
 /// Python's `[^\W_]` under `re.UNICODE`: a character that is alphanumeric by Python's `isalnum()`.
-/// Rust's `char::is_alphanumeric` is close but counts Other_Alphabetic marks (e.g. Indic vowel
+/// Rust's `char::is_alphanumeric` is close but counts `Other_Alphabetic` marks (e.g. Indic vowel
 /// signs) as letters where Python does not; the differential test measures that gap.
 fn is_python_word_alnum(c: char) -> bool {
     c.is_alphanumeric()

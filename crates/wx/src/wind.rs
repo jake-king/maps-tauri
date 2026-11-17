@@ -1,12 +1,14 @@
-//! Winds aloft from NOAA's GFS model: U and V at one pressure level for the whole world, cut out of a
-//! run by NOMADS's GRIB filter (0.5°, 720 x 361 points, about 0.7 MB a level). Asked for as a
-//! subregion, even of the whole globe, NOMADS repacks the field simply (template 5.0), which wx::grib
-//! reads; the plain global file uses complex packing (5.3), which it does not.
+//! Winds aloft from NOAA's GFS model: U and V at one pressure level for the whole world.
 //!
-//! A run starts every six hours (00, 06, 12, 18Z) and appears on NOMADS about four hours later, with
-//! forecast files every 3 hours at this resolution. For a chosen time the field comes from the newest run that
-//! has started by then and is published, at the nearest forecast hour: the past is a short forecast
-//! from the run before it, the future the newest run's forecast.
+//! They are cut out of a run by NOMADS's GRIB filter (0.5°, 720 x 361 points, about 0.7 MB a
+//! level). Asked for as a subregion, even of the whole globe, NOMADS repacks the field simply
+//! (template 5.0), which [`crate::grib`] reads; the plain global file uses complex packing (5.3),
+//! which it does not.
+//!
+//! A run starts every six hours (00, 06, 12, 18Z) and appears on NOMADS about four hours later,
+//! with forecast files every 3 hours at this resolution. For a chosen time the field comes from the
+//! newest run that has started by then and is published, at the nearest forecast hour: the past is
+//! a short forecast from the run before it, the future the newest run's forecast.
 
 use crate::grib::{self, Grid};
 
@@ -25,12 +27,18 @@ pub const LEVELS: [(u32, u32); 8] = [
 pub const DEFAULT_FL: u32 = 340;
 /// How long after a run starts it is assumed to be on NOMADS (seconds).
 pub const PUBLISH_DELAY: i64 = 4 * 3600 + 30 * 60;
+/// The time between GFS runs (seconds): one every six hours, at 00, 06, 12 and 18Z.
 pub const RUN_STEP: i64 = 6 * 3600;
+/// The furthest forecast hour asked for.
 pub const MAX_FHR: i64 = 120;
 /// The 0.5° files exist every 3 forecast hours (f007 is a 404; measured 2026-11-16).
 pub const STEP_H: i64 = 3;
 
-/// The pressure level (hPa) nearest flight level `fl`.
+/// The pressure level (hPa) nearest flight level `fl`, from [`LEVELS`].
+///
+/// # Panics
+///
+/// Never: [`LEVELS`] is not empty.
 pub fn pressure_for(fl: u32) -> u32 {
     LEVELS
         .iter()
@@ -39,9 +47,11 @@ pub fn pressure_for(fl: u32) -> u32 {
         .expect("levels")
 }
 
-/// The runs to try for a field valid at `at`, best first: (run start, forecast hour). The newest run
-/// started at or before `at` that should be published by `now`, then the two before it in case the
-/// newest is late. Forecast hours are rounded to the nearest hour and kept within the model's range.
+/// The runs to try for a field valid at `at`, best first: `(run start, forecast hour)`.
+///
+/// Times are Unix seconds. The newest run started at or before `at` that should be published by
+/// `now`, then the two before it in case the newest is late. Forecast hours are rounded to the
+/// nearest [`STEP_H`] and kept within 0..=[`MAX_FHR`]; a run whose hour falls outside is left out.
 pub fn runs_for(at: i64, now: i64) -> Vec<(i64, i64)> {
     let newest_published = (now - PUBLISH_DELAY).div_euclid(RUN_STEP) * RUN_STEP;
     let started_by_at = at.div_euclid(RUN_STEP) * RUN_STEP;
@@ -55,8 +65,8 @@ pub fn runs_for(at: i64, now: i64) -> Vec<(i64, i64)> {
         .collect()
 }
 
-/// The NOMADS filter request for U and V at `hpa` from run `run` (Unix seconds), forecast hour `fhr`,
-/// for the whole world.
+/// The NOMADS filter request for U and V at `hpa` from run `run` (Unix seconds), forecast hour
+/// `fhr`, for the whole world.
 pub fn url(run: i64, fhr: i64, hpa: u32) -> String {
     let iso = crate::satellite::iso(run); // 2026-11-16T12:00:00Z
     let (date, hh) = (iso[0..10].replace('-', ""), &iso[11..13]);
@@ -66,21 +76,33 @@ pub fn url(run: i64, fhr: i64, hpa: u32) -> String {
     )
 }
 
+/// The wind at one pressure level on a regular latitude/longitude grid.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Wind {
+    /// Points per row (west to east).
     pub ni: usize,
+    /// Rows (north to south).
     pub nj: usize,
-    /// latitude of row 0 (the northernmost) and longitude of column 0
+    /// Latitude of row 0 (the northernmost), degrees north.
     pub lat0: f64,
+    /// Longitude of column 0, degrees east.
     pub lon0: f64,
+    /// Row spacing in degrees.
     pub dlat: f64,
+    /// Column spacing in degrees.
     pub dlon: f64,
-    /// eastward and northward wind, m/s, rows north to south
+    /// Eastward wind, m/s, `ni * nj` values, rows north to south.
     pub u: Vec<f32>,
+    /// Northward wind, m/s, laid out as `u`.
     pub v: Vec<f32>,
 }
 
 /// U and V at `hpa` from a NOMADS response: two fields on the same grid at that isobaric level.
+///
+/// # Errors
+///
+/// The response is not GRIB (NOMADS answers a missing file with an HTML page; the message quotes
+/// it), it does not decode, U or V at `hpa` is missing, or the two are on different grids.
 pub fn from_grib(bytes: &[u8], hpa: u32) -> Result<Wind, String> {
     if !bytes.starts_with(b"GRIB") {
         // NOMADS answers a missing file with an HTML page and a 200
@@ -115,8 +137,8 @@ pub fn from_grib(bytes: &[u8], hpa: u32) -> Result<Wind, String> {
     })
 }
 
-/// The field for the webview: a 48-byte header (ni, nj as u32; lat0, lon0, dlat, dlon as f32; run as
-/// i64; forecast hour and hPa as u32; little-endian) then U and V interleaved as f32.
+/// The field for the webview: a 48-byte header (ni, nj as u32; lat0, lon0, dlat, dlon as f32; run
+/// as i64; forecast hour and hPa as u32; little-endian) then U and V interleaved as f32.
 pub fn encode(w: &Wind, run: i64, fhr: i64, hpa: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity(48 + w.u.len() * 8);
     out.extend((w.ni as u32).to_le_bytes());
@@ -245,7 +267,7 @@ mod tests {
         );
     }
 
-    /// The real NOMADS response: WX_GFS=file.grib2 (UGRD and VGRD at 250 hPa, the world at 0.5°)
+    /// The real NOMADS response: `WX_GFS=file.grib2` (UGRD and VGRD at 250 hPa, the world at 0.5°)
     #[test]
     fn a_real_response() {
         let Ok(path) = std::env::var("WX_GFS") else {

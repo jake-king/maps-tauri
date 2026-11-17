@@ -1,6 +1,8 @@
-//! PMTiles v3: a 127-byte header, a root directory, optional leaf directories, then tile data.
+//! PMTiles v3 archives, read from a file, over HTTP Range requests, or from a disk cache alone.
+//!
+//! An archive is a 127-byte header, a root directory, optional leaf directories, then tile data.
 //! Directories are varint-encoded and (here) gzip-compressed; tiles are addressed by a Hilbert-curve
-//! tile id. Spec: https://github.com/protomaps/PMTiles/blob/main/spec/v3/spec.md
+//! tile id. Spec: <https://github.com/protomaps/PMTiles/blob/main/spec/v3/spec.md>
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -11,25 +13,41 @@ use std::sync::{Arc, Mutex};
 
 use flate2::read::GzDecoder;
 
+/// The fields of the archive header this reader uses (offsets and lengths in bytes).
 #[derive(Debug, Clone)]
 pub struct Header {
+    /// Where the root directory starts, from the start of the archive.
     pub root_offset: u64,
+    /// The root directory's compressed length.
     pub root_length: u64,
+    /// Where the leaf directory section starts; leaf entries' offsets count from here.
     pub leaf_offset: u64,
+    /// Where the tile data section starts; tile entries' offsets count from here.
     pub tile_data_offset: u64,
+    /// Directory compression, as the spec numbers it (2: gzip, the only one read here).
     pub internal_compression: u8,
+    /// Tile compression, as the spec numbers it (2: gzip, the only one read here).
     pub tile_compression: u8,
+    /// Tile format, as the spec numbers it (1: Mapbox Vector Tile).
     pub tile_type: u8,
+    /// The lowest zoom the archive holds.
     pub min_zoom: u8,
+    /// The highest zoom the archive holds.
     pub max_zoom: u8,
-    pub bounds: [f64; 4], // min lon, min lat, max lon, max lat
+    /// The area covered, in degrees: min lon, min lat, max lon, max lat.
+    pub bounds: [f64; 4],
 }
 
+/// One directory entry: a run of tiles sharing the same bytes, or a pointer to a leaf directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Entry {
+    /// The Hilbert tile id of the first tile the entry covers.
     pub tile_id: u64,
+    /// Byte offset into the tile data section, or into the leaf section for a leaf directory.
     pub offset: u64,
+    /// Length in bytes of the (compressed) tile or leaf directory.
     pub length: u32,
+    /// How many consecutive tile ids share these bytes; 0 marks a leaf directory.
     pub run_length: u32,
 }
 
@@ -44,6 +62,12 @@ fn i32le(b: &[u8], at: usize) -> i32 {
     i32::from_le_bytes(b[at..at + 4].try_into().expect("4 bytes"))
 }
 
+/// Parse the 127-byte header at the start of `b`.
+///
+/// # Errors
+///
+/// `InvalidData` when `b` is shorter than 127 bytes, does not start with `PMTiles`, or is not
+/// spec version 3.
 pub fn parse_header(b: &[u8]) -> io::Result<Header> {
     if b.len() < 127 || &b[0..7] != b"PMTiles" {
         return Err(bad("not a PMTiles archive"));
@@ -71,6 +95,10 @@ pub fn parse_header(b: &[u8]) -> io::Result<Header> {
 }
 
 /// A protobuf-style varint (LEB128), advancing `pos`.
+///
+/// # Errors
+///
+/// `InvalidData` when `b` ends before the varint does, or it runs past 10 bytes.
 pub fn varint(b: &[u8], pos: &mut usize) -> io::Result<u64> {
     let mut v: u64 = 0;
     for shift in (0..64).step_by(7) {
@@ -84,8 +112,15 @@ pub fn varint(b: &[u8], pos: &mut usize) -> io::Result<u64> {
     Err(bad("varint longer than 10 bytes"))
 }
 
-/// A decompressed directory: entry count, then ids (delta), run lengths, lengths, offsets (0 means
-/// "right after the previous entry").
+/// Parse a decompressed directory into its entries.
+///
+/// The layout is the entry count, then ids (delta-encoded), run lengths, lengths, and offsets
+/// (stored plus one; 0 means "right after the previous entry").
+///
+/// # Errors
+///
+/// `InvalidData` when a varint is truncated or too long, the entry count exceeds the directory's
+/// size, or a tile id or offset overflows `u64`.
 pub fn parse_directory(b: &[u8]) -> io::Result<Vec<Entry>> {
     let mut p = 0;
     let n = varint(b, &mut p)? as usize;
@@ -166,19 +201,28 @@ pub fn find(entries: &[Entry], id: u64) -> Option<Entry> {
     }
 }
 
+/// Decompress gzip data `b` into `out`, which is cleared first.
+///
+/// # Errors
+///
+/// Whatever the gzip decoder reports for corrupt or truncated input.
 pub fn gunzip(b: &[u8], out: &mut Vec<u8>) -> io::Result<()> {
     out.clear();
     GzDecoder::new(b).read_to_end(out)?;
     Ok(())
 }
 
-/// Somewhere to keep byte ranges of ONE version of a remote archive between runs, so a region seen
-/// once is read from disk afterwards, and with no network at all. The archive asks for the same
+/// Somewhere to keep byte ranges of ONE version of a remote archive between runs.
+///
+/// A region seen once is read from disk afterwards, and with no network at all. The archive asks
+/// for the same
 /// (offset, length) pairs every time (the header, directories and tiles are fixed ranges), so a
 /// range is the unit stored. Implementations swallow their own failures: a cache that cannot read
 /// or write is a slower archive, never a broken one.
 pub trait RangeCache: Send + Sync {
+    /// The `len` bytes stored at `offset`, or `None` when they were never stored (or cannot be read).
     fn get(&self, offset: u64, len: usize) -> Option<Vec<u8>>;
+    /// Store `bytes` as the range at `offset`; a failure is swallowed.
     fn put(&self, offset: u64, bytes: &[u8]);
 }
 
@@ -314,8 +358,10 @@ const LEAF_CACHE: usize = 512;
 /// Leaf directories by (offset, length) within the leaf section.
 type LeafCache = HashMap<(u64, u64), Arc<Vec<Entry>>>;
 
+/// An open archive: its header and root directory, read once, and the leaf directories read since.
 pub struct Archive {
     source: Source,
+    /// The parsed header.
     pub header: Header,
     root: Vec<Entry>,
     leaves: Mutex<LeafCache>,
@@ -326,11 +372,22 @@ pub struct Archive {
 }
 
 impl Archive {
+    /// A local archive file.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be opened or read, its header is not PMTiles v3, its directories or tiles
+    /// are not gzip-compressed, or the root directory does not decode.
     pub fn open(path: &Path) -> io::Result<Self> {
         Self::from_source(Source::File(File::open(path)?))
     }
 
     /// An archive served over HTTP(S) with Range support, e.g. a planet on the LAN.
+    ///
+    /// # Errors
+    ///
+    /// The header or root directory request fails or is not answered with exactly the bytes asked
+    /// for (status 206), or the archive is not one [`Archive::open`] accepts.
     #[cfg(feature = "http")]
     pub fn open_url(url: &str) -> io::Result<Self> {
         let agent = http_agent();
@@ -346,6 +403,10 @@ impl Archive {
     /// ETag names the version, `make_cache(version)` opens that version's cache, and every later
     /// range is read from it when present. With no ETag the version is a hash of the header bytes
     /// (a rebuilt archive has a different header), and requests go without If-Range.
+    ///
+    /// # Errors
+    ///
+    /// As [`Archive::open_url`], and whatever `make_cache` returns.
     #[cfg(feature = "http")]
     pub fn open_url_cached(
         url: &str,
@@ -366,6 +427,11 @@ impl Archive {
 
     /// An archive read only from a disk cache: what was seen before, with no network. A tile or
     /// leaf it does not have reads as absent, so the renderer draws what it has.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` when the cache lacks the header or root directory, or the archive is not one
+    /// [`Archive::open`] accepts.
     pub fn open_cached(cache: Box<dyn RangeCache>) -> io::Result<Self> {
         Self::from_source(Source::Cached(cache))
     }
@@ -431,6 +497,11 @@ impl Archive {
 
     /// The decompressed tile at z/x/y, or None if the archive does not have it (or, offline, the
     /// cache does not).
+    ///
+    /// # Errors
+    ///
+    /// A read fails (file, network, or a remote archive that changed since it was opened), a
+    /// directory or tile does not decompress or decode, or directories nest deeper than 4.
     pub fn tile(&self, z: u8, x: u32, y: u32) -> io::Result<Option<Vec<u8>>> {
         match self.tile_inner(z, x, y) {
             Err(e) if self.offline() && e.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -465,6 +536,10 @@ impl Archive {
     }
 
     /// Every (z, x, y) the archive addresses, in tile-id order: for whole-archive tests.
+    ///
+    /// # Errors
+    ///
+    /// A leaf directory cannot be read, decompressed or decoded.
     pub fn all_tiles(&self) -> io::Result<Vec<(u8, u32, u32)>> {
         let mut out = Vec::new();
         let mut stack = vec![self.root.clone()];
@@ -1108,7 +1183,7 @@ mod tests {
         /// Each request's (Range, If-Range), as the test server saw it.
         type Requests = Arc<Mutex<Vec<(String, Option<String>)>>>;
 
-        /// A RangeCache in memory, shared with the test through clones; counts gets that hit.
+        /// A `RangeCache` in memory, shared with the test through clones; counts gets that hit.
         #[derive(Clone, Default)]
         struct MemCache {
             map: Ranges,
@@ -1138,7 +1213,7 @@ mod tests {
             serve_versioned_with(bytes, etag, true)
         }
 
-        /// As serve_versioned; with `honour_if_range` false, a server that ignores If-Range and
+        /// As `serve_versioned`; with `honour_if_range` false, a server that ignores If-Range and
         /// always answers 206 with its current ETag.
         fn serve_versioned_with(
             bytes: Vec<u8>,

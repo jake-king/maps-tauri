@@ -1,9 +1,10 @@
-//! Just enough GRIB2 to read NOAA's MRMS radar mosaics and GFS model fields cut by NOMADS: a regular
-//! latitude/longitude grid (template 3.0) scanned west to east, rows north to south (MRMS) or south
-//! to north (GFS), values packed simply (template 5.0, GFS) or as a PNG image (5.41, MRMS), no
-//! bitmap; one field per message, any number of messages per file. Anything else is refused with an
-//! error naming what was found, so a format change upstream shows up as a message rather than as a
-//! wrong picture.
+//! Just enough GRIB2 to read NOAA's MRMS radar mosaics and GFS model fields cut by NOMADS.
+//!
+//! That is a regular latitude/longitude grid (template 3.0) scanned west to east, rows north to
+//! south (MRMS) or south to north (GFS), values packed simply (template 5.0, GFS) or as a PNG image
+//! (5.41, MRMS), no bitmap; one field per message, any number of messages per file. Anything else
+//! is refused with an error naming what was found, so a format change upstream shows up as a
+//! message rather than as a wrong picture.
 
 use std::fmt;
 use std::io::Cursor;
@@ -12,25 +13,34 @@ use std::io::Cursor;
 /// make the reader allocate gigabytes.
 pub const MAX_POINTS: u64 = 64_000_000;
 
-/// A decoded field on a regular latitude/longitude grid. Row 0 is the northernmost; within a row
-/// longitude increases eastward.
+/// A decoded field on a regular latitude/longitude grid.
+///
+/// Row 0 is the northernmost (a south-first grid is flipped on read); within a row longitude
+/// increases eastward.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Grid {
+    /// Points per row (columns, west to east).
     pub ni: usize,
+    /// Rows (north to south).
     pub nj: usize,
-    /// latitude of row 0 and longitude of column 0 (degrees, longitude in -180..180)
+    /// Latitude of row 0, degrees north.
     pub lat0: f64,
+    /// Longitude of column 0, degrees east, in -180..180.
     pub lon0: f64,
-    /// grid spacing in degrees (positive)
+    /// Row spacing in degrees (positive).
     pub dlat: f64,
+    /// Column spacing in degrees (positive).
     pub dlon: f64,
     /// discipline, parameter category and parameter number (GFS wind: 0/2/2 is U, 0/2/3 is V)
     pub param: (u8, u8, u8),
     /// the first fixed surface: its type and scaled value (isobaric is type 100, in pascals)
     pub level: (u8, u32),
+    /// The field's values, `ni * nj` of them, row by row from row 0, in the parameter's own unit
+    /// (dBZ for MRMS reflectivity, m/s for GFS wind).
     pub values: Vec<f32>,
 }
 
+/// Why a file was refused: what was found where, or what is not supported.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Error(pub String);
 
@@ -97,6 +107,13 @@ struct Packing {
 }
 
 /// Decode the first (and only expected) message of a GRIB2 file.
+///
+/// # Errors
+///
+/// The bytes are not GRIB edition 2, a section is cut short or malformed, the grid, packing or scan
+/// order is not one this module reads (named in the message), there is a bitmap or more than one
+/// field in the message, the grid is over [`MAX_POINTS`], or the packed data does not decode to the
+/// declared number of points.
 pub fn decode(b: &[u8]) -> Result<Grid, Error> {
     if b.get(0..4) != Some(b"GRIB") {
         return err("not a GRIB file (no GRIB magic)");
@@ -256,8 +273,19 @@ pub fn decode(b: &[u8]) -> Result<Grid, Error> {
     })
 }
 
-/// Every message in a file, in order. Each message gives its own length, so a file of several fields
-/// (NOMADS sends U and V wind together) is read message by message.
+/// Every message in a file, in order.
+///
+/// Each message gives its own length, so a file of several fields (NOMADS sends U and V wind
+/// together) is read message by message.
+///
+/// # Errors
+///
+/// A message does not start with the GRIB magic where the previous one ended, claims a length
+/// that runs past the end of the file, or fails to [`decode`].
+///
+/// # Panics
+///
+/// Never: the length is read from a slice already checked to be 8 bytes.
 pub fn decode_all(b: &[u8]) -> Result<Vec<Grid>, Error> {
     let mut out = Vec::new();
     let mut i = 0;
@@ -712,7 +740,7 @@ pub(crate) mod tests {
         refused(&s, "data template 5.3");
     }
 
-    /// A real GFS subset from NOMADS: WX_GFS=file.grib2 (UGRD and VGRD at one level)
+    /// A real GFS subset from NOMADS: `WX_GFS=file.grib2` (UGRD and VGRD at one level)
     #[test]
     fn a_real_gfs_subset() {
         let Ok(path) = std::env::var("WX_GFS") else {
@@ -738,7 +766,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// A real frame, when one has been downloaded: WX_FRAME=path/to/MRMS_...grib2 (not gzipped).
+    /// A real frame, when one has been downloaded: `WX_FRAME=path/to/MRMS_...grib2` (not gzipped).
     #[test]
     fn a_real_mrms_frame() {
         let Ok(path) = std::env::var("WX_FRAME") else {

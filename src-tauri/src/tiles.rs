@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use tauri::http::{header, Request, Response, StatusCode};
 
-/// The one path served; it maps to the archive chosen with MAPS_ARCHIVE. Nothing else is served.
+/// The one path served; it maps to the archive chosen with `MAPS_ARCHIVE`. Nothing else is served.
 const SERVED_PATH: &str = "/basemap.pmtiles";
 
 /// Largest single range answered. PMTiles asks for 16 KB headers and directories of a few

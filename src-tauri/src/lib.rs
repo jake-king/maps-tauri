@@ -1,3 +1,8 @@
+//! The desktop app: Tauri's setup, the `tiles://` scheme, and the commands the frontend calls.
+//!
+//! `main.rs` only calls [`run`]. [`search`] is public so the search examples and parity tools can
+//! use the same code as the app.
+
 mod devstats;
 mod diskcache;
 mod metars;
@@ -214,7 +219,7 @@ fn open_remote(url: &str) -> Option<(vtile::pmtiles::Archive, &'static str)> {
     }
 }
 
-/// Saves a frame the frontend captured (a PNG data URL) as snapshot-<name>.png in MAPS_SNAPSHOT_DIR
+/// Saves a frame the frontend captured (a PNG data URL) as `snapshot-<name>.png` in `MAPS_SNAPSHOT_DIR`
 /// (default logs/), for looking at
 /// a renderer's output without the screen. Development only.
 #[tauri::command]
@@ -328,7 +333,7 @@ fn wx_state(at: Option<i64>, w: tauri::State<'_, Arc<weather::Weather>>) -> Valu
     w.state(at.unwrap_or(now), now)
 }
 
-/// One radar frame's cells, one byte each (wx::radar's code), as raw bytes rather than JSON,
+/// One radar frame's cells, one byte each (`wx::radar`'s code), as raw bytes rather than JSON,
 /// fetched from NOAA first if not held. The fetch blocks (up to a minute on a bad network), so it runs
 /// on the blocking pool: a sync command marked `async` would run on an async worker instead, which
 /// Tauri's other async commands share.
@@ -345,8 +350,8 @@ async fn wx_frame(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-/// One satellite image's grey levels (wx::satellite), one byte a pixel, fetched first if not held;
-/// on the blocking pool, as wx_frame.
+/// One satellite image's grey levels (`wx::satellite`), one byte a pixel, fetched first if not held;
+/// on the blocking pool, as `wx_frame`.
 #[tauri::command]
 async fn wx_satellite(
     time: i64,
@@ -361,7 +366,7 @@ async fn wx_satellite(
 }
 
 /// The GFS wind field at flight level `fl` (default FL340) for `at` (default now): a 48-byte header
-/// (wx::wind::encode) then U and V as f32; fetched from NOMADS first if not held, on the blocking pool.
+/// (`wx::wind::encode`) then U and V as f32; fetched from NOMADS first if not held, on the blocking pool.
 #[tauri::command]
 async fn wx_wind(
     at: Option<i64>,
@@ -461,11 +466,17 @@ fn wx_metar(
     m.report(&id, at.unwrap_or_else(unix_now))
 }
 
-/// Now, in Unix seconds: the system clock, or the tape's when replaying recorded weather (wx::tape).
+/// Now, in Unix seconds: the system clock, or the tape's when replaying recorded weather (`wx::tape`).
 pub(crate) fn unix_now() -> i64 {
     wx::tape::now()
 }
 
+/// Start the app: open the tile archive, the gazetteer and the weather sources, register the commands and the `tiles://`
+/// scheme, then run Tauri's event loop until the window closes.
+///
+/// # Panics
+///
+/// If Tauri fails to start (no display, a broken configuration).
 pub fn run() {
     let data = data_dir();
     let gazetteer = match search::open(&data.join("geonames.db")) {

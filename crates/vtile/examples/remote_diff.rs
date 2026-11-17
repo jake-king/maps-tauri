@@ -1,7 +1,7 @@
 //! Every tile of a local extract, read again from the archive it was extracted from (over HTTP Range
 //! requests), must be byte-identical: the remote reader is then known to find and decode tiles
 //! exactly as the local one does. Also times the remote reads.
-//!   cargo run --release -p vtile --features http --example remote_diff -- <local.pmtiles> <url>
+//! `cargo run --release -p vtile --features http --example remote_diff -- <local.pmtiles> <url>`
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::Instant;

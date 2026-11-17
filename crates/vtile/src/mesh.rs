@@ -1,6 +1,8 @@
 //! Turn a decoded tile into two GPU-ready meshes: fills (triangulated polygons) and lines (strips
-//! with extrusion vectors). Colors and line classes live in the vertices, so the renderer draws a
-//! whole tile in two calls: guile-2d's "one draw call per sheet".
+//! with extrusion vectors).
+//!
+//! Colors and line classes live in the vertices, so the renderer draws a whole tile in two calls:
+//! guile-2d's "one draw call per sheet".
 //!
 //! Wire format of [`Mesh::to_bytes`], version 5 (little-endian, every block padded to 4 bytes):
 //!   u32 magic "MESH", u32 version, u32 flags (bit 0: fill indices are u32, bit 1: line indices
@@ -9,7 +11,7 @@
 //!   fill vertices (6 B: i16 x, i16 y, u8 color index, u8 pad), fill indices,
 //!   line vertices (8 B: i16 x, i16 y, i8 ex, i8 ey, u8 class, u8 pad), line indices,
 //!   labels, each: i16 x, i16 y, i16 angle (radians x 10000), u16 run (tile units of straight line
-//!   the text may sit on; 0 for a point), u8 kind (LabelKind), u8 min zoom, u8 icon (sprite index
+//!   the text may sit on; 0 for a point), u8 kind ([`LabelKind`]), u8 min zoom, u8 icon (sprite index
 //!   plus 1, 0 for none), u8 color (label color index, POIs/water/shields), i32 priority (lower
 //!   first), u8 text length, UTF-8 text, u8 path point count, that many (i16 x, i16 y): the line a
 //!   street or stream name follows (0 points for a point label); the block padded to 4.
@@ -21,29 +23,44 @@
 use crate::mvt::{self, Layer};
 use crate::palette::{self, LineClass};
 
+/// The wire format's first four bytes, `MESH`, read as a little-endian `u32`.
 pub const MAGIC: u32 = u32::from_le_bytes(*b"MESH");
+/// The wire format version [`Mesh::to_bytes`] writes.
 pub const VERSION: u32 = 5;
-/// Douglas-Peucker tolerance for a label path, tile units, and the most points one may carry.
+/// Douglas-Peucker tolerance for a label path, in tile units.
 pub const PATH_TOLERANCE: f64 = 6.0;
+/// The most points a label path carries: [`path_label`] simplifies harder until it fits, and
+/// [`Mesh::to_bytes`] writes no more.
 pub const PATH_MAX_POINTS: usize = 32;
-/// Extrusion is stored as i8: the unit vector times 32, so a miter of up to MITER_LIMIT (2) fits.
+/// Extrusion is stored as `i8`: the unit vector times 32, so a miter of up to [`MITER_LIMIT`] (2)
+/// fits.
 pub const EXTRUDE_SCALE: f64 = 32.0;
 /// Miter joins longer than this (in half widths) are clamped, so sharp corners do not spike.
 pub const MITER_LIMIT: f64 = 2.0;
 
+/// One vertex of a filled (triangulated) polygon.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FillVertex {
+    /// x in tile coordinates (extent 4096; may lie outside the tile, in its buffer).
     pub x: i16,
+    /// y in tile coordinates, down from the tile's top edge.
     pub y: i16,
+    /// Fill color index into the palette's `fill_colors`.
     pub color: u8,
 }
 
+/// One vertex of a line strip: a point on the line and the direction to push it out.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LineVertex {
+    /// x of the point on the line, in tile coordinates.
     pub x: i16,
+    /// y of the point on the line, in tile coordinates.
     pub y: i16,
+    /// Extrusion x, scaled by [`EXTRUDE_SCALE`]; the shader multiplies it by the half width.
     pub ex: i8,
+    /// Extrusion y, scaled by [`EXTRUDE_SCALE`].
     pub ey: i8,
+    /// The [`LineClass`] number, which gives the line's color and width.
     pub class: u8,
 }
 
@@ -51,47 +68,70 @@ pub struct LineVertex {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum LabelKind {
+    /// A city or town name.
     City = 0,
+    /// A suburb name.
     Suburb = 1,
+    /// A neighbourhood name.
     Neighbourhood = 2,
+    /// A highway's name, along the road.
     RoadHighway = 3,
+    /// A major road's name, along the road.
     RoadMajor = 4,
+    /// A minor road's name, along the road.
     RoadMinor = 5,
+    /// A point of interest, with its icon.
     Poi = 6,
+    /// A sea, lake, river or stream name.
     Water = 7,
+    /// A route number on a road shield.
     Shield = 8,
 }
 
+/// A label to place: where, what it says, and how it ranks against others.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Label {
+    /// x of the anchor, in tile coordinates.
     pub x: i16,
+    /// y of the anchor, in tile coordinates.
     pub y: i16,
     /// radians, already turned to read left to right (in -pi/2..pi/2)
     pub angle: f32,
     /// straight run the text may sit on, tile units (0 for a point label)
     pub run: u16,
+    /// What the label names.
     pub kind: LabelKind,
+    /// The lowest zoom the label is shown at, from the data (0..=24).
     pub min_zoom: u8,
     /// sprite index + 1 (0: no icon)
     pub icon: u8,
     /// label color index (for kinds whose color varies: POIs, water, shields)
     pub color: u8,
+    /// Placement order among colliding labels: lower is placed first.
     pub priority: i32,
+    /// The text, UTF-8 (the wire format keeps at most 255 bytes of it).
     pub text: String,
     /// the line the text follows, tile units (empty for a point label)
     pub path: Vec<[i16; 2]>,
 }
 
+/// One tile's geometry, ready for the GPU: fill triangles, line strips and labels.
 #[derive(Default, Debug)]
 pub struct Mesh {
+    /// Fill vertices.
     pub fill: Vec<FillVertex>,
+    /// Fill triangles, three indices into `fill` each.
     pub fill_idx: Vec<u32>,
+    /// Line vertices.
     pub line: Vec<LineVertex>,
+    /// Line triangles, three indices into `line` each.
     pub line_idx: Vec<u32>,
+    /// Labels, in the order they were produced.
     pub labels: Vec<Label>,
 }
 
 impl Mesh {
+    /// Empty every buffer, keeping its capacity.
     pub fn clear(&mut self) {
         self.fill.clear();
         self.fill_idx.clear();
@@ -113,6 +153,7 @@ impl Mesh {
         vertices > usize::from(u16::MAX)
     }
 
+    /// The exact length in bytes of [`Mesh::to_bytes`]'s output.
     pub fn byte_len(&self) -> usize {
         let pad4 = |n: usize| (n + 3) & !3;
         let idx = |n: usize, wide: bool| pad4(n * if wide { 4 } else { 2 });
@@ -285,9 +326,11 @@ pub fn signed_area(ring: &[[i32; 2]]) -> f64 {
     sum
 }
 
-/// MapLibre's classifyRings: the first ring's winding marks exteriors; each later ring of the same
-/// winding starts a polygon, the other winding is a hole of the current one. Returns ranges of
-/// ring indices, each `[exterior, holes...]`.
+/// Group rings into polygons as MapLibre's `classifyRings` does.
+///
+/// The first ring's winding marks exteriors; each later ring of the same winding starts a polygon,
+/// the other winding is a hole of the current one. Rings of zero area are skipped. Returns ranges
+/// of ring indices, each `[exterior, holes...]`.
 pub fn classify_rings(rings: &[Vec<[i32; 2]>]) -> Vec<std::ops::Range<usize>> {
     let mut polys = Vec::new();
     let mut start: Option<usize> = None;
@@ -323,6 +366,7 @@ pub struct Mesher {
     rings: Vec<Vec<[i32; 2]>>,
     flat: Vec<f64>,
     holes: Vec<usize>,
+    /// The mesh of the last tile meshed.
     pub mesh: Mesh,
     /// polygons earcut could not triangulate (degenerate or self-intersecting), skipped
     pub earcut_failures: u32,
@@ -820,14 +864,18 @@ impl Mesher {
 
 /// The fields of a path label that do not come from its geometry.
 pub struct LabelExtra {
+    /// [`Label::min_zoom`].
     pub min_zoom: u8,
+    /// [`Label::color`].
     pub color: u8,
+    /// [`Label::priority`].
     pub priority: i32,
 }
 
-/// A street or stream name along the longest piece of `ring` inside the tile: its path simplified
-/// (Douglas-Peucker, at most PATH_MAX_POINTS points), oriented to read left to right, anchored at
-/// its middle. `run` is the path's length; `angle` the direction at the middle (kept for the
+/// A street or stream name along the longest piece of `ring` inside the tile.
+///
+/// Its path is simplified (Douglas-Peucker, at most [`PATH_MAX_POINTS`] points), oriented to read
+/// left to right, and anchored at its middle. `run` is the path's length; `angle` the direction at the middle (kept for the
 /// straight-label fallback).
 pub fn path_label(
     ring: &[[i32; 2]],

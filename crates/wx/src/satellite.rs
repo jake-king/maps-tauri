@@ -1,19 +1,26 @@
-//! Satellite clouds: GOES-East and West longwave infrared from NOAA's nowCOAST map server (a WMS),
-//! one image every 5 minutes, about 6.5 hours of history. Each image is requested for a fixed box
+//! Satellite clouds: GOES-East and West longwave infrared from NOAA's nowCOAST map server (a WMS).
+//!
+//! One image every 5 minutes, about 6.5 hours of history. Each image is requested for a fixed box
 //! in Web Mercator, so drawing it is a plain texture lookup; it comes back as a palette PNG of grey
 //! levels (brighter = colder = higher cloud), transparent where no satellite sees.
 //!
 //! Decoded to one byte per pixel: 0 = no data, else the grey level (at least 1). The shader turns
-//! grey into cloud opacity, so the threshold can be tuned without fetching again. Measured on a real
-//! image (2026-11-16 21:33Z): clear ground and warm surfaces sit at grey 48-128, cloud tops 130-224.
+//! grey into cloud opacity, so the threshold can be tuned without fetching again. Measured on a
+//! real image (2026-11-16 21:33Z): clear ground and warm surfaces sit at grey 48-128, cloud tops
+//! 130-224.
 
 use std::io::Cursor;
 
-/// The box every image covers: GOES-East and West over North America (longitude -135..-55,
-/// latitude 15..60), in Web Mercator metres, and the image size for it (about 4 km a pixel).
+/// The box every image covers: GOES-East and West over North America.
+///
+/// In degrees as `[west, south, east, north]`: longitude -135..-55, latitude 15..60. The request
+/// gives it in Web Mercator metres ([`bbox`]).
 pub const BBOX_LONLAT: [f64; 4] = [-135.0, 15.0, -55.0, 60.0];
+/// The image width in pixels for [`BBOX_LONLAT`] (about 4 km a pixel); [`bbox`] gives the height.
 pub const WIDTH: u32 = 2048;
+/// nowCOAST's WMS layer of GOES-East and West longwave infrared.
 pub const LAYER: &str = "goes_longwave_imagery";
+/// nowCOAST's satellite WMS endpoint.
 pub const WMS: &str = "https://nowcoast.noaa.gov/geoserver/satellite/wms";
 
 const R: f64 = 6_378_137.0;
@@ -27,7 +34,8 @@ fn merc(lon: f64, lat: f64) -> (f64, f64) {
     )
 }
 
-/// The box in Web Mercator metres (x0, y0, x1, y1) and the image height that keeps pixels square.
+/// [`BBOX_LONLAT`] in Web Mercator metres `[x0, y0, x1, y1]`, and the image height in pixels that
+/// keeps pixels square at [`WIDTH`].
 pub fn bbox() -> ([f64; 4], u32) {
     let (x0, y0) = merc(BBOX_LONLAT[0], BBOX_LONLAT[1]);
     let (x1, y1) = merc(BBOX_LONLAT[2], BBOX_LONLAT[3]);
@@ -35,7 +43,7 @@ pub fn bbox() -> ([f64; 4], u32) {
     ([x0, y0, x1, y1], h)
 }
 
-/// The GetMap request for the image valid at `time` (an ISO time from the capabilities).
+/// The `GetMap` request for the image valid at `time_iso` (an ISO time from the capabilities).
 pub fn url(time_iso: &str) -> String {
     let ([x0, y0, x1, y1], h) = bbox();
     format!(
@@ -43,13 +51,18 @@ pub fn url(time_iso: &str) -> String {
     )
 }
 
-/// Outside GOES-East and West: NOAA's hourly global infrared mosaic (nowCOAST keeps about 8 hours),
-/// whose grey scale differs from GOES's; [`to_goes_scale`] brings it onto GOES's so one cloud shading
+/// Outside GOES-East and West: NOAA's hourly global infrared mosaic (nowCOAST keeps about 8 hours).
+///
+/// Its grey scale differs from GOES's; [`to_goes_scale`] brings it onto GOES's so one cloud shading
 /// serves both.
 pub const GLOBAL_LAYER: &str = "global_longwave_imagery_mosaic";
+/// The global image's box in degrees, `[west, south, east, north]`: the world to ±72.7° latitude.
 pub const GLOBAL_BBOX_LONLAT: [f64; 4] = [-180.0, -72.7, 180.0, 72.7];
+/// The global image's width in pixels; [`global_bbox`] gives the height.
 pub const GLOBAL_WIDTH: u32 = 4096;
 
+/// [`GLOBAL_BBOX_LONLAT`] in Web Mercator metres `[x0, y0, x1, y1]`, and the image height in pixels
+/// that keeps pixels square at [`GLOBAL_WIDTH`].
 pub fn global_bbox() -> ([f64; 4], u32) {
     let (x0, y0) = merc(GLOBAL_BBOX_LONLAT[0], GLOBAL_BBOX_LONLAT[1]);
     let (x1, y1) = merc(GLOBAL_BBOX_LONLAT[2], GLOBAL_BBOX_LONLAT[3]);
@@ -57,6 +70,7 @@ pub fn global_bbox() -> ([f64; 4], u32) {
     ([x0, y0, x1, y1], h)
 }
 
+/// The `GetMap` request for the global mosaic's image valid at `time_iso` (an ISO time).
 pub fn url_global(time_iso: &str) -> String {
     let ([x0, y0, x1, y1], h) = global_bbox();
     format!(
@@ -64,30 +78,38 @@ pub fn url_global(time_iso: &str) -> String {
     )
 }
 
-/// A global-mosaic grey level on the GOES layer's scale: GOES = 0.650 x global + 51.4, fitted pixel by
-/// pixel over the central US with both images from 23Z on 2026-11-16 (r = 0.976, median error 1.6
-/// grey levels, 5.3 within cloud). 0 (no data) stays 0.
+/// A global-mosaic grey level on the GOES layer's scale, by the fixed fit [`GAIN`] and [`OFFSET`].
+///
+/// GOES = 0.650 x global + 51.4, fitted pixel by pixel over the central US with both images from
+/// 23Z on 2026-11-16 (r = 0.976, median error 1.6 grey levels, 5.3 within cloud). 0 (no data) stays
+/// 0.
 pub fn to_goes_scale(g: u8) -> u8 {
     to_scale(g, GAIN, OFFSET)
 }
-/// The fixed fit's gain and offset (see [`to_goes_scale`]); used when [`fit_edge`] cannot fit a pair.
+/// The fixed fit's gain (see [`to_goes_scale`]); used when [`fit_edge`] cannot fit a pair.
 pub const GAIN: f64 = 0.650;
+/// The fixed fit's offset in grey levels (see [`to_goes_scale`]).
 pub const OFFSET: f64 = 51.4;
 
-/// A greyscale image in Web Mercator: `grey` row by row from the north, `box` its (x0, y0, x1, y1)
-/// in metres; 0 is no data.
+/// A greyscale image in Web Mercator, borrowed; 0 is no data.
 pub struct View<'a> {
+    /// `width * height` grey levels, row by row from the north.
     pub grey: &'a [u8],
+    /// Pixels per row.
     pub width: usize,
+    /// Rows.
     pub height: usize,
+    /// The box the image covers, Web Mercator metres `[x0, y0, x1, y1]`.
     pub bbox: [f64; 4],
 }
 
-/// The global mosaic's grey levels on GOES's scale, fitted where it matters: along the edge of GOES's
-/// coverage, where one image gives way to the other. The relation is not one line everywhere (central
-/// US: GOES = 0.650 g + 51.4; the Canadian border: 0.420 g + 99.3, measured 2026-11-16 23Z), so a
-/// pair of images is fitted on the GOES pixels within about a degree of no data (or of the image's
-/// edge). Returns (gain, offset, samples), or None when too few pixels or too weak a relation.
+/// The global mosaic's grey levels on GOES's scale, fitted where it matters.
+///
+/// That is along the edge of GOES's coverage, where one image gives way to the other. The relation
+/// is not one line everywhere (central US: GOES = 0.650 g + 51.4; the Canadian border: 0.420 g +
+/// 99.3, measured 2026-11-16 23Z), so a pair of images is fitted on the GOES pixels within about a
+/// degree of no data (or of the image's edge). Returns `(gain, offset, samples)`, or `None` when
+/// fewer than 500 pixel pairs or a correlation under 0.8.
 pub fn fit_edge(goes: &View, global: &View) -> Option<(f64, f64, usize)> {
     let (w, h) = (goes.width, goes.height);
     let [x0, y0, x1, y1] = goes.bbox;
@@ -183,19 +205,20 @@ pub fn to_scale(g: u8, gain: f64, offset: f64) -> u8 {
     (gain * g as f64 + offset).round().clamp(1.0, 255.0) as u8
 }
 
+/// The WMS `GetCapabilities` request, which lists each layer's image times.
 pub fn capabilities_url() -> String {
     format!("{WMS}?service=WMS&version=1.3.0&request=GetCapabilities")
 }
 
-/// The image times the server offers for [`LAYER`], ascending, from its capabilities XML: the
-/// layer's `<Dimension name="time">` is a comma-separated list of ISO times.
-/// The GOES layer's image times (see [`times_of`]).
+/// The GOES layer's image times, ascending, in Unix seconds (see [`times_of`]).
 pub fn times(capabilities: &str) -> Vec<i64> {
     times_of(capabilities, LAYER)
 }
 
-/// The image times the server offers for `layer`, ascending: the layer's `<Dimension name="time">`
-/// is a comma-separated list of ISO times.
+/// The image times the server offers for `layer`, ascending, in Unix seconds; empty if not found.
+///
+/// The layer's `<Dimension name="time">` in the capabilities XML is a comma-separated list of ISO
+/// times.
 pub fn times_of(capabilities: &str, layer: &str) -> Vec<i64> {
     let Some(i) = capabilities.find(&format!("<Name>{layer}</Name>")) else {
         return Vec::new();
@@ -226,7 +249,7 @@ pub fn times_of(capabilities: &str, layer: &str) -> Vec<i64> {
     out
 }
 
-/// "2026-11-16T21:33:00Z" for the WMS time parameter.
+/// Unix seconds `t` as `2026-11-16T21:33:00Z`, for the WMS time parameter.
 pub fn iso(t: i64) -> String {
     let days = t.div_euclid(86_400);
     let secs = t.rem_euclid(86_400);
@@ -248,15 +271,23 @@ pub fn iso(t: i64) -> String {
     )
 }
 
+/// A decoded satellite image.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Image {
+    /// Pixels per row.
     pub width: u32,
+    /// Rows.
     pub height: u32,
     /// one byte per pixel, rows north to south: 0 = no data, else grey (1..=255)
     pub grey: Vec<u8>,
 }
 
 /// Decode the server's PNG (palette or grey, with or without transparency) to grey levels.
+///
+/// # Errors
+///
+/// The bytes are not a PNG the decoder reads, the image is not `width` x `height`, it is larger
+/// than that size allows, or its colour type is not one handled here.
 pub fn decode(png_bytes: &[u8], width: u32, height: u32) -> Result<Image, String> {
     let limits = png::Limits {
         bytes: (width as usize) * (height as usize) * 4 + 1024,
@@ -321,8 +352,8 @@ fn luma(r: u8, g: u8, b: u8) -> u8 {
 mod tests {
     use super::*;
 
-    /// A GOES image whose top half has no data, and a global image over the same box whose relation to
-    /// GOES is one line near that edge and another deep inside: the fit must follow the edge's.
+    /// A GOES image whose top half has no data, and a global image over the same box whose relation
+    /// to GOES is one line near that edge and another deep inside: the fit must follow the edge's.
     #[test]
     fn the_fit_follows_the_edge_of_goes_coverage() {
         let (w, h) = (200usize, 200usize);
@@ -535,7 +566,7 @@ mod tests {
         );
     }
 
-    /// A real image, when downloaded: WX_SAT=file.png WX_SAT_SIZE=1400x1120
+    /// A real image, when downloaded: `WX_SAT=file.png WX_SAT_SIZE=1400x1120`
     #[test]
     fn a_real_image() {
         let (Ok(path), Ok(size)) = (std::env::var("WX_SAT"), std::env::var("WX_SAT_SIZE")) else {

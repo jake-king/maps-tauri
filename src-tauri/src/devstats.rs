@@ -141,7 +141,7 @@ pub struct ProcessMem {
     pub pid: u32,
     pub name: String,
     /// Proportional set size: shared pages split between the processes that map them, so the
-    /// rows add up to a meaningful total. Falls back to RSS where smaps_rollup is unreadable.
+    /// rows add up to a meaningful total. Falls back to RSS where `smaps_rollup` is unreadable.
     pub pss_kb: u64,
     /// The same PSS by mapping kind, when /proc/<pid>/smaps is readable.
     pub kinds: Option<MappingKinds>,

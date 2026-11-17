@@ -132,12 +132,12 @@ struct Inner {
     radar: Store,
     sat: Store,
     sat_global: Store,
-    /// encoded wind fields (wx::wind::encode), keyed by run, forecast hour and level
+    /// encoded wind fields (`wx::wind::encode`), keyed by run, forecast hour and level
     wind: Store,
     grid: Option<Grid>,
     /// each forecast hour's features, replaced only by a successful fetch of that hour
     gairmet: HashMap<u32, Vec<Hazard>>,
-    /// every SIGMET seen, by wx::sigmet::key
+    /// every SIGMET seen, by `wx::sigmet::key`
     sigmets: HashMap<String, wx::sigmet::Sigmet>,
     sigmets_ok: Option<i64>,
     /// the half hours of history whose SIGMETs have been fetched
@@ -437,7 +437,7 @@ impl Weather {
         t
     }
 
-    /// The global mosaic image to show at `at`: the newest at or before it, no older than SAT_GLOBAL_REACH.
+    /// The global mosaic image to show at `at`: the newest at or before it, no older than `SAT_GLOBAL_REACH`.
     pub fn global_for(&self, at: i64) -> Option<i64> {
         let t = self.sat_global_times();
         let i = t.partition_point(|&x| x <= at);
@@ -503,7 +503,7 @@ impl Weather {
         }
     }
 
-    /// One radar frame's cells (wx::radar codes), fetched if not held.
+    /// One radar frame's cells (`wx::radar` codes), fetched if not held.
     pub fn radar_frame(&self, src: &dyn Source, t: i64) -> Result<Vec<u8>, String> {
         let held = || {
             let mut g = self.lock();
@@ -557,7 +557,7 @@ impl Weather {
         inflate(&d)
     }
 
-    /// One satellite image's grey levels (wx::satellite), fetched if not held.
+    /// One satellite image's grey levels (`wx::satellite`), fetched if not held.
     pub fn satellite_image(&self, src: &dyn Source, t: i64) -> Result<Vec<u8>, String> {
         let held = || {
             let mut g = self.lock();
@@ -589,7 +589,7 @@ impl Weather {
     }
 
     /// The wind field at flight level `fl` (None: FL340) for time `at`, encoded for the webview
-    /// (wx::wind::encode): from the newest GFS run that serves `at`, or the runs before it if that
+    /// (`wx::wind::encode`): from the newest GFS run that serves `at`, or the runs before it if that
     /// one is not on NOMADS yet. Each field is fetched once and kept.
     pub fn wind(
         &self,
@@ -690,7 +690,7 @@ impl Weather {
         )
     }
 
-    /// One global mosaic image's grey levels, on the GOES scale (wx::satellite::to_goes_scale).
+    /// One global mosaic image's grey levels, on the GOES scale (`wx::satellite::to_goes_scale`).
     pub fn satellite_global_image(&self, src: &dyn Source, t: i64) -> Result<Vec<u8>, String> {
         let held = || {
             let mut g = self.lock();

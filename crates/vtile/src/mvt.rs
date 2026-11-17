@@ -1,6 +1,8 @@
-//! Mapbox Vector Tile v2 decoding: protobuf messages Tile > Layer > Feature, and geometry as a
-//! stream of MoveTo / LineTo / ClosePath commands with zigzag-encoded deltas.
-//! Spec: https://github.com/mapbox/vector-tile-spec/tree/master/2.1
+//! Mapbox Vector Tile v2 decoding.
+//!
+//! A tile is protobuf messages Tile > Layer > Feature, and a feature's geometry is a stream of
+//! `MoveTo` / `LineTo` / `ClosePath` commands with zigzag-encoded deltas.
+//! Spec: <https://github.com/mapbox/vector-tile-spec/tree/master/2.1>
 
 use std::io;
 
@@ -10,16 +12,23 @@ fn bad(msg: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.to_string())
 }
 
+/// A property value from a layer's value table.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
+    /// `string_value`.
     String(String),
+    /// `float_value`.
     Float(f32),
+    /// `double_value`.
     Double(f64),
+    /// `int_value`, `uint_value` (reinterpreted as `i64`) or zigzag-decoded `sint_value`.
     Int(i64),
+    /// `bool_value`; also what a value message with no recognised field decodes to (`false`).
     Bool(bool),
 }
 
 impl Value {
+    /// The string, if this is a [`Value::String`].
     pub fn as_str(&self) -> Option<&str> {
         if let Value::String(s) = self {
             Some(s)
@@ -27,6 +36,7 @@ impl Value {
             None
         }
     }
+    /// The number as `f64`, for [`Value::Float`], [`Value::Double`] and [`Value::Int`].
     pub fn as_f64(&self) -> Option<f64> {
         match *self {
             Value::Float(v) => Some(v as f64),
@@ -37,17 +47,25 @@ impl Value {
     }
 }
 
+/// A feature's geometry type, as numbered in the spec ([`Feature::geom_type`] holds the number).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GeomType {
+    /// Unknown or unset.
     Unknown = 0,
+    /// One or more points.
     Point = 1,
+    /// One or more lines.
     LineString = 2,
+    /// One or more polygons, as rings.
     Polygon = 3,
 }
 
+/// One feature of a layer, its geometry still encoded.
 #[derive(Debug, Default)]
 pub struct Feature {
+    /// The feature id (0 when the tile gives none).
     pub id: u64,
+    /// The geometry type number, a [`GeomType`] value (unchecked).
     pub geom_type: u8,
     /// pairs of (key index, value index) into the layer's tables
     pub tags: Vec<u32>,
@@ -55,12 +73,18 @@ pub struct Feature {
     pub geometry: Vec<u32>,
 }
 
+/// One layer of a tile: its features and the key and value tables their tags index.
 #[derive(Debug)]
 pub struct Layer {
+    /// The layer name (`water`, `roads`, ...).
     pub name: String,
+    /// Tile coordinates per tile side (4096 when the tile gives none).
     pub extent: u32,
+    /// Property names, indexed by the first of each of a feature's tag pairs.
     pub keys: Vec<String>,
+    /// Property values, indexed by the second of each tag pair.
     pub values: Vec<Value>,
+    /// The features, in tile order.
     pub features: Vec<Feature>,
 }
 
@@ -183,6 +207,11 @@ fn layer(b: &[u8]) -> io::Result<Layer> {
 }
 
 /// Decode a whole (decompressed) tile.
+///
+/// # Errors
+///
+/// `InvalidData` when the protobuf is malformed: a truncated varint or field, a varint longer
+/// than 10 bytes, an unsupported wire type, or a string that is not UTF-8.
 pub fn decode(b: &[u8]) -> io::Result<Vec<Layer>> {
     let mut layers = Vec::new();
     let mut p = 0;
@@ -194,9 +223,11 @@ pub fn decode(b: &[u8]) -> io::Result<Vec<Layer>> {
     Ok(layers)
 }
 
-/// A feature's geometry as point lists in tile coordinates: one per MoveTo. ClosePath appends the
-/// ring's first point again, so a polygon ring comes back closed, exactly as @mapbox/vector-tile's
-/// loadGeometry returns it (checked over every tile by tools/mvt_diff.mjs). `out` is cleared and reused, so a caller decoding many features
+/// A feature's geometry as point lists in tile coordinates, one per `MoveTo`.
+///
+/// `ClosePath` appends the ring's first point again, so a polygon ring comes back closed, exactly
+/// as `@mapbox/vector-tile`'s `loadGeometry` returns it (checked over every tile by
+/// `tools/mvt_diff.mjs`). `out` is cleared and reused, so a caller decoding many features
 /// allocates only when a feature is bigger than any before it.
 pub fn geometry(cmds: &[u32], out: &mut Vec<Vec<[i32; 2]>>) {
     let mut used = 0;

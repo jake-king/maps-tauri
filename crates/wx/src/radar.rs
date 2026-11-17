@@ -1,6 +1,7 @@
-//! A radar mosaic reduced for the GPU: reflectivity quantized to one byte per cell, the grid thinned
-//! by an integer factor keeping the strongest echo of each block (thinning by averaging would wash
-//! out a storm's core, the part that matters).
+//! A radar mosaic reduced for the GPU: reflectivity quantized to one byte per cell.
+//!
+//! The grid is thinned by an integer factor keeping the strongest echo of each block (thinning by
+//! averaging would wash out a storm's core, the part that matters).
 //!
 //! Byte code: 0 = nothing to draw (no coverage, or below [`MIN_DBZ`]); otherwise
 //! `1 + round((dBZ - MIN_DBZ) * 2)`, capped at 255: half-dBZ steps from 5 to 132 dBZ.
@@ -10,17 +11,26 @@ use crate::grib::Grid;
 /// Echoes weaker than this are not drawn (the usual radar display floor).
 pub const MIN_DBZ: f32 = 5.0;
 
+/// A reduced mosaic: the grid of [`Grid`], thinned, with one byte code per cell.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Radar {
+    /// Cells per row (west to east).
     pub ni: usize,
+    /// Rows (north to south).
     pub nj: usize,
+    /// Latitude of row 0's cell centres, degrees north.
     pub lat0: f64,
+    /// Longitude of column 0's cell centres, degrees east.
     pub lon0: f64,
+    /// Row spacing in degrees.
     pub dlat: f64,
+    /// Column spacing in degrees.
     pub dlon: f64,
+    /// `ni * nj` byte codes (see the module), row by row from row 0.
     pub codes: Vec<u8>,
 }
 
+/// The byte code of a reflectivity in dBZ: 0 below [`MIN_DBZ`], for NaN and for the fill values.
 pub fn code(dbz: f32) -> u8 {
     if dbz.is_nan() || dbz < MIN_DBZ {
         return 0; // also the -999 / -99 fill values
@@ -28,11 +38,14 @@ pub fn code(dbz: f32) -> u8 {
     (1.0 + ((dbz - MIN_DBZ) * 2.0).round()).min(255.0) as u8
 }
 
+/// The reflectivity in dBZ a byte code stands for, to the nearest half dBZ; `None` for 0.
 pub fn dbz(code: u8) -> Option<f32> {
     (code > 0).then(|| MIN_DBZ + (code - 1) as f32 / 2.0)
 }
 
-/// Quantize and thin by `factor` (1 = keep every cell). Partial blocks at the east and south edges
+/// Quantize and thin by `factor` (1 = keep every cell; 0 is taken as 1).
+///
+/// Each output cell is the strongest code of its block. Partial blocks at the east and south edges
 /// are kept. The thinned grid's origin is its first block's centre.
 pub fn reduce(g: &Grid, factor: usize) -> Radar {
     let f = factor.max(1);
@@ -63,7 +76,10 @@ pub fn reduce(g: &Grid, factor: usize) -> Radar {
 }
 
 /// The MRMS directory listing's frame files, oldest first, with their times (seconds since the
-/// epoch): `MRMS_MergedBaseReflectivityQC_00.50_20261116-195611.grib2.gz`. Other links are ignored.
+/// epoch).
+///
+/// A frame file is named like `MRMS_MergedBaseReflectivityQC_00.50_20261116-195611.grib2.gz`. Other
+/// links are ignored.
 pub fn frames_in_index(html: &str) -> Vec<(String, i64)> {
     const PREFIX: &str = "MRMS_MergedBaseReflectivityQC_00.50_";
     const SUFFIX: &str = ".grib2.gz";
@@ -93,8 +109,13 @@ pub fn frames_in_index(html: &str) -> Vec<(String, i64)> {
     out
 }
 
-/// Gunzip, refusing output past `max` bytes (a frame is ~0.7 MB; a corrupt or hostile stream must
-/// not fill memory).
+/// Gunzip, refusing output past `max` bytes.
+///
+/// A frame is ~0.7 MB; a corrupt or hostile stream must not fill memory.
+///
+/// # Errors
+///
+/// The stream is not valid gzip, or it unpacks to more than `max` bytes.
 pub fn gunzip(gz: &[u8], max: usize) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let mut out = Vec::new();

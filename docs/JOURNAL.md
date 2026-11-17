@@ -1435,3 +1435,25 @@ gate twice and put two builds on the shared cache directory at once.
 Proven both ways: a `v9.9.9-rc.1` tag failed at the version check and started no CI run; `v0.1.0-rc.1`
 passed the gate and published a prerelease whose `.deb` (12 MiB, `maps-tauri 0.1.0`, depends on
 libwebkit2gtk-4.1 and GTK 3) downloads and matches its SHA256SUMS.
+
+## Documentation is part of the gate
+
+Measured first (nightly `rustdoc --show-coverage`, public items): `coords` 6/6, `vtile` 56/165 (34%),
+`wx` 79/153 (52%), the app crate 3/7. No lint asked for docs, and the gate never built them.
+
+The workspace `Cargo.toml` now sets the lints every crate inherits: rustc's `missing_docs`; clippy's
+`missing_errors_doc`, `missing_panics_doc`, `doc_markdown` (names in prose are code-formatted; proper
+nouns such as PMTiles and GeoJSON are listed in `clippy.toml`) and `too_long_first_doc_paragraph` (the
+first paragraph is the one-line summary rustdoc's index shows); rustdoc's broken-link, bare-URL and
+code-block lints. `tools/check.sh` gains a `rustdoc` step, `cargo doc` with every warning fatal; clippy
+already runs with `-D warnings`. On the tree as it was, the two steps failed with 305 errors before any
+doc was written. A planted broken intra-doc link fails the `rustdoc` step; removed, it passes.
+
+About 300 items were documented: fields with their units and coordinate spaces, an `# Errors` section
+naming the real failure conditions of each function returning a `Result`, a `# Panics` section where
+one can. `vtile/src/palette.rs` is generated, so its docs come from `tools/gen_palette.mjs`. Reading the
+code to document it turned up five existing docs that were wrong: the satellite bounding box said Web
+Mercator metres and is in degrees; `Tape::replay` said it returns `None` for an unrecorded URL and
+returns an error naming it; `fetch::metars` said "those in the box" and returns every station; a
+GetMap parameter was misnamed; one item carried two conflicting paragraphs. Coverage is now 100% in all
+four crates, and the gate keeps it there.

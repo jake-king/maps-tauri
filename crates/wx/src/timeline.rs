@@ -1,29 +1,35 @@
-//! What to show at a chosen time, the way the Aviation Weather Center's GFA does it: every layer is
-//! synced to one time. Radar and satellite are observations, so they exist only up to the present;
-//! G-AIRMET hazards are forecasts, valid at instants three hours apart.
+//! What to show at a chosen time, the way the Aviation Weather Center's GFA does it.
+//!
+//! Every layer is synced to one time. Radar and satellite are observations, so they exist only up
+//! to the present; G-AIRMET hazards are forecasts, valid at instants three hours apart.
 //!
 //! * radar: a loop of up to [`LOOP_FRAMES`] frames, [`LOOP_STEP`] seconds apart, ending at the
 //!   chosen time (GFA: the five images ending at the slider's time, 40 minutes)
 //! * satellite: the newest image at or before the chosen time, if it is recent enough
 //! * hazards: the snapshot valid nearest the chosen time
 
-/// Frames in a radar loop and the spacing between them (seconds): 5 frames over 40 minutes.
+/// Frames in a radar loop: 5 frames, [`LOOP_STEP`] apart, span 40 minutes.
 pub const LOOP_FRAMES: usize = 5;
+/// The spacing between a radar loop's frames, seconds.
 pub const LOOP_STEP: i64 = 600;
 /// A frame stands for a loop slot only if it is this close to the slot's time (seconds).
 pub const RADAR_SLACK: i64 = 240;
 /// A satellite image older than this, relative to the chosen time, is not shown (seconds).
 pub const SAT_MAX_AGE: i64 = 30 * 60;
-/// A hazard snapshot further than this from the chosen time is not shown (seconds). Snapshots are 3
-/// hours apart, so wherever forecasts exist one is always within reach; past their range, none is
-/// better than the nearest one from many hours away.
+/// A hazard snapshot further than this from the chosen time is not shown (seconds).
+///
+/// Snapshots are 3 hours apart, so wherever forecasts exist one is always within reach; past their
+/// range, none is better than the nearest one from many hours away.
 pub const HAZARD_REACH: i64 = 90 * 60;
 
+/// What each layer shows at one chosen time; every time is Unix seconds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Selection {
     /// radar frame times, oldest first, each the frame nearest its slot; empty past the present
     pub radar: Vec<i64>,
+    /// The satellite image's time, or `None` when none is recent enough.
     pub satellite: Option<i64>,
+    /// The valid time of the hazard snapshot to show, or `None` when none is within reach.
     pub hazards: Option<i64>,
 }
 

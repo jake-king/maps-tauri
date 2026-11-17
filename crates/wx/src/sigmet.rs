@@ -1,34 +1,46 @@
-//! SIGMETs: hazard areas issued as warnings, worldwide. International SIGMETs (every FIR's
-//! turbulence, icing, thunderstorms, mountain waves, tropical cyclones, volcanic ash) and US
-//! convective SIGMETs, from aviationweather.gov's JSON. Each is valid over a period, not at an instant.
+//! SIGMETs: hazard areas issued as warnings, worldwide.
 //!
-//! The feed is loose about types: the same field arrives as a number, a numeric string, `null` or the
-//! string "None" depending on the request (measured 2026-11-16: with `date=` numbers and null, without
-//! it strings and "None"), so every field is read as any of those. An area crossing the 180° meridian
-//! comes as longitudes past 180 (176.5 to 201.75), kept continuous so it draws in one piece.
+//! International SIGMETs (every FIR's turbulence, icing, thunderstorms, mountain waves, tropical
+//! cyclones, volcanic ash) and US convective SIGMETs, from aviationweather.gov's JSON. Each is
+//! valid over a period, not at an instant.
+//!
+//! The feed is loose about types: the same field arrives as a number, a numeric string, `null` or
+//! the string "None" depending on the request (measured 2026-11-16: with `date=` numbers and null,
+//! without it strings and "None"), so every field is read as any of those. An area crossing the
+//! 180° meridian comes as longitudes past 180 (176.5 to 201.75), kept continuous so it draws in one
+//! piece.
 
 use serde_json::Value;
 
+/// One SIGMET, international or US domestic.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sigmet {
-    /// "SIGMET" (international) or "CONVECTIVE" (US convective SIGMET)
+    /// `SIGMET` (international, or US non-convective) or `CONVECTIVE` (US convective SIGMET).
     pub kind: String,
-    /// TS, TURB, ICE, MTW, VA, TC, CONVECTIVE, ...
+    /// The hazard as published: `TS`, `TURB`, `ICE`, `MTW`, `VA`, `TC`, `CONVECTIVE`, ...
     pub hazard: String,
+    /// The qualifier as published (`SEV`, `EMBD`, ...; `severity N` for a US domestic one), when
+    /// given.
     pub qualifier: Option<String>,
+    /// The issuing flight information region's name, when given.
     pub fir: Option<String>,
-    /// feet; None = not given (a missing base is the surface for display purposes)
+    /// The base in feet; `None` = not given (a missing base is the surface for display purposes).
     pub base_ft: Option<i64>,
+    /// The top in feet; `None` = not given.
     pub top_ft: Option<i64>,
+    /// Start of the valid period, Unix seconds.
     pub from: i64,
+    /// End of the valid period, Unix seconds (not before `from`).
     pub to: i64,
-    /// one ring per area, each a closed list of (lon, lat); a single point is a SIGMET reported at a
-    /// position ("SEV ICE OBS AT ..."), drawn as a marker
+    /// One ring per area, each a list of at least 3 `[lon, lat]` points in degrees; a single point
+    /// is a SIGMET reported at a position ("SEV ICE OBS AT ..."), drawn as a marker.
     pub rings: Vec<Vec<[f64; 2]>>,
+    /// The SIGMET's text as issued; empty if the feed gave none.
     pub raw: String,
 }
 
 impl Sigmet {
+    /// Whether `t` (Unix seconds) falls within the valid period, both ends included.
     pub fn active_at(&self, t: i64) -> bool {
         self.from <= t && t <= self.to
     }
@@ -85,7 +97,14 @@ fn array(json: &str, what: &str) -> Result<Vec<Value>, String> {
     }
 }
 
-/// International SIGMETs. A record without a valid period or a drawable area is skipped and counted.
+/// International SIGMETs, and the number of records skipped.
+///
+/// A record without a hazard, a valid period or a drawable area is skipped and counted. Empty text
+/// (a 204: nothing in force) is no SIGMETs.
+///
+/// # Errors
+///
+/// The text is not JSON, or not a JSON list.
 pub fn parse_international(json: &str) -> Result<(Vec<Sigmet>, usize), String> {
     let mut out = Vec::new();
     let mut skipped = 0;
@@ -112,8 +131,13 @@ pub fn parse_international(json: &str) -> Result<(Vec<Sigmet>, usize), String> {
     Ok((out, skipped))
 }
 
-/// US domestic SIGMETs (convective and non-convective; AIRMETs in this feed are left out, the
-/// G-AIRMET layer covers them).
+/// US domestic SIGMETs (convective and non-convective), and the number of records skipped.
+///
+/// AIRMETs in this feed are left out, the G-AIRMET layer covers them. Empty text is no SIGMETs.
+///
+/// # Errors
+///
+/// The text is not JSON, or not a JSON list.
 pub fn parse_domestic(json: &str) -> Result<(Vec<Sigmet>, usize), String> {
     let mut out = Vec::new();
     let mut skipped = 0;
@@ -247,7 +271,7 @@ mod tests {
         );
     }
 
-    /// Real responses: WX_ISIGMET=file.json (WX_AIRSIGMET for the domestic feed)
+    /// Real responses: `WX_ISIGMET=file.json` (`WX_AIRSIGMET` for the domestic feed)
     #[test]
     fn real_responses() {
         if let Ok(p) = std::env::var("WX_ISIGMET") {

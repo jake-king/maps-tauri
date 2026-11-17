@@ -1,28 +1,37 @@
-//! G-AIRMET hazard areas from aviationweather.gov's GeoJSON. A G-AIRMET package is a set of
-//! snapshots, each valid at one instant three hours apart (fore=0, 3, 6, 9, 12); a display shows
+//! G-AIRMET hazard areas from aviationweather.gov's GeoJSON.
+//!
+//! A G-AIRMET package is a set of snapshots, each valid at one instant three hours apart
+//! (`fore=0, 3, 6, 9, 12`); a display shows
 //! the snapshot nearest the present. Features the renderer cannot draw are dropped, not guessed at.
 
 use serde_json::Value;
 
+/// A hazard's geometry, in degrees: each point `[lon, lat]`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shape {
-    /// outer ring first, then any holes; each ring a list of (lon, lat)
+    /// An area: outer ring first, then any holes; each ring at least 4 points.
     Polygon(Vec<Vec<[f64; 2]>>),
+    /// A line of at least 2 points (the freezing-level contours).
     Line(Vec<[f64; 2]>),
 }
 
+/// One G-AIRMET feature the renderer can draw.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hazard {
-    /// TURB-HI, TURB-LO, ICE, IFR, MT_OBSC, SFC_WND, LLWS, FZLVL, M_FZLVL
+    /// The hazard type as published: `TURB-HI`, `TURB-LO`, `ICE`, `IFR`, `MT_OBSC`, `SFC_WND`,
+    /// `LLWS`, `FZLVL`, `M_FZLVL`.
     pub hazard: String,
+    /// The severity as published (`MOD`, for example), when given.
     pub severity: Option<String>,
-    /// flight levels as published (hundreds of feet, or "SFC" / "FZL")
+    /// The lower bound as published: flight level in hundreds of feet, or `SFC` / `FZL`.
     pub base: Option<String>,
+    /// The upper bound, in the same terms as `base`.
     pub top: Option<String>,
     /// freezing level, for FZLVL lines
     pub level: Option<String>,
     /// seconds since the Unix epoch
     pub valid: i64,
+    /// Where it applies.
     pub shape: Shape,
 }
 
@@ -97,8 +106,14 @@ fn text(p: &Value, key: &str) -> Option<String> {
     }
 }
 
-/// Every drawable feature of one response. A response that is not a FeatureCollection is an error;
-/// a feature without a known geometry or valid time is skipped and counted.
+/// Every drawable feature of one response, and the number of features skipped.
+///
+/// A response that is not a `FeatureCollection` is an error; a feature without a known geometry or
+/// valid time is skipped and counted.
+///
+/// # Errors
+///
+/// The text is not JSON, not a `FeatureCollection`, or has no `features` array.
 pub fn parse(json: &str) -> Result<(Vec<Hazard>, usize), String> {
     let v: Value = serde_json::from_str(json).map_err(|e| format!("gairmet: {e}"))?;
     if v.get("type").and_then(Value::as_str) != Some("FeatureCollection") {
@@ -246,7 +261,7 @@ mod tests {
         assert!(nearest_snapshot(&[], 0).is_empty());
     }
 
-    /// Real responses, when downloaded: WX_GAIRMET=file.json
+    /// Real responses, when downloaded: `WX_GAIRMET=file.json`
     #[test]
     fn a_real_response() {
         let Ok(path) = std::env::var("WX_GAIRMET") else {

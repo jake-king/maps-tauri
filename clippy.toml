@@ -1,0 +1,2 @@
+# Proper nouns clippy's doc_markdown would otherwise want in backticks; ".." keeps its default list.
+doc-valid-idents = ["..", "ETag", "MapLibre", "GeoJSON", "PMTiles", "ReDoS", "WebGL", "WebKitGTK", "OpenStreetMap", "WebKit", "GeoNames"]

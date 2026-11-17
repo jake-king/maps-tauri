@@ -1,21 +1,28 @@
-//! A tape of NOAA's answers, so a run can be repeated exactly without the network: on every
-//! platform in CI, and offline. `MAPS_TAPE_RECORD=<dir>` saves each response under a key derived from
-//! its URL (and the start time in `now.txt`); `MAPS_TAPE_REPLAY=<dir>` answers from the tape alone and
-//! starts the clock at the recorded time, running on at real speed. A request not on the tape is an
-//! error naming its URL, never a silent fetch.
+//! A tape of NOAA's answers, so a run can be repeated exactly without the network.
+//!
+//! That is on every platform in CI, and offline. `MAPS_TAPE_RECORD=<dir>` saves each response under
+//! a key derived from its URL (and the start time in `now.txt`); `MAPS_TAPE_REPLAY=<dir>` answers
+//! from the tape alone and starts the clock at the recorded time, running on at real speed. A
+//! request not on the tape is an error naming its URL, never a silent fetch.
 
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
+/// What a tape does with requests.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mode {
+    /// No tape: requests go to the network, the clock is the system's.
     Off,
+    /// Requests go to the network and each response is saved in this directory.
     Record(PathBuf),
+    /// Requests are answered from this directory alone; the clock starts at the recorded time.
     Replay(PathBuf),
 }
 
+/// A tape and the clock that goes with it (see the module).
 pub struct Tape {
+    /// Off, recording or replaying, and where.
     pub mode: Mode,
     /// Unix seconds at `started`: the recorded start when replaying, the real time otherwise
     start: i64,
@@ -30,7 +37,8 @@ fn real_now() -> i64 {
         .unwrap_or(0)
 }
 
-/// The file a URL's response is kept in: FNV-1a of the URL, so the same request finds the same file.
+/// The file a URL's response is kept in: FNV-1a of the URL, so the same request finds the same
+/// file.
 pub fn key(url: &str) -> String {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in url.bytes() {
@@ -40,6 +48,13 @@ pub fn key(url: &str) -> String {
 }
 
 impl Tape {
+    /// Open a tape: a recording keeps the start time in the directory's `now.txt` (an existing one
+    /// is kept), a replay reads it.
+    ///
+    /// # Errors
+    ///
+    /// Recording: the directory cannot be created or `now.txt` cannot be written. Replaying: the
+    /// directory has no readable `now.txt`, or it does not hold a whole number of seconds.
     pub fn new(mode: Mode) -> Result<Tape, String> {
         let start = match &mode {
             Mode::Off => real_now(),
@@ -81,7 +96,8 @@ impl Tape {
         }
     }
 
-    /// The response for `url`: from the tape when replaying (None if it is not there), else None.
+    /// The response for `url` when replaying: `Some(Ok(body))` from the tape, or `Some(Err)` naming
+    /// the URL if it is not there. `None` when not replaying.
     pub fn replay(&self, url: &str) -> Option<Result<Vec<u8>, String>> {
         let Mode::Replay(dir) = &self.mode else {
             return None;
@@ -92,7 +108,11 @@ impl Tape {
         )
     }
 
-    /// Keep `body` as the response for `url`, when recording.
+    /// Keep `body` as the response for `url`, when recording; a write that fails is ignored.
+    ///
+    /// # Panics
+    ///
+    /// If another thread panicked while recording (the index lock is poisoned).
     pub fn record(&self, url: &str, body: &[u8]) {
         let Mode::Record(dir) = &self.mode else {
             return;
@@ -128,6 +148,11 @@ fn from_env() -> Tape {
 }
 
 /// The process's tape, from the environment on first use.
+///
+/// # Panics
+///
+/// On first use, if `MAPS_TAPE_RECORD` or `MAPS_TAPE_REPLAY` names a tape that [`Tape::new`]
+/// cannot open.
 pub fn global() -> &'static Tape {
     static T: OnceLock<Tape> = OnceLock::new();
     T.get_or_init(from_env)

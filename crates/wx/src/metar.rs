@@ -1,16 +1,19 @@
-//! METARs: surface observations at airports, coloured by flight category as dispatchers read them
-//! (VFR, MVFR, IFR, LIFR). The source is the Aviation Weather Center's bulk cache file, every
-//! station's latest report in one 0.25 MB download, refreshed every few minutes.
+//! METARs: surface observations at airports, coloured by flight category as dispatchers read them.
+//!
+//! The categories are VFR, MVFR, IFR and LIFR. The source is the Aviation Weather Center's bulk
+//! cache file, every station's latest report in one 0.25 MB download, refreshed every few minutes.
 //!
 //! History is not in that file, and the API's history is capped at 400 observations a request: one
 //! past hour over the US took 30 requests and 80 seconds (measured 2026-11-16). So history is what
 //! this app collected from the cache file while it ran, kept on disk.
 
+/// The Aviation Weather Center's bulk file: every station's latest METAR, gzipped CSV.
 pub const CACHE_URL: &str = "https://aviationweather.gov/data/cache/metars.cache.csv.gz";
 /// A station's report stands for this long after it was observed (METARs are hourly).
 pub const VALID_FOR: i64 = 75 * 60;
 
-/// 0 = not reported, 1 = VFR, 2 = MVFR, 3 = IFR, 4 = LIFR
+/// The flight category as a number: 0 = not reported (or unrecognised), 1 = VFR, 2 = MVFR, 3 = IFR,
+/// 4 = LIFR.
 pub fn category(s: &str) -> u8 {
     match s {
         "VFR" => 1,
@@ -21,13 +24,20 @@ pub fn category(s: &str) -> u8 {
     }
 }
 
+/// One station's report.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Metar {
+    /// The station's ICAO identifier (`KLAX`).
     pub id: String,
+    /// When it was observed, Unix seconds.
     pub time: i64,
+    /// Longitude, degrees east.
     pub lon: f64,
+    /// Latitude, degrees north.
     pub lat: f64,
+    /// The flight category as [`category`] numbers it.
     pub cat: u8,
+    /// The report as issued, trimmed.
     pub raw: String,
 }
 
@@ -52,8 +62,15 @@ fn fields(line: &str) -> Vec<String> {
     out
 }
 
-/// Every report in the cache file's CSV with a time and a position: the whole world. A file
-/// without the expected columns is an error; a row that cannot be read is skipped and counted.
+/// Every report in the cache file's CSV with a time and a position: the whole world.
+///
+/// A file without the expected columns is an error; a row that cannot be read (no position, no
+/// time, no station) is skipped and counted. Returns the reports and the number skipped.
+///
+/// # Errors
+///
+/// The text is empty, or the header lacks one of `raw_text`, `station_id`, `observation_time`,
+/// `latitude`, `longitude`, `flight_category`.
 pub fn parse_cache(csv: &str) -> Result<(Vec<Metar>, usize), String> {
     let mut lines = csv.lines();
     let header = fields(lines.next().ok_or("metar cache: empty")?);
@@ -96,8 +113,10 @@ pub fn parse_cache(csv: &str) -> Result<(Vec<Metar>, usize), String> {
     Ok((out, skipped))
 }
 
-/// Each station's report in force at `at`: its latest observed at or before `at`, and no older than
-/// [`VALID_FOR`]. `by_station` holds each station's reports, oldest first.
+/// Each station's report in force at `at` (Unix seconds).
+///
+/// That is its latest observed at or before `at`, and no older than [`VALID_FOR`]. `by_station`
+/// holds each station's reports, oldest first.
 pub fn at_time<'a>(by_station: impl Iterator<Item = &'a [Metar]>, at: i64) -> Vec<&'a Metar> {
     by_station
         .filter_map(|reports| {
@@ -195,7 +214,7 @@ mod tests {
         );
     }
 
-    /// The real file, when downloaded and unzipped: WX_METARS=metars.cache.csv
+    /// The real file, when downloaded and unzipped: `WX_METARS=metars.cache.csv`
     #[test]
     fn a_real_cache_file() {
         let Ok(path) = std::env::var("WX_METARS") else {

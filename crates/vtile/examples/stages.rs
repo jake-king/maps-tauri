@@ -1,7 +1,7 @@
 //! Time each stage of serving one mesh, per tile, for one zoom level: read (pread + gunzip, via
-//! Archive::tile), MVT decode, mesh build, serialization. Run alone, so the numbers are the floor
+//! `Archive::tile`), MVT decode, mesh build, serialization. Run alone, so the numbers are the floor
 //! the in-app handler can be compared against.
-//!   cargo run --release -p vtile --example stages -- data/basemap.pmtiles 14 [rounds]
+//! `cargo run --release -p vtile --example stages -- data/basemap.pmtiles 14 [rounds]`
 
 use std::path::Path;
 use std::time::Instant;

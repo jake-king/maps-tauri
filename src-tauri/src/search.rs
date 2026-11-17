@@ -8,7 +8,9 @@ use std::path::Path;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{json, Value};
 
+/// Results returned when the caller does not ask for a number.
 pub const DEFAULT_LIMIT: usize = 8;
+/// The most results one search returns; a larger request is clamped to this.
 pub const MAX_LIMIT: usize = 25;
 
 /// Exact folded-name match first, then the precomputed notability score, then the id so equal
@@ -21,8 +23,15 @@ SELECT p.id, p.name, p.lat, p.lon, p.fclass, p.fcode, p.country, p.admin1, p.pop
  ORDER BY (p.name_fold = ?2) DESC, p.score DESC, p.id ASC
  LIMIT ?3";
 
-/// Open the index read-only and immutable: nothing writes through this file while it is open
-/// (a rebuild replaces it whole), so SQLite may skip locking.
+/// Open the index read-only and immutable.
+///
+/// Nothing writes through this file while it is open (a rebuild replaces it whole), so SQLite may
+/// skip locking.
+///
+/// # Errors
+///
+/// SQLite's error when the file cannot be opened (missing or unreadable). A file that is not a
+/// database is only found out by the first query.
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     // a path in a URI: '%', '?' and '#' would start an escape, the query or a fragment
     let escaped = path
