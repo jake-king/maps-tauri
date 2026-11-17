@@ -4,6 +4,9 @@
 #   tools/forge-job.sh check   setup, then tools/check.sh (the gate the dev box runs before a commit)
 #   tools/forge-job.sh e2e     setup, unit tests, the release build, then the end-to-end checks on the
 #                              recorded tape in a virtual display (the Linux leg of platforms.yml)
+#   tools/forge-job.sh release for a pushed tag v<version>: the gate, the Debian package, then a forge
+#                              release holding it and its SHA256SUMS (RELEASE_DRY_RUN=1 builds, lists
+#                              what it would publish, and stops)
 # The runner mounts a directory that outlives jobs at $CI_CACHE: rustup, cargo, npm's cache and the
 # build tree are kept there, so only the first job builds from nothing. Without $CI_CACHE (a local
 # run through tools/ci-local.sh) everything stays in the container. The e2e job takes the fixtures
@@ -12,7 +15,22 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 job=${1:-}
-[[ $job == check || $job == e2e ]] || { echo "usage: tools/forge-job.sh check|e2e" >&2; exit 2; }
+[[ $job == check || $job == e2e || $job == release ]] || { echo "usage: tools/forge-job.sh check|e2e|release" >&2; exit 2; }
+
+if [[ $job == release ]]; then
+  # Before any setup, so a wrong tag fails in seconds. The tag names the version in tauri.conf.json:
+  # v<version> is a release, v<version>-<suffix> (v0.2.0-rc.1) a prerelease. The bare container has
+  # no python3 yet, hence sed.
+  conf=$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' src-tauri/tauri.conf.json)
+  [[ -n $conf ]] || { echo "forge-job: no version found in src-tauri/tauri.conf.json" >&2; exit 1; }
+  tag=${GITHUB_REF_NAME:-v$conf}
+  case ${tag#v} in
+    "$conf") prerelease=false ;;
+    "$conf"-?*) prerelease=true ;;
+    *) echo "forge-job: tag $tag does not name the app version $conf" >&2; exit 1 ;;
+  esac
+  [[ $tag == v* ]] || { echo "forge-job: tag $tag does not start with v" >&2; exit 1; }
+fi
 
 if [[ -n ${CI_CACHE:-} ]]; then
   c=$CI_CACHE/maps-tauri
@@ -31,10 +49,9 @@ export PATH=${CARGO_HOME:-$HOME/.cargo}/bin:$HOME/.local/bin:$PATH
 tools/ci-setup.sh
 tools/fetch-assets.sh
 
-if [[ $job == check ]]; then
-  npm ci --no-audit --no-fund
+gate() {
+  local out rc=0
   out=$(mktemp)
-  rc=0
   tools/check.sh | tee "$out" || rc=$?
   # the step logs stay in the container, so a failed step's tail is printed here
   if ((rc)); then
@@ -43,15 +60,68 @@ if [[ $job == check ]]; then
       tail -n 60 "$log"
     done
   fi
-  exit "$rc"
+  return "$rc"
+}
+wasm_pack() {
+  if [[ $(wasm-pack --version 2>/dev/null) != "wasm-pack 0.15.1" ]]; then
+    cargo install wasm-pack --version 0.15.1 --locked
+  fi
+}
+
+if [[ $job == check ]]; then
+  npm ci --no-audit --no-fund
+  gate
+  exit
+fi
+
+if [[ $job == release ]]; then
+  wasm_pack
+  npm ci --no-audit --no-fund
+  gate
+  npx tauri build --bundles deb
+  out=logs/release
+  rm -rf "$out"
+  mkdir -p "$out"
+  cp target/release/bundle/deb/*.deb "$out/"
+  (cd "$out" && sha256sum -- *.deb >SHA256SUMS)
+  echo "forge-job: $tag (prerelease $prerelease):"
+  (cd "$out" && ls -l && cat SHA256SUMS)
+  if [[ ${RELEASE_DRY_RUN:-} == 1 ]]; then
+    echo "forge-job: RELEASE_DRY_RUN=1, nothing published"
+    exit 0
+  fi
+  # The release is created as a draft, filled, then published, so a failed upload never leaves a
+  # public release with half its files. A tag that already has a release fails here: delete that
+  # release on the forge to build it again. The job's token is accepted by the API (measured).
+  api=$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY
+  auth() { printf 'Authorization: token %s\n' "${TOKEN:?}"; }
+  python3 - "$tag" "$GITHUB_SHA" "$prerelease" >"$out/create.json" <<'EOF'
+import json, sys
+tag, sha, pre = sys.argv[1:]
+print(json.dumps({"tag_name": tag, "target_commitish": sha, "name": f"maps-tauri {tag}",
+                  "body": open(".github/release-notes.md").read(), "draft": True,
+                  "prerelease": pre == "true"}))
+EOF
+  code=$(auth | curl -sS -H @- -H 'Content-Type: application/json' --data-binary @"$out/create.json" \
+    -o "$out/release.json" -w '%{http_code}' -X POST "$api/releases")
+  [[ $code == 201 ]] || { echo "forge-job: creating the release answered $code" >&2; cat "$out/release.json" >&2; exit 1; }
+  id=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["id"])' "$out/release.json")
+  for f in "$out"/*.deb "$out/SHA256SUMS"; do
+    code=$(auth | curl -sS -H @- -F "attachment=@$f" -o "$out/asset.json" -w '%{http_code}' \
+      "$api/releases/$id/assets?name=$(basename "$f")")
+    [[ $code == 201 ]] || { echo "forge-job: uploading $(basename "$f") answered $code" >&2; cat "$out/asset.json" >&2; exit 1; }
+  done
+  code=$(auth | curl -sS -H @- -H 'Content-Type: application/json' -d '{"draft": false}' \
+    -o "$out/release.json" -w '%{http_code}' -X PATCH "$api/releases/$id")
+  [[ $code == 200 ]] || { echo "forge-job: publishing the release answered $code" >&2; cat "$out/release.json" >&2; exit 1; }
+  echo "forge-job: published $(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["html_url"])' "$out/release.json")"
+  exit 0
 fi
 
 sudo=
 [[ $(id -u) == 0 ]] || sudo=sudo
 $sudo apt-get install -y -q --no-install-recommends xvfb libgl1-mesa-dri
-if [[ $(wasm-pack --version 2>/dev/null) != "wasm-pack 0.15.1" ]]; then
-  cargo install wasm-pack --version 0.15.1 --locked
-fi
+wasm_pack
 npm ci --no-audit --no-fund
 cargo test --workspace --locked
 npm test
