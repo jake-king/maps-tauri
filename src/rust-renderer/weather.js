@@ -508,7 +508,11 @@ export class WeatherLayer {
 
   async refreshOnce() {
     const gen = this.gen;
-    this.state = await invoke("wx_state", { at: this.at });
+    const state = await invoke("wx_state", { at: this.at });
+    // the time changed while this was on its way: the rerun already queued for the new time (setTime
+    // -> refresh) does the work; this state, and what it would fetch, belong to the old one
+    if (this.gen !== gen) return;
+    this.state = state;
     if (this.metarOn) {
       const m = await invoke("wx_metars", { at: this.at });
       if (this.gen === gen) this.metars = m;
@@ -517,16 +521,15 @@ export class WeatherLayer {
     this.onChange?.(this.state);
     this.map.triggerRepaint();
     // the wind field alongside the radar and satellite, not ahead of them: NOMADS can be slow
-    await Promise.all([this.sync(), this.syncWind(gen), this.syncSigmets(gen)]);
+    await Promise.all([this.sync(gen), this.syncWind(gen), this.syncSigmets(gen)]);
     this.onChange?.(this.state);
   }
 
   /** The selection's radar frames (newest first) and satellite image, fetched from Rust one at a time
    *  and put on the GPU inside a frame. Nothing here touches WebGL outside a frame. */
-  async sync() {
+  async sync(gen = this.gen) {
     const s = this.state;
-    if (!s) return;
-    const gen = this.gen;
+    if (!s || this.gen !== gen) return;
     const sel = s.selection;
     const jobs = [];
     if (this.satOn && sel.satellite != null && !this.sats.has(sel.satellite)) jobs.push(["s", sel.satellite, 400]);

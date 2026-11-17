@@ -141,6 +141,26 @@ The benchmarks (`tools/bench.sh`, `tools/zoombench.sh`, `tools/stress.sh`) and t
 gates (`tools/offline.sh` for the content security policy, `tools/cache.sh` for the disk cache)
 are described at the top of each script. F4 in the app opens the profiler overlay.
 
+## CI on each platform
+
+Tauri draws with each platform's own web view: WebKitGTK on Linux, WKWebView on macOS, WebView2
+(Chromium) on Windows. The renderer is WebGL2, where engines differ most, so it is tested in each.
+
+- `ci.yml`, every push: `tools/check.sh` on Linux (format, lint, unit tests, decoder checks).
+- `platforms.yml`, nightly, on demand and on a version tag: on Linux, macOS and Windows, the unit
+  tests, the release build, then the app's self-driving end-to-end run (`MAPS_BENCH=1`) judged by
+  `tools/e2e_check.py`. NOAA's answers come from a recorded tape (`MAPS_TAPE_REPLAY`, `wx::tape`):
+  every platform draws the same data, with no network, and a request not on the tape is an error
+  naming its URL. The tape and the map archive are a release asset pinned by sha256
+  (`tools/fixtures.py`, `tools/fixtures.lock`). Speed limits apply only on the dev box; the runners
+  draw WebGL in software, so CI checks correctness. Each platform's snapshots are then compared with
+  Linux's in 8 px blocks (`tools/compare_snapshots.py`, limits in `tools/snapshot-limits.json`), and
+  the difference maps uploaded. A job also builds for the iOS simulator.
+- `release.yml`, a version tag: the Linux package.
+
+Run the same end to end anywhere with `python3 tools/e2e.py --tape fixtures/tape`, and make a new
+tape with `--record DIR`.
+
 ## Licence
 
 Code: MIT or Apache-2.0, at your option. Map data © OpenStreetMap contributors (ODbL), basemap

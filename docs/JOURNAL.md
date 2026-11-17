@@ -1336,3 +1336,40 @@ satellite and global images, SIGMETs) into its caches, so after the first round 
 costs anything. Play still asks for every step, but from memory; it starts once its first three are
 in and keeps buffering ahead. From an empty cache, Play pressed about a minute after launch buffered
 94 ms. The gate fails over 2 s.
+
+## The same checks on every platform
+
+Tauri uses each platform's web view (WebKitGTK, WKWebView, WebView2), and the renderer leans on the
+WebGL2 features engines differ in. The app already drives itself and reports one `[bench]` line, so
+the plan is to run that same run on each platform and judge it the same way.
+
+A run against live NOAA is not repeatable, so the HTTP layer gained a tape (`wx::tape`): with
+`MAPS_TAPE_RECORD` every response is saved under a hash of its URL; with `MAPS_TAPE_REPLAY` they are
+answered from it alone and the app's clock starts at the recorded time and runs on. Everything NOAA
+goes through one `get`, so one change covers radar, satellite, hazards, SIGMETs, winds and METARs.
+A recorded run is 83 responses, 69 MB. Replayed inside a network namespace with no network at all,
+the whole weather and wind-motion check passed, with no request missing from the tape. With the
+satellite capabilities removed from a copy of the tape, it failed and named the URL.
+
+The checks moved from heredocs in `weather.sh` into `tools/e2e_check.py`, plain Python so they run
+on Windows; planted defects in a real report (blank frames, a slow buffer, a wrong popup) each
+failed it, and `--no-timing` drops only the speed limits. `tools/e2e.py` runs the app and the checks
+on any platform.
+
+Snapshots: two Linux runs of the same tape differ by 0 in the views without wind particles and by
+up to 18% of 8 px blocks in the views with them (the particles are random), so only the weather
+views are compared across platforms; their limits are guesses until the first macOS and Windows runs.
+
+Found on the way: the `wasm` npm script set PATH with POSIX shell syntax, which npm on Windows runs
+through cmd.exe. It is a small Node launcher now.
+
+Not proven here: macOS, Windows and iOS. Their first runs are on GitHub, after a push.
+
+The first run of the Linux leg in a clean Ubuntu 24.04 container, under Xvfb with software GL,
+passed everything but one check: one texture uploaded for a time abandoned mid-load. A real race,
+which the dev box's speed hid. `refreshOnce` read the generation, awaited the state for the old time,
+then stored that state anyway, and `sync()` read the generation afresh, so the old time's images
+went through the guard. On the dev box `wx_state` answers within the 30 ms between the two picks; on
+software GL it does not. It now drops a state whose generation is stale and passes the generation it
+started with into `sync`. A unit test with a fake backend whose answer for the first time is slow
+reproduces it (red on the old code: the abandoned time's satellite image uploaded), green on the fix.
