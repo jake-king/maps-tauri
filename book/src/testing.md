@@ -21,11 +21,29 @@ The whole-data steps skip, saying why, when their data is absent (it is not in t
 
 A check is trusted only after it has been seen to fail. Each gate step, and most test groups, were
 proven by planting a defect and watching it go red; a planted defect that survives is treated as a
-finding about the test. When coverage was first measured (`tools/coverage.sh`, nightly `llvm-cov`),
-Rust unit tests covered 49% of lines. The tests written to close that gap took four files to 99-100%,
+finding about the test. When coverage was first measured (`tools/coverage.sh`, `llvm-cov`), Rust
+unit tests covered 49% of lines. The tests written to close that gap took four files to 99-100%,
 caught 69 of 72 planted defects (the other three are equivalent or unreachable), and found seven real
 bugs, among them a corrupt PMTiles directory that panicked a debug build and wrapped silently in
 release.
+
+### Coverage
+
+`tools/coverage.sh` measures line coverage of the Rust unit and integration tests (source-based,
+`-C instrument-coverage`, read with `llvm-cov` from the gate's own toolchain) and of the frontend's
+Node tests. CI runs it on every push as its own job, and fails if either total falls below the floor
+in `tools/coverage-floor.txt`, which only ever moves up. When this was written: Rust 80.6% of lines,
+JavaScript 73.5%. The figure understates what is exercised: the decoder diff, the whole-archive mesh
+check, search parity and the end-to-end tape are not instrumented. The files at 0% are the app's
+start-up, the network fetchers, the WebAssembly bindings and the generated palette.
+
+The [coverage report](coverage/index.html), line by line, is published with each release beside this
+book.
+
+An earlier version of the script found its test binaries by listing the build directory, which also
+held binaries from older builds. `llvm-cov` then reported "mismatched data" and dropped the affected
+functions: four files read 31-60% instead of 63-100%. It now takes the binaries
+cargo reports for the build it just ran.
 
 ### Documentation is part of the gate
 
@@ -53,8 +71,23 @@ and a hang in `xvfb-run`'s ready signal, now avoided by starting Xvfb and waitin
 
 ## CI
 
+```mermaid
+flowchart LR
+  push["branch push"] --> check["check<br/>tools/check.sh"]
+  check --> e2e["linux-e2e<br/>release build, recorded tape, Xvfb"]
+  check --> cov["coverage<br/>llvm-cov and Node, with a floor"]
+  e2e --> verdict["verdict<br/>one event on a notification topic"]
+  cov --> verdict
+  check --> verdict
+  tag["tag v*"] --> vcheck["release: tag names the version?"]
+  vcheck --> rgate["gate, .deb, coverage, docs site"]
+  rgate --> draft["draft release<br/>.deb, docs tarball, SHA256SUMS"]
+  draft --> pub["published"]
+```
+
 Development happens on a self-hosted Forgejo forge, whose CI runs on every branch push: the gate,
-then the Linux end-to-end leg, each in a bare Ubuntu 24.04 container. The job logic lives in
+then the Linux end-to-end leg and the coverage job side by side, each in a bare Ubuntu 24.04
+container. The job logic lives in
 `tools/forge-job.sh`, so a job runs the same way in a local container (`tools/ci-local.sh`). The
 runner keeps rustup, cargo, npm's cache and the build tree between jobs, so with the cache warm the
 gate takes about two minutes and the end-to-end leg about three, including the release build.

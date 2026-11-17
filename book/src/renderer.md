@@ -3,6 +3,20 @@
 The pipeline: PMTiles archive → vector tile decode → meshes and labels (all Rust, in `crates/vtile`)
 → a binary response on `tiles://` → upload and draw (WebGL2, in `src/rust-renderer`).
 
+```mermaid
+flowchart LR
+  arch[("PMTiles archive")] --> pm
+  subgraph rust["Rust: crates/vtile, on the blocking pool"]
+    pm["pmtiles.rs<br/>directory lookup, gunzip"] --> mvt["mvt.rs<br/>layers, features, geometry"]
+    mvt --> mesh["mesh.rs<br/>fills: earcut<br/>lines: miter strips<br/>label anchors, palette indices"]
+  end
+  mesh -- "wire format v5<br/>tiles://localhost/mesh/z/x/y" --> ren
+  subgraph web["Web view"]
+    ren["renderer.js<br/>upload, stencil clip<br/>two draw calls a tile"] --> lab["labels.js<br/>collision, curved names<br/>2D canvas"]
+    loop["loop.js: one frame loop"] -.-> ren
+  end
+```
+
 ## Reading and decoding
 
 `pmtiles.rs` and `mvt.rs` are hand-rolled: each format is a few pages of spec, and owning the

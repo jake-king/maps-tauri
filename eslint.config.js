@@ -5,7 +5,7 @@ import globals from "globals";
 
 export default [
   // logs/ holds scratch files and run output, never source
-  { ignores: ["dist/", "node_modules/", "src/wasm/", "target/", "src-tauri/target/", "src-tauri/gen/", "logs/", "book/book/"] },
+  { ignores: ["dist/", "node_modules/", "src/wasm/", "target/", "src-tauri/target/", "src-tauri/gen/", "logs/", "book/book/", "book/mermaid.min.js", "book/mermaid-init.js"] },
   js.configs.recommended,
   {
     files: ["src/**/*.js"],

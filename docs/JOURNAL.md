@@ -1482,3 +1482,40 @@ the book at its root.
 
 A release now also carries `maps-tauri-docs-<tag>.tar.gz`, the same site, listed in SHA256SUMS.
 mdBook is pinned (0.5.4) and installed by `tools/ci-setup.sh`, like the other tools CI needs.
+
+## Coverage in CI, and architecture diagrams
+
+**Coverage.** `tools/coverage.sh` existed but ran only by hand. It now uses the gate's own toolchain
+(stable 1.99.1 with its `llvm-tools` component, not nightly), and CI runs it on every push as a job
+beside the end-to-end leg, with a floor in `tools/coverage-floor.txt` (Rust 80%, JavaScript 73% of
+lines) that only moves up. The HTML report is part of the documentation site and so of every release.
+
+Three things were wrong with the numbers before they could be trusted:
+
+- The script found test binaries by listing the build directory, which also held binaries from older
+  builds. `llvm-cov` reported "17 functions have mismatched data" and dropped them, and four of the
+  most tested files read 31-60% instead of 63-100% (`mvt.rs` 51% -> 100%, `pmtiles.rs` 59% -> 99%,
+  `search.rs` 51% -> 100%, `mesh.rs` 31% -> 63%). The binaries now come from cargo's own report of
+  the build. Three mismatches remain and are expected: `coords` and the app crate are compiled twice
+  (their own unit-test binary, and the library their integration tests link), differently under
+  `cfg(test)`.
+- The report embedded absolute source paths, which would have published the dev box's home directory
+  in every release. Paths are now remapped to the repository root at build time.
+- On the runner the first CI run failed its floor at 6.14%. The exclusion pattern `\.cargo` assumed
+  cargo's registry lives in `~/.cargo`; on the runner it is under the job cache, so every dependency
+  was counted. With the paths remapped, the workspace's files are the only relative ones, so the
+  report now ignores every absolute path: no list of where other code lives. The floor caught this on
+  its first run, which is what it is for.
+
+The floor was proven both ways: set above the real totals it fails naming both; at the real floor it
+passes.
+
+**Diagrams.** The book has five Mermaid diagrams: the process and its data, the crate graph, the
+native render pipeline, the weather flow, and CI and releases. The crate graph is generated from
+`cargo metadata` (`tools/crate_graph.py`) and the gate fails if it is stale. Mermaid draws in the
+browser, so a syntax error would build cleanly; `tools/mermaid_check.mjs` parses every diagram with
+the same Mermaid the pages load (11.17.2, from `package.json`, served in place of the older copy
+`mdbook-mermaid` bundles), under jsdom because Mermaid sanitises HTML labels with DOMPurify. A planted
+syntax error in a chapter and in the generated include each fail it. The pages were rendered in
+headless Chromium and looked at: the first layout of the system diagram read as a chain of data
+stores, and was regrouped.

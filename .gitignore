@@ -13,3 +13,6 @@ __pycache__/
 
 # the book as mdBook builds it (tools/docs.sh)
 /book/book
+# generated at build by tools/docs.sh (mdbook-mermaid install, node_modules/mermaid)
+/book/mermaid.min.js
+/book/mermaid-init.js

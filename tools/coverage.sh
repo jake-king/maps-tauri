@@ -53,7 +53,11 @@ while IFS= read -r f; do
   if ((${#objs[@]} == 0)); then objs=("$f"); else objs+=(-object "$f"); fi
 done <"$RUN/binaries"
 ((${#objs[@]})) || { echo "coverage: cargo reported no test binaries" >&2; exit 1; }
-cov=("${objs[@]}" -instr-profile="$RUN/all.profdata" --ignore-filename-regex='(\.cargo|rustc|/target/|/tests/)')
+# Only the workspace's own files are reported. Their paths were remapped to relative ones at build
+# time; everything else (dependencies wherever cargo keeps its registry, the standard library) keeps
+# an absolute path, so the rule needs no list of where those live. An earlier pattern, `\.cargo`,
+# missed CI's registry under the runner's cache and counted every dependency: 6% instead of 81%.
+cov=("${objs[@]}" -instr-profile="$RUN/all.profdata" --ignore-filename-regex='^/|(^|/)tests/')
 
 echo "Rust (unit and integration tests; line coverage)"
 "$BIN/llvm-cov" report -use-color=false "${cov[@]}" >"$RUN/report.txt" 2>"$RUN/report.err"

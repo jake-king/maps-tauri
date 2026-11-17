@@ -16,6 +16,41 @@ the backend is the `src-tauri` crate, with the work split into three library cra
 `main.rs` only calls `maps_tauri_lib::run`, which opens the tile archive, the gazetteer and the
 weather sources, registers the commands and the scheme, and runs the event loop.
 
+```mermaid
+flowchart LR
+  subgraph app["maps-tauri: one process"]
+    subgraph webview["Web view: WebKitGTK, WKWebView or WebView2"]
+      ui["Frontend, JavaScript built with Vite<br/>MapLibre or the native WebGL2 renderer<br/>labels, time bar, search box with coords in WebAssembly"]
+    end
+    subgraph core["Rust core: src-tauri"]
+      scheme["tiles:// scheme<br/>the archive with Range, meshed tiles"]
+      cmds["Commands<br/>search, archive_info, wx_*"]
+      cache["Disk cache<br/>planet byte ranges, SQLite"]
+    end
+  end
+  ui -- "tiles://localhost/..." --> scheme
+  ui -- "invoke over IPC" --> cmds
+  cmds -- "events: a frame or forecast hour arrived" --> ui
+  subgraph data["Data the web view cannot reach"]
+    local[("Local PMTiles extract")]
+    planet[("Planet PMTiles<br/>HTTP Range requests")]
+    gaz[("GeoNames FTS5 index")]
+    noaa[("NOAA and AWC services")]
+  end
+  scheme --> local
+  scheme --> cache --> planet
+  cmds --> gaz
+  cmds --> noaa
+```
+
+The crates and their direct dependencies, generated from `cargo metadata` by `tools/crate_graph.py`
+(the gate fails if this drawing and the manifests disagree; a dashed edge is an optional dependency,
+behind a feature):
+
+```mermaid
+{{#include crates.mmd}}
+```
+
 ## How the webview gets data
 
 The webview never touches the filesystem or the network directly. It has two ways in, both served

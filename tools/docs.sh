@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 # The documentation site: the book (book/, mdBook) at the root and the API reference (rustdoc, every
 # crate) under api/, as the book's last chapter links it. Both build with warnings fatal, as in the
-# gate, and every link in the book resolves. Writes target/site/ and, with --archive, target/maps-tauri-docs.tar.gz.
+# gate, the diagrams are checked, and every link in the book resolves. Writes target/site/ and, with --archive, target/maps-tauri-docs.tar.gz.
 #   tools/docs.sh [--archive]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # cargo-installed tools (mdbook) live in cargo's bin, which a login shell may not have on PATH
 export PATH=${CARGO_HOME:-$HOME/.cargo}/bin:$PATH
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked -q
+# the diagrams: the crate graph matches the manifests, and every diagram parses with the Mermaid
+# the pages render with
+python3 tools/crate_graph.py --check
+node tools/mermaid_check.mjs
+# mdbook-mermaid's init script, then our pinned Mermaid in place of the one it bundles (book.toml)
+mdbook-mermaid install book >/dev/null 2>&1   # its rc still stops the build
+cp node_modules/mermaid/dist/mermaid.min.js book/mermaid.min.js
 # book.toml sets create-missing = false, so a chapter SUMMARY.md names but nobody wrote fails here
 # rather than being created empty
 mdbook build book

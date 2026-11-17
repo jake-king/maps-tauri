@@ -5,6 +5,21 @@ Weather Center's Graphical Forecasts for Aviation (GFA) does. Nothing is fetched
 layer's box is ticked, so the benchmarks and the offline gate stay offline. All fetching is in Rust,
 so the content security policy did not change.
 
+```mermaid
+flowchart LR
+  noaa[("NOAA and AWC")] -- "HTTP, from Rust only" --> fetch["wx::fetch<br/>through wx::tape: record or replay"]
+  fetch --> grib["wx::grib"]
+  grib --> radar["wx::radar<br/>one byte a cell"]
+  grib --> wind["wx::wind"]
+  fetch --> sat["wx::satellite"]
+  fetch --> metar["wx::metar"]
+  fetch --> sig["wx::sigmet"]
+  fetch --> hz["wx::hazards"]
+  radar & wind & sat & metar & sig & hz --> app["src-tauri weather.rs<br/>caches, last good copy"]
+  tl["wx::timeline<br/>what to show at a time"] --> app
+  app -- "commands and events" --> ui["Frontend<br/>textures, outlines, time bar"]
+```
+
 ## Sources, decoded in Rust
 
 Every source was fetched and read before any code was written; three design decisions came from that

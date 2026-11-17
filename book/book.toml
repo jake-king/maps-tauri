@@ -5,4 +5,16 @@ language = "en"
 src = "src"
 
 [build]
+# a chapter SUMMARY.md names but nobody wrote fails the build instead of being created empty
 create-missing = false
+
+# Mermaid diagrams. tools/docs.sh runs `mdbook-mermaid install` (pinned in tools/ci-setup.sh) for
+# mermaid-init.js, then serves node_modules/mermaid's build (pinned in package.json) as
+# mermaid.min.js, the version tools/mermaid_check.mjs parses every diagram with. Neither file is
+# committed. after = links: {{#include}} lines are expanded before the diagrams are found.
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+after = ["links"]
+
+[output.html]
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
