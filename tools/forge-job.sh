@@ -36,10 +36,12 @@ if [[ $job == check ]]; then
   rc=0
   tools/check.sh | tee "$out" || rc=$?
   # the step logs stay in the container, so a failed step's tail is printed here
-  grep -o 'logs/check-[A-Za-z0-9_.-]*\.log' "$out" | while read -r log; do
-    echo "==== $log (last 60 lines)"
-    tail -n 60 "$log"
-  done
+  if ((rc)); then
+    for log in $(grep -o 'logs/check-[A-Za-z0-9_.-]*\.log' "$out" || true); do
+      echo "==== $log (last 60 lines)"
+      tail -n 60 "$log"
+    done
+  fi
   exit "$rc"
 fi
 
