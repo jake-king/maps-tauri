@@ -1,0 +1,3 @@
+# The coverage floor, in percent of lines: Rust, then JS. tools/coverage.sh --floor fails below
+# it. It only moves up, by an edit that says why.
+80 73

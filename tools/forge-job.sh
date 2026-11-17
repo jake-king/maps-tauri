@@ -4,6 +4,8 @@
 #   tools/forge-job.sh check   setup, then tools/check.sh (the gate the dev box runs before a commit)
 #   tools/forge-job.sh e2e     setup, unit tests, the release build, then the end-to-end checks on the
 #                              recorded tape in a virtual display (the Linux leg of platforms.yml)
+#   tools/forge-job.sh coverage setup, then tools/coverage.sh with its floor, the HTML report kept in
+#                              target/coverage for the docs site
 #   tools/forge-job.sh release for a pushed tag v<version>: the gate, the Debian package, then a forge
 #                              release holding it, the documentation site (book + API reference) as a
 #                              tarball, and their SHA256SUMS (RELEASE_DRY_RUN=1 builds, lists what it
@@ -16,7 +18,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 job=${1:-}
-[[ $job == check || $job == e2e || $job == release ]] || { echo "usage: tools/forge-job.sh check|e2e|release" >&2; exit 2; }
+[[ $job == check || $job == e2e || $job == coverage || $job == release ]] || { echo "usage: tools/forge-job.sh check|e2e|coverage|release" >&2; exit 2; }
 
 if [[ $job == release ]]; then
   # Before any setup, so a wrong tag fails in seconds. The tag names the version in tauri.conf.json:
@@ -35,6 +37,7 @@ fi
 
 if [[ -n ${CI_CACHE:-} ]]; then
   c=$CI_CACHE/maps-tauri
+  export COV_DIR=$c/cov
   mkdir -p "$c/rustup" "$c/cargo" "$c/npm" "$c/target"
   export RUSTUP_HOME=$c/rustup CARGO_HOME=$c/cargo npm_config_cache=$c/npm
   # The scripts name ./target, so the kept build tree is linked there. The runner's disk is shared
@@ -75,6 +78,12 @@ if [[ $job == check ]]; then
   exit
 fi
 
+if [[ $job == coverage ]]; then
+  npm ci --no-audit --no-fund
+  tools/coverage.sh --floor --html target/coverage
+  exit
+fi
+
 if [[ $job == release ]]; then
   wasm_pack
   npm ci --no-audit --no-fund
@@ -84,6 +93,8 @@ if [[ $job == release ]]; then
   rm -rf "$out"
   mkdir -p "$out"
   cp target/release/bundle/deb/*.deb "$out/"
+  # the coverage report goes into the documentation site (tools/docs.sh picks up target/coverage)
+  tools/coverage.sh --floor --html target/coverage
   tools/docs.sh --archive
   cp target/maps-tauri-docs.tar.gz "$out/maps-tauri-docs-$tag.tar.gz"
   (cd "$out" && sha256sum -- *.deb *.tar.gz >SHA256SUMS)

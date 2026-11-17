@@ -4,7 +4,8 @@ element with that id. mdBook 0.5 checks none of this and exits 0 over a broken l
 
     python3 tools/linkcheck.py SITE_DIR      exit 0 all resolve · 1 any does not · 2 usage
 
-Only the book's pages are scanned (not api/, whose links rustdoc's own lints check).
+Only the book's pages are scanned: api/ (rustdoc, whose own lints check its links) and coverage/
+(llvm-cov's generated report) are targets of links, not sources of them.
 """
 
 import html.parser
@@ -20,8 +21,9 @@ class Page(html.parser.HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
-        if a.get("id"):
-            self.ids.add(a["id"])
+        for key in ("id", "name"):
+            if a.get(key):
+                self.ids.add(a[key])
         for key in ("href", "src"):
             if a.get(key):
                 self.links.append(a[key])
@@ -46,7 +48,7 @@ def main():
     site = os.path.realpath(sys.argv[1])
     bad, pages, links = [], 0, 0
     for root, dirs, files in os.walk(site):
-        if os.path.relpath(root, site).split(os.sep)[0] == "api":
+        if os.path.relpath(root, site).split(os.sep)[0] in ("api", "coverage"):
             dirs[:] = []
             continue
         for name in files:

@@ -18,6 +18,14 @@ cp -r book/book/. target/site/
 # for this site opened from the archive or served under a path
 rm -f target/site/404.html
 cp -r target/doc target/site/api
+# the test coverage report, when tools/coverage.sh --html target/coverage has made one (CI and every
+# release do); otherwise a page that says how to make it, so the book's link always resolves
+if [[ -f target/coverage/index.html ]]; then
+  cp -r target/coverage target/site/coverage
+else
+  mkdir -p target/site/coverage
+  printf '%s\n' '<!doctype html><title>Coverage</title><p>Not built here: run <code>tools/coverage.sh --html target/coverage</code>, then <code>tools/docs.sh</code>.</p>' >target/site/coverage/index.html
+fi
 # every API page the book links to must exist in what was built
 for crate in coords vtile wx maps_tauri_lib; do
   [[ -f target/site/api/$crate/index.html ]] || { echo "docs: no API reference for $crate" >&2; exit 1; }
