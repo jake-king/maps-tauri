@@ -1416,3 +1416,22 @@ Also caught before the first push: the log-tail step meant to print a failed che
 over a passing run, found nothing, exited 1, and under `pipefail` failed a passing gate. With a
 planted formatting error the job now goes red and prints each failed step's log; on a clean tree it
 is green.
+
+## Releases on the forge
+
+A version tag on the forge now runs `.forgejo/workflows/release.yml`: the gate, `tauri build --bundles
+deb`, then a forge release holding the package and its SHA256SUMS (`tools/forge-job.sh release`). The tag
+must name the version in `tauri.conf.json`; `v0.1.0-rc.1` style tags publish a prerelease. The check is
+done with `sed` before any setup, so a wrong tag fails in seconds rather than after a build.
+
+One premise was measured first: the job's token, refused by the forge's web downloads, is accepted for
+release writes through the API. A throwaway job created a draft release, uploaded a file, and deleted
+both (201, 201, 204). The release is created as a draft, filled, then published, so a failed upload
+never leaves a public release with half its files.
+
+`ci.yml` now runs on branch pushes only. A tag push used to start it as well, which would have run the
+gate twice and put two builds on the shared cache directory at once.
+
+Proven both ways: a `v9.9.9-rc.1` tag failed at the version check and started no CI run; `v0.1.0-rc.1`
+passed the gate and published a prerelease whose `.deb` (12 MiB, `maps-tauri 0.1.0`, depends on
+libwebkit2gtk-4.1 and GTK 3) downloads and matches its SHA256SUMS.

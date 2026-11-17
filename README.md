@@ -160,7 +160,9 @@ Tauri draws with each platform's own web view: WebKitGTK on Linux, WKWebView on 
 
 Day to day the project is developed on a self-hosted Forgejo forge, whose CI runs on every push: the
 gate and the Linux end-to-end leg, each in a bare Ubuntu 24.04 container (`tools/forge-job.sh`, the
-same steps locally). That workflow is specific to the forge and is not part of this copy.
+same steps locally). A version tag there runs the gate, builds the Debian package and publishes it,
+with its SHA256SUMS, as a forge release (`tools/forge-job.sh release`). Those workflows are specific to
+the forge and are not part of this copy.
 
 Run the same end to end anywhere with `python3 tools/e2e.py --tape fixtures/tape`, and make a new
 tape with `--record DIR`.
