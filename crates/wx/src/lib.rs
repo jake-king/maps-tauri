@@ -18,5 +18,6 @@ pub mod metar;
 pub mod radar;
 pub mod satellite;
 pub mod sigmet;
+pub mod tape;
 pub mod timeline;
 pub mod wind;

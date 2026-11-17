@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "wasm": "PATH=\"$HOME/.cargo/bin:$PATH\" wasm-pack build crates/coords --release --target web --out-dir ../../src/wasm --no-pack -- --features wasm",
+    "wasm": "node tools/wasm.mjs",
     "dev": "npm run wasm && vite",
     "build": "npm run wasm && vite build",
     "tauri": "tauri",

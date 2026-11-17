@@ -1,0 +1,129 @@
+# The app on each platform's own web view: WebKitGTK (Linux), WKWebView (macOS), WebView2 (Windows).
+# Each builds the release app, runs the unit tests, then runs the app's self-driving end-to-end checks
+# against a recorded tape of NOAA's answers (tools/fixtures.py, wx::tape), so every platform draws
+# the same data with no network. Speed limits are dropped (--no-timing): the runners draw WebGL in
+# software. Then each platform's snapshots are compared with Linux's (tools/compare_snapshots.py).
+# The iOS job builds for the simulator only. Nightly and on demand: macOS minutes cost more, and
+# tools/check.sh on every push (ci.yml) is the fast gate.
+name: platforms
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+concurrency:
+  group: platforms-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries (Linux), and a virtual display with software GL
+        if: runner.os == 'Linux'
+        run: |
+          tools/ci-setup.sh
+          sudo apt-get install -y -q --no-install-recommends xvfb libgl1-mesa-dri
+      - name: Rust toolchain (rust-toolchain.toml)
+        if: runner.os != 'Linux'
+        run: rustup toolchain install
+      - name: Protomaps glyphs and sprites (pinned)
+        run: tools/fetch-assets.sh
+      - name: wasm-pack
+        run: cargo install wasm-pack --version 0.15.1 --locked
+      - run: npm ci --no-audit --no-fund
+      - name: Unit tests
+        run: |
+          cargo test --workspace --locked
+          npm test
+      - name: Build
+        run: npx tauri build --no-bundle
+      - name: Fixtures (pinned by sha256 in tools/fixtures.lock)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          read -r release file < <(python -c 'import json; l=json.load(open("tools/fixtures.lock")); print(l["release"], l["file"])')
+          gh release download "$release" --pattern "$file" --dir "$RUNNER_TEMP"
+          python tools/fixtures.py unpack "$RUNNER_TEMP/$file"
+      - name: End to end, on the tape
+        run: |
+          if [[ $RUNNER_OS == Linux ]]; then
+            # WebKitGTK's DMA-BUF renderer needs a GPU; Xvfb has none
+            export WEBKIT_DISABLE_DMABUF_RENDERER=1
+            xvfb-run -a -s "-screen 0 1280x900x24" python tools/e2e.py --tape fixtures/tape --no-timing --out e2e-out
+          else
+            python tools/e2e.py --tape fixtures/tape --no-timing --out e2e-out
+          fi
+      - name: Snapshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-${{ runner.os }}
+          path: e2e-out/
+          if-no-files-found: warn
+
+  compare:
+    needs: desktop
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: e2e
+      - name: Each platform against Linux
+        run: |
+          rc=0
+          for os in macOS Windows; do
+            echo "== $os"
+            python3 tools/compare_snapshots.py e2e/e2e-Linux "e2e/e2e-$os" \
+              --limits tools/snapshot-limits.json --diff-dir "diff/$os" || rc=1
+          done
+          exit $rc
+      - name: Difference maps
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-diffs
+          path: diff/
+          if-no-files-found: ignore
+
+  ios-simulator:
+    # A build for the iOS simulator: proves the Rust backend and the frontend compile for iOS. The
+    # Xcode project is generated in the job (tauri ios init), not kept in the repo. Allowed to fail
+    # until its first green run; the interface is not yet adapted to touch.
+    runs-on: macos-14
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup toolchain install && rustup target add aarch64-apple-ios-sim
+      - run: tools/fetch-assets.sh
+      - run: cargo install wasm-pack --version 0.15.1 --locked
+      - run: npm ci --no-audit --no-fund
+      - run: npx tauri ios init --ci
+      - run: npx tauri ios build --target aarch64-sim --debug --ci

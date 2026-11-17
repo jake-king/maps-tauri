@@ -23,13 +23,22 @@ pub fn agent() -> ureq::Agent {
         .into()
 }
 
+/// Every request goes through here: answered from the tape when replaying, kept on it when recording
+/// (crate::tape).
 fn get(agent: &ureq::Agent, url: &str, max: usize) -> Result<Vec<u8>, String> {
+    let tape = crate::tape::global();
+    if let Some(r) = tape.replay(url) {
+        return r;
+    }
     let mut r = agent.get(url).call().map_err(|e| format!("{url}: {e}"))?;
-    r.body_mut()
+    let body = r
+        .body_mut()
         .with_config()
         .limit(max as u64)
         .read_to_vec()
-        .map_err(|e| format!("{url}: {e}"))
+        .map_err(|e| format!("{url}: {e}"))?;
+    tape.record(url, &body);
+    Ok(body)
 }
 
 /// The radar frames on the server now, oldest first.

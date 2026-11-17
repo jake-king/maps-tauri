@@ -214,7 +214,8 @@ fn open_remote(url: &str) -> Option<(vtile::pmtiles::Archive, &'static str)> {
     }
 }
 
-/// Saves a frame the frontend captured (a PNG data URL) as logs/snapshot-<name>.png, for looking at
+/// Saves a frame the frontend captured (a PNG data URL) as snapshot-<name>.png in MAPS_SNAPSHOT_DIR
+/// (default logs/), for looking at
 /// a renderer's output without the screen. Development only.
 #[tauri::command]
 fn save_snapshot(name: String, data_url: String) -> Result<String, String> {
@@ -228,8 +229,11 @@ fn save_snapshot(name: String, data_url: String) -> Result<String, String> {
         .strip_prefix("data:image/png;base64,")
         .ok_or("not a PNG data URL")?;
     let png = base64_decode(b64).ok_or("bad base64")?;
-    let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../logs"))
-        .join(format!("snapshot-{name}.png"));
+    // MAPS_SNAPSHOT_DIR: where tools/e2e.py collects them per platform; else logs/
+    let dir = std::env::var("MAPS_SNAPSHOT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../logs")));
+    let path = dir.join(format!("snapshot-{name}.png"));
     std::fs::write(&path, png).map_err(|e| e.to_string())?;
     Ok(path.display().to_string())
 }
@@ -457,11 +461,9 @@ fn wx_metar(
     m.report(&id, at.unwrap_or_else(unix_now))
 }
 
+/// Now, in Unix seconds: the system clock, or the tape's when replaying recorded weather (wx::tape).
 pub(crate) fn unix_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    wx::tape::now()
 }
 
 pub fn run() {

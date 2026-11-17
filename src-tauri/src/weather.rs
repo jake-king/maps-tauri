@@ -16,7 +16,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
@@ -168,10 +168,7 @@ pub struct Weather {
 }
 
 fn now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    crate::unix_now()
 }
 
 fn deflate(b: &[u8]) -> Vec<u8> {
