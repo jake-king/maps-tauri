@@ -43,14 +43,52 @@ pub fn url(time_iso: &str) -> String {
     )
 }
 
+/// Outside GOES-East and West: NOAA's hourly global infrared mosaic (nowCOAST keeps about 8 hours),
+/// whose grey scale differs from GOES's; [`to_goes_scale`] brings it onto GOES's so one cloud shading
+/// serves both.
+pub const GLOBAL_LAYER: &str = "global_longwave_imagery_mosaic";
+pub const GLOBAL_BBOX_LONLAT: [f64; 4] = [-180.0, -72.7, 180.0, 72.7];
+pub const GLOBAL_WIDTH: u32 = 4096;
+
+pub fn global_bbox() -> ([f64; 4], u32) {
+    let (x0, y0) = merc(GLOBAL_BBOX_LONLAT[0], GLOBAL_BBOX_LONLAT[1]);
+    let (x1, y1) = merc(GLOBAL_BBOX_LONLAT[2], GLOBAL_BBOX_LONLAT[3]);
+    let h = (GLOBAL_WIDTH as f64 * (y1 - y0) / (x1 - x0)).round() as u32;
+    ([x0, y0, x1, y1], h)
+}
+
+pub fn url_global(time_iso: &str) -> String {
+    let ([x0, y0, x1, y1], h) = global_bbox();
+    format!(
+        "{WMS}?service=WMS&version=1.3.0&request=GetMap&layers={GLOBAL_LAYER}&styles=&crs=EPSG:3857&bbox={x0:.0},{y0:.0},{x1:.0},{y1:.0}&width={GLOBAL_WIDTH}&height={h}&format=image/png&transparent=true&time={time_iso}"
+    )
+}
+
+/// A global-mosaic grey level on the GOES layer's scale: GOES = 0.650 x global + 51.4, fitted pixel by
+/// pixel over the central US with both images from 23Z on 2026-11-16 (r = 0.976, median error 1.6
+/// grey levels, 5.3 within cloud). 0 (no data) stays 0.
+pub fn to_goes_scale(g: u8) -> u8 {
+    if g == 0 {
+        return 0;
+    }
+    (0.650 * g as f64 + 51.4).round().clamp(1.0, 255.0) as u8
+}
+
 pub fn capabilities_url() -> String {
     format!("{WMS}?service=WMS&version=1.3.0&request=GetCapabilities")
 }
 
 /// The image times the server offers for [`LAYER`], ascending, from its capabilities XML: the
 /// layer's `<Dimension name="time">` is a comma-separated list of ISO times.
+/// The GOES layer's image times (see [`times_of`]).
 pub fn times(capabilities: &str) -> Vec<i64> {
-    let Some(i) = capabilities.find(&format!("<Name>{LAYER}</Name>")) else {
+    times_of(capabilities, LAYER)
+}
+
+/// The image times the server offers for `layer`, ascending: the layer's `<Dimension name="time">`
+/// is a comma-separated list of ISO times.
+pub fn times_of(capabilities: &str, layer: &str) -> Vec<i64> {
+    let Some(i) = capabilities.find(&format!("<Name>{layer}</Name>")) else {
         return Vec::new();
     };
     let rest = &capabilities[i..];
@@ -259,6 +297,33 @@ mod tests {
                 && u.contains("crs=EPSG:3857")
                 && u.contains(&format!("height={h}"))
                 && u.ends_with("time=2026-11-16T21:33:00Z")
+        );
+    }
+
+    #[test]
+    fn the_global_mosaic_on_the_goes_scale() {
+        // fitted pixel by pixel over the central US, both images at 23Z on 2026-11-16 (r = 0.976)
+        assert_eq!(to_goes_scale(0), 0, "no data stays no data");
+        assert_eq!(to_goes_scale(1), 52);
+        assert_eq!(to_goes_scale(100), 116);
+        assert_eq!(to_goes_scale(255), 217);
+        let caps = r#"<Layer><Name>goes_longwave_imagery</Name><Dimension name="time" default="x">2026-11-16T22:58:00.000Z</Dimension></Layer>
+<Layer><Name>global_longwave_imagery_mosaic</Name><Dimension name="time" default="x">2026-11-16T22:00:00.000Z,2026-11-16T23:00:00.000Z</Dimension></Layer>"#;
+        assert_eq!(times_of(caps, GLOBAL_LAYER).len(), 2);
+        assert_eq!(times(caps).len(), 1, "the GOES list is still its own");
+        let ([x0, y0, x1, y1], h) = global_bbox();
+        assert!(
+            (x0 + 20_037_508.0).abs() < 1.0
+                && (x1 - 20_037_508.0).abs() < 1.0
+                && (y0 + y1).abs() < 1.0,
+            "{x0} {x1} {y0} {y1}"
+        );
+        assert!(h > 2400 && h < 2500, "{h}");
+        let u = url_global("2026-11-16T23:00:00Z");
+        assert!(
+            u.contains("layers=global_longwave_imagery_mosaic")
+                && u.contains("width=4096")
+                && u.contains(&format!("height={h}"))
         );
     }
 

@@ -59,18 +59,19 @@ Center's GFA does it, and off until their boxes are ticked: nothing is fetched f
   are observations, so they exist up to the present; the hazards are forecasts. Under the slider:
   radar and satellite history as strips, the hazard snapshot times as marks, and now. The valid time
   of what each layer shows is stamped on the map.
-- Radar: MRMS base reflectivity, a loop of five frames ten minutes apart ending at the chosen time.
+- Radar (US only: MRMS is built from US and Canadian radars, and the stamp says so): MRMS base reflectivity, a loop of five frames ten minutes apart ending at the chosen time.
   Frames for a past time are fetched when first needed from NOAA's 24-hour archive, decoded in Rust
   (0.7 MB of GRIB2 each, thinned to 3500 x 1750 one-byte cells) and kept compressed in memory and on
   disk; the GPU holds up to 15 as textures. The shader takes each pixel back to latitude and
   longitude through the camera and Web Mercator and looks its cell up.
 - Satellite: GOES-East and West longwave infrared from NOAA's nowCOAST map server, every 5 minutes,
-  about 6.5 hours of history (older imagery exists, from NASA GIBS, but about 5 hours behind real
-  time and colour-enhanced; not used yet). Clear ground is transparent; colder, higher cloud tops are
-  more opaque.
+  about 6.5 hours of history; outside their view, nowCOAST's hourly global infrared mosaic, brought
+  onto the GOES grey scale by a fit (GOES = 0.650 x global + 51.4, r = 0.976 over 169,000 matched
+  pixels). The global layer gives way wherever GOES has data. Clear ground is transparent; colder,
+  higher cloud tops are more opaque.
 - METARs: airport observations as dots coloured by flight category (VFR, MVFR, IFR, LIFR); a click
-  opens the station's report. The present comes from AWC's bulk cache file (about 2,900 stations in
-  the box); the API caps history at 400 observations a request, so history is what the app collected
+  opens the station's report. The present comes from AWC's bulk cache file (the world, about 5,000
+  stations); the API caps history at 400 observations a request, so history is what the app collected
   from that file every five minutes while it ran, kept on disk, and the bar shows where it begins.
 - Winds: GFS winds at the chosen flight level (FL050 to FL450 mapped to standard pressure levels;
   FL340, 250 hPa, when none is chosen), as 5,000 particles that drift with the wind and leave fading
@@ -80,6 +81,9 @@ Center's GFA does it, and off until their boxes are ticked: nothing is fetched f
   JavaScript. Each particle keeps its last 16 positions on the map, and every frame those paths are
   projected through the camera and drawn as fading lines, so the trails stay put on the map through a
   pan, zoom or turn. With winds alone on, the map holds 60 frames a second, redraw p50 9 ms, p99 11 ms.
+- SIGMETs, worldwide: international SIGMETs (every FIR's turbulence, icing, thunderstorms, mountain
+  waves, tropical cyclones, volcanic ash) and US convective SIGMETs in force at the chosen time, with
+  the hazards; a past time's are fetched as needed. A click inside one shows its text.
 - Hazards: the G-AIRMET snapshot valid nearest the chosen time (turbulence, icing, IFR, mountain
   obscuration, surface wind), outlined and labelled, filtered by flight level as GFA does: an area
   shows if the level is within 3,000 ft of its base or top. A snapshot more than 90 minutes from the

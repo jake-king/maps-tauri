@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-wx-satellite-global"
+description = "Enables the wx_satellite_global command without any pre-configured scope."
+commands.allow = ["wx_satellite_global"]
+
+[[permission]]
+identifier = "deny-wx-satellite-global"
+description = "Denies the wx_satellite_global command without any pre-configured scope."
+commands.deny = ["wx_satellite_global"]

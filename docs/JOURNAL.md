@@ -1252,3 +1252,35 @@ simply. The 0.5° files are every 3 hours (f007 is a 404), so the field is the n
 the stamp shows its valid time. Sampling wraps at the 0/360 seam. The real file decodes; the fastest
 wind at 250 hPa that evening was 200 knots. The gate now also jumps to the mid-Atlantic and pans
 there fast: trails present, evenness 0.09.
+
+## The world: SIGMETs, global clouds, METARs everywhere
+
+Radar stays the US: MRMS is a mosaic of US and Canadian radars, there is no worldwide ground-radar
+product, and the stamp now says "(US)" so its absence elsewhere is not read as clear sky. The rest
+went worldwide.
+
+METARs: the bulk file always held the world (5,147 stations); I had filtered it to the box.
+
+SIGMETs: international SIGMETs from every FIR plus US convective SIGMETs, valid over periods. The feed
+is loose: the same field is a number, a numeric string, null or the string "None" depending on the
+request; some areas come as several polygons; areas crossing 180 come as longitudes past 180, kept
+continuous. One record was skipped on the first real parse; it was a SIGMET reported at a point ("SEV
+ICE OBS AT"), so points are now kept and drawn as markers (140 of 140 read). The API's date parameter
+returns those in force at a time, so a past time's are fetched once per half hour of history.
+
+Clouds: GOES (5-minute) covers the Americas; outside it, nowCOAST's hourly global infrared mosaic.
+The two use different grey scales: over the same region at the same hour, the global image's 10th
+percentile was 59 against GOES's 88 and its 99th 229 against 201. A pixel-by-pixel regression over
+169,000 matched pixels gives GOES = 0.650 x global + 51.4 (r = 0.976, median error 1.6 grey levels,
+5.3 within cloud), applied on decode so one cloud shading serves both. The global layer is drawn
+first and discarded wherever the GOES texture has data, so hour-old cloud does not show through
+GOES's clear sky.
+
+The end-to-end check failed twice before the code did. Its "ready" for the present did not wait for
+the background round to finish, and SIGMETs and the global mosaic come late in that round (the
+mosaic is 5.7 MB); the world view was looked at before they arrived. Then its SIGMET click landed
+within 10 px of a METAR station inside the SIGMET, and the station's report opened, which is the
+right behaviour; the check now clicks with METARs off. The world picture: severe turbulence over
+Shanwick and Santa Maria, severe icing from Scotland to Paris, thunderstorms over South America and
+Africa, volcanic ash from Fuego and Reventador. Where SIGMETs cluster the labels overlap; they need the
+collision handling the map's own labels have.

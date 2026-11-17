@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-wx-sigmets"
+description = "Enables the wx_sigmets command without any pre-configured scope."
+commands.allow = ["wx_sigmets"]
+
+[[permission]]
+identifier = "deny-wx-sigmets"
+description = "Denies the wx_sigmets command without any pre-configured scope."
+commands.deny = ["wx_sigmets"]

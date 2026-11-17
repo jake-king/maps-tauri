@@ -57,6 +57,10 @@ uniform vec2 u_rot;
 uniform vec4 u_box;     // the image's world box: x0, y0 (top), x1, y1 (bottom), in [0,1)
 uniform float u_opacity;
 uniform sampler2D u_sat; // R8 grey, 0 = no data
+// the global mosaic gives way where GOES has data: its texture and box as a mask (u_useMask 1)
+uniform sampler2D u_mask;
+uniform vec4 u_maskBox;
+uniform float u_useMask;
 out vec4 o;
 void main() {
   vec2 p = vec2(gl_FragCoord.x, u_size.y * u_dpr - gl_FragCoord.y) / u_dpr;
@@ -64,6 +68,10 @@ void main() {
   vec2 w = u_center + vec2(d.x * u_rot.x - d.y * u_rot.y, d.x * u_rot.y + d.y * u_rot.x) / u_scale;
   vec2 uv = (w - u_box.xy) / (u_box.zw - u_box.xy);
   if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) discard;
+  if (u_useMask > 0.5) {
+    vec2 mv = (w - u_maskBox.xy) / (u_maskBox.zw - u_maskBox.xy);
+    if (mv.x >= 0.0 && mv.y >= 0.0 && mv.x <= 1.0 && mv.y <= 1.0 && texture(u_mask, mv).r > 0.0) discard;
+  }
   float g = texture(u_sat, uv).r;
   if (g <= 0.0) discard;
   float cold = smoothstep(130.0 / 255.0, 215.0 / 255.0, g);
@@ -113,13 +121,23 @@ export function relative(t, now) {
 }
 
 /** The valid-time line over the map: what each layer shows and when it is from. */
-export function stamp(s, { radar, satellite, hazards, metars = false, winds = false }, m = null, w = null) {
+export function stamp(s, { radar, satellite, hazards, metars = false, winds = false }, m = null, w = null, sigmets = null) {
   if (!s) return "";
   const sel = s.selection ?? {};
   const parts = [];
-  if (radar) parts.push(sel.radar?.length ? `Radar ${zulu(sel.radar.at(-1))} obs` : s.at > s.now + 300 ? "Radar: observations only" : "Radar: none at this time");
-  if (satellite) parts.push(sel.satellite != null ? `Satellite ${zulu(sel.satellite)} obs` : s.at > s.now + 300 ? "Satellite: observations only" : "Satellite: none at this time");
-  if (hazards) parts.push(s.hazardsValid != null ? `Hazards ${zulu(s.hazardsValid)} ${s.hazardsValid > s.now ? `fcst ${relative(s.hazardsValid, s.now)}` : "issued"}` : "Hazards: none near this time");
+  // MRMS is a US product (US and Canadian radars): said on the stamp so its absence elsewhere is not
+  // read as clear sky
+  if (radar) parts.push(sel.radar?.length ? `Radar ${zulu(sel.radar.at(-1))} obs (US)` : s.at > s.now + 300 ? "Radar: observations only" : "Radar: none at this time");
+  if (satellite) {
+    const g = sel.satelliteGlobal != null ? `world ${zulu(sel.satelliteGlobal)}` : null;
+    if (sel.satellite != null) parts.push(`Satellite ${zulu(sel.satellite)} obs${g ? `, ${g}` : ""}`);
+    else if (g) parts.push(`Satellite ${g} obs`);
+    else parts.push(s.at > s.now + 300 ? "Satellite: observations only" : "Satellite: none at this time");
+  }
+  if (hazards) {
+    parts.push(s.hazardsValid != null ? `Hazards ${zulu(s.hazardsValid)} ${s.hazardsValid > s.now ? `fcst ${relative(s.hazardsValid, s.now)}` : "issued"}` : "Hazards: none near this time");
+    if (sigmets != null) parts.push(`${sigmets} SIGMETs`);
+  }
   if (metars) parts.push(metarStamp(m, s.at, s.now));
   if (winds) parts.push(windStamp(w));
   return parts.join(" · ");
@@ -164,6 +182,43 @@ export function windStamp(w) {
   const fl = { 850: "FL050", 700: "FL100", 500: "FL180", 400: "FL240", 300: "FL300", 250: "FL340", 200: "FL390", 150: "FL450" }[w.hpa] ?? `${w.hpa} hPa`;
   return `Winds ${fl} GFS ${zulu(w.run).slice(0, 2)}Z +${w.fhr} h (${zulu(w.valid)})`;
 }
+
+/** Whether screen point (x, y) lies inside a ring of screen points (even-odd rule). */
+export function pointInRing(x, y, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** The SIGMET under screen point (x, y): inside one of its areas, or within 10 px of a point one. */
+export function sigmetAt(sigs, x, y, project) {
+  for (const s of sigs) {
+    for (const ring of s.rings) {
+      const pts = ring.map((ll) => {
+        const p = project(ll);
+        return [p.x, p.y];
+      });
+      if (pts.length === 1 ? Math.hypot(pts[0][0] - x, pts[0][1] - y) <= 10 : pointInRing(x, y, pts)) return s;
+    }
+  }
+  return null;
+}
+
+/** "SIGMET TURB SEV FL300-380 · SHANWICK", "CONVECTIVE SIGMET tops FL240". */
+export function sigmetLabel(s) {
+  const fl = (n) => `FL${String(n).padStart(3, "0")}`;
+  const parts = [s.kind === "CONVECTIVE" ? "CONVECTIVE SIGMET" : `SIGMET ${s.hazard}`];
+  if (s.kind !== "CONVECTIVE" && s.qualifier) parts.push(s.qualifier);
+  if (s.base == null && s.top != null) parts.push(`tops ${fl(s.top)}`);
+  else if (s.base != null && s.top != null) parts.push(s.base === 0 ? `SFC-${fl(s.top)}` : `${fl(s.base)}-${String(s.top).padStart(3, "0")}`);
+  const fir = s.fir ? ` · ${s.fir.replace(/^\S+\s+/, "")}` : "";
+  return parts.join(" ") + fir;
+}
+
+export const SIGMET_COLOR = { TS: "#b91c1c", CONVECTIVE: "#b91c1c", TURB: "#c2410c", ICE: "#1d4ed8", MTW: "#7e22ce", VA: "#78350f", TC: "#9f1239" };
 
 /** The NWS reflectivity scale, by lower bound in dBZ. */
 export const DBZ_COLORS = [
@@ -274,6 +329,7 @@ export class WeatherLayer {
     this.metars = null; // wx_metars for the chosen time
     this.windOn = false;
     this.wind = null; // the decoded field for the chosen time and level, or { error }
+    this.sigmets = null; // those in force at the chosen time (with the hazards layer)
     this.windKey = null;
     this.looping = true; // animate the radar loop; false holds its newest frame
     this.level = null; // flight level for hazards (hundreds of feet), null = all
@@ -282,6 +338,7 @@ export class WeatherLayer {
     this.state = null;
     this.frames = new Map(); // radar time -> { tex, bytes, grid, used }, on the GPU
     this.sats = new Map(); // satellite time -> { tex, bytes, used }
+    this.globals = new Map(); // global mosaic time -> { tex, bytes, box, used }
     this.fetching = new Set(); // "r<time>" / "s<time>" being fetched from Rust
     this.override = null; // radar times to loop instead of the selection (the registration probe)
     this.shown = null; // radar frame drawn last
@@ -292,7 +349,7 @@ export class WeatherLayer {
     this.marks = {};
     const gl = map.gl;
     this.prog = program(gl, FS, ["u_size", "u_dpr", "u_center", "u_scale", "u_rot", "u_grid", "u_dims", "u_opacity", "u_radar", "u_lut"]);
-    this.satProg = program(gl, SAT_FS, ["u_size", "u_dpr", "u_center", "u_scale", "u_rot", "u_box", "u_opacity", "u_sat"]);
+    this.satProg = program(gl, SAT_FS, ["u_size", "u_dpr", "u_center", "u_scale", "u_rot", "u_box", "u_opacity", "u_sat", "u_mask", "u_maskBox", "u_useMask"]);
     this.vao = gl.createVertexArray();
     this.lutTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.lutTex);
@@ -387,7 +444,7 @@ export class WeatherLayer {
     this.onChange?.(this.state);
     this.map.triggerRepaint();
     // the wind field alongside the radar and satellite, not ahead of them: NOMADS can be slow
-    await Promise.all([this.sync(), this.syncWind(gen)]);
+    await Promise.all([this.sync(), this.syncWind(gen), this.syncSigmets(gen)]);
     this.onChange?.(this.state);
   }
 
@@ -400,6 +457,7 @@ export class WeatherLayer {
     const sel = s.selection;
     const jobs = [];
     if (this.satOn && sel.satellite != null && !this.sats.has(sel.satellite)) jobs.push(["s", sel.satellite, 400]);
+    if (this.satOn && sel.satelliteGlobal != null && !this.globals.has(sel.satelliteGlobal)) jobs.push(["g", sel.satelliteGlobal, 450]);
     if (this.radarOn && s.grid) {
       [...sel.radar].reverse().forEach((t, i) => {
         if (!this.frames.has(t)) jobs.push(["r", t, i === 0 ? 500 : 3000]);
@@ -412,16 +470,16 @@ export class WeatherLayer {
       if (this.fetching.has(key)) continue;
       this.fetching.add(key);
       try {
-        const buf = new Uint8Array(await invoke(kind === "r" ? "wx_frame" : "wx_satellite", { time: t }));
+        const buf = new Uint8Array(await invoke({ r: "wx_frame", s: "wx_satellite", g: "wx_satellite_global" }[kind], { time: t }));
         if (kind === "r") {
           const g = s.grid;
           if (buf.length !== g.ni * g.nj) throw new Error(`radar frame ${t}: ${buf.length} bytes for a ${g.ni} x ${g.nj} grid`);
           // a frame for a time already left behind is not worth a GPU slot
           this.map.loop.arrive(() => this.gen === gen && this.uploadRadar(t, buf, g), priority);
         } else {
-          const { width, height } = s.satellite;
-          if (buf.length !== width * height) throw new Error(`satellite ${t}: ${buf.length} bytes for ${width} x ${height}`);
-          this.map.loop.arrive(() => this.gen === gen && this.uploadSat(t, buf, s.satellite), priority);
+          const meta = kind === "s" ? s.satellite : s.satelliteGlobal;
+          if (buf.length !== meta.width * meta.height) throw new Error(`satellite ${t}: ${buf.length} bytes for ${meta.width} x ${meta.height}`);
+          this.map.loop.arrive(() => this.gen === gen && this.uploadSat(t, buf, meta, kind === "g" ? this.globals : this.sats), priority);
         }
       } catch (e) {
         this.lastError = String(e?.message ?? e);
@@ -462,17 +520,18 @@ export class WeatherLayer {
     this.onChange?.(this.state);
   }
 
-  /** Inside a frame. */
-  uploadSat(t, buf, meta) {
-    if (this.sats.has(t)) return;
+  /** Inside a frame. `into`: the GOES images or the global ones. */
+  uploadSat(t, buf, meta, into = this.sats) {
+    if (into.has(t)) return;
     const tex = this.texture(meta.width, meta.height, buf, this.map.gl.LINEAR);
     const [x0, y0, x1, y1] = meta.bbox3857;
     const [wx0, wy0] = mercToWorld(x0, y1); // top left: west, north
     const [wx1, wy1] = mercToWorld(x1, y0); // bottom right: east, south
-    this.sats.set(t, { tex, bytes: buf.length, box: [wx0, wy0, wx1, wy1], used: performance.now() });
+    into.set(t, { tex, bytes: buf.length, box: [wx0, wy0, wx1, wy1], used: performance.now() });
     this.gpuBytes += buf.length;
     this.marks.firstSat ??= performance.now();
-    this.evict(this.sats, SAT_GPU, new Set([this.state?.selection?.satellite]));
+    const sel = this.state?.selection ?? {};
+    this.evict(into, into === this.sats ? SAT_GPU : 2, new Set([into === this.sats ? sel.satellite : sel.satelliteGlobal]));
     this.onChange?.(this.state);
   }
 
@@ -523,6 +582,20 @@ export class WeatherLayer {
       }
     }
     if (this.state.hazards?.length) this.marks.hazards ??= performance.now();
+  }
+
+  /** The SIGMETs in force at the chosen time; a past time's may be fetched first, in Rust. */
+  async syncSigmets(gen) {
+    if (!this.hazardsOn) return;
+    try {
+      const list = await invoke("wx_sigmets", { at: this.at });
+      if (this.gen !== gen) return;
+      this.sigmets = list;
+      this.painted = true;
+      this.map.triggerRepaint();
+    } catch (e) {
+      this.lastError = String(e?.message ?? e);
+    }
   }
 
   windRenderer() {
@@ -578,6 +651,28 @@ export class WeatherLayer {
       const t = this.satNow();
       this.shownSat = t;
       const s = t == null ? null : this.sats.get(t);
+      // the world first, from the hourly mosaic, giving way wherever GOES has data
+      const gt = this.state?.selection?.satelliteGlobal;
+      const gs = gt == null ? null : this.globals.get(gt);
+      this.shownGlobal = gs ? gt : null;
+      if (gs) {
+        gs.used = performance.now();
+        const { p, u } = this.satProg;
+        gl.useProgram(p);
+        common(u);
+        gl.uniform4f(u.u_box, ...gs.box);
+        gl.uniform1f(u.u_opacity, 1);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, gs.tex);
+        gl.uniform1i(u.u_sat, 0);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, s ? s.tex : gs.tex);
+        gl.uniform1i(u.u_mask, 1);
+        gl.uniform4f(u.u_maskBox, ...(s ? s.box : [0, 0, 0, 0]));
+        gl.uniform1f(u.u_useMask, s ? 1 : 0);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
       if (s) {
         s.used = performance.now();
         const { p, u } = this.satProg;
@@ -588,6 +683,7 @@ export class WeatherLayer {
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, s.tex);
         gl.uniform1i(u.u_sat, 0);
+        gl.uniform1f(u.u_useMask, 0);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
       }
     }
@@ -624,7 +720,7 @@ export class WeatherLayer {
       c.width = Math.round(w * dpr);
       c.height = Math.round(h * dpr);
     }
-    const showHz = this.hazardsOn && this.state?.hazards?.length > 0;
+    const showHz = this.hazardsOn && (this.state?.hazards?.length > 0 || this.sigmets?.length > 0);
     const showMetars = this.metarOn && this.metars?.stations?.length > 0;
     const show = showHz || showMetars;
     if (!show && !this.painted) return; // weather off: nothing to clear, no cost per frame
@@ -646,7 +742,7 @@ export class WeatherLayer {
       ctx.font = "bold 11px 'Noto Sans',sans-serif";
       ctx.textAlign = "center";
     }
-    for (const hz of showHz ? this.state.hazards : []) {
+    for (const hz of showHz ? this.state.hazards ?? [] : []) {
       if (hz.hazard === "FZLVL") continue; // freezing-level contours: lines across the whole map
       if (!atLevel(hz, this.level)) continue;
       const style = HAZARD_STYLE[hz.hazard] ?? { color: "#444" };
@@ -674,6 +770,59 @@ export class WeatherLayer {
         ctx.fillStyle = style.color;
         ctx.fillText(text, x, y);
       }
+    }
+    if (showHz && this.sigmets?.length) this.drawSigmets(ctx, w, h);
+  }
+
+  /** SIGMETs over the G-AIRMETs: heavier outlines in their hazard's colour, labelled; a SIGMET
+   *  reported at a point is a ringed marker. Filtered by the flight level like the G-AIRMETs. */
+  drawSigmets(ctx, w, h) {
+    const map = this.map;
+    const px = ([lng, lat]) => {
+      const p = map.project([lng, lat]);
+      return [p.x, p.y];
+    };
+    ctx.font = "bold 11px 'Noto Sans',sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.setLineDash([]);
+    for (const s of this.sigmets) {
+      if (!atLevel(s, this.level)) continue;
+      const color = SIGMET_COLOR[s.hazard] ?? "#b91c1c";
+      ctx.strokeStyle = color;
+      ctx.fillStyle = `${color}26`;
+      ctx.lineWidth = 2.5;
+      let lx = 0, ly = 0, n = 0;
+      for (const ring of s.rings) {
+        const pts = ring.map(px);
+        if (pts.length === 1) {
+          ctx.beginPath();
+          ctx.arc(pts[0][0], pts[0][1], 6, 0, 2 * Math.PI);
+          ctx.fill();
+          ctx.stroke();
+          [lx, ly, n] = [pts[0][0], pts[0][1] - 14, 1];
+          continue;
+        }
+        ctx.beginPath();
+        pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        for (const [x, y] of pts) {
+          lx += x;
+          ly += y;
+          n += 1;
+        }
+      }
+      if (!n) continue;
+      const x = lx / n, y = ly / n;
+      if (x < -100 || y < -20 || x > w + 100 || y > h + 20) continue;
+      const text = sigmetLabel(s);
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "#ffffffd0";
+      ctx.strokeText(text, x, y);
+      ctx.fillStyle = color;
+      ctx.fillText(text, x, y);
     }
   }
 
@@ -704,20 +853,31 @@ export class WeatherLayer {
 
   /** A click on the map: the nearest station's report in a small box (no drag, METARs on). */
   async clicked(x, y) {
-    if (!this.metarOn || !this.metars) return;
-    const s = nearestStation(this.metars.stations, x, y, 10, (ll) => this.map.project(ll));
-    if (!s) return this.closePopup();
+    const project = (ll) => this.map.project(ll);
+    const s = this.metarOn && this.metars ? nearestStation(this.metars.stations, x, y, 10, project) : null;
+    if (!s) {
+      // not a station: a SIGMET under the click shows its text, as dispatch tools do
+      const sg = this.hazardsOn && this.sigmets ? sigmetAt(this.sigmets.filter((v) => atLevel(v, this.level)), x, y, project) : null;
+      if (!sg) return this.closePopup();
+      this.showPopup(`${sigmetLabel(sg)}\nvalid ${zulu(sg.from)} to ${zulu(sg.to)}\n${sg.raw}`, this.map.unproject([x, y])); // anchored where it was clicked
+      return;
+    }
     const r = await invoke("wx_metar", { id: s[0], at: this.at });
     if (!r) return this.closePopup();
     const [raw, t] = r;
+    this.showPopup(`${s[0]} · ${CATEGORY[s[3]].name} · ${zulu(t)}\n${raw}`, { lng: s[1], lat: s[2] });
+  }
+
+  /** The report box, anchored to a place on the map. */
+  showPopup(text, at) {
     if (!this.popup) {
       this.popup = document.createElement("div");
-      this.popup.style.cssText = "position:absolute;z-index:25;max-width:360px;padding:6px 8px;background:#fff;border-radius:6px;" +
+      this.popup.style.cssText = "position:absolute;z-index:25;max-width:420px;padding:6px 8px;background:#fff;border-radius:6px;" +
         "box-shadow:0 2px 8px #0004;font:12px ui-monospace,monospace;color:#222;white-space:pre-wrap;pointer-events:none;";
       this.map.canvas.parentElement.append(this.popup);
     }
-    this.popup.textContent = `${s[0]} · ${CATEGORY[s[3]].name} · ${zulu(t)}\n${raw}`;
-    this.popupAt = [s[1], s[2]];
+    this.popup.textContent = text;
+    this.popupAt = [at.lng, at.lat];
     this.popup.style.display = "block";
     this.placePopup();
   }
@@ -811,7 +971,9 @@ export class WeatherLayer {
       sats: [...this.sats.keys()].length,
       shown: this.shown,
       shown_sat: this.shownSat,
+      shown_global: this.shownGlobal ?? null,
       metars: this.metars?.stations?.length ?? null,
+      sigmets: this.sigmets?.length ?? null,
       wind: this.wind?.uv ? { run: this.wind.run, fhr: this.wind.fhr, hpa: this.wind.hpa, valid: this.wind.valid, segments: this.windGl?.lastSegments ?? 0, frames: this.windGl?.frames ?? 0 } : this.wind,
       metar_range: this.metars?.range ?? null,
       last_error: this.lastError ?? null,

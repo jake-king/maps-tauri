@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { lut, codeToDbz, hazardLabel, age, status, stamp, metarStamp, nearestStation, atLevel, flightLevel, zulu, relative, mercToWorld, DBZ_COLORS } from "../src/rust-renderer/weather.js";
+import { lut, codeToDbz, hazardLabel, age, status, stamp, metarStamp, nearestStation, atLevel, flightLevel, zulu, relative, mercToWorld, pointInRing, sigmetAt, sigmetLabel, DBZ_COLORS } from "../src/rust-renderer/weather.js";
 import { range, chosen, along, stepFrom, playStart, nextPlay } from "../src/rust-renderer/timebar.js";
 
 test("codes map back to dBZ as wx::radar writes them", () => {
@@ -58,7 +58,7 @@ test("the valid-time stamp says what each layer shows and when it is from", () =
   const now = Date.UTC(2026, 10, 16, 20, 10) / 1000;
   const on = { radar: true, satellite: true, hazards: true };
   const s = { now, at: now - 3 * 3600, selection: { radar: [now - 3 * 3600 - 600, now - 3 * 3600], satellite: now - 3 * 3600 - 120 }, hazardsValid: now - 2 * 3600 - 600 };
-  assert.equal(stamp(s, on), "Radar 17:10Z obs · Satellite 17:08Z obs · Hazards 18:00Z issued");
+  assert.equal(stamp(s, on), "Radar 17:10Z obs (US) · Satellite 17:08Z obs · Hazards 18:00Z issued");
   const ahead = { now, at: now + 6 * 3600, selection: { radar: [], satellite: null }, hazardsValid: now + 4 * 3600 + 3000 };
   assert.equal(stamp(ahead, on), "Radar: observations only · Satellite: observations only · Hazards 01:00Z fcst +4 h 50 min");
   assert.equal(stamp({ ...s, selection: { radar: [], satellite: null } }, { radar: true, satellite: false, hazards: false }), "Radar: none at this time");
@@ -160,4 +160,31 @@ test("time-lapse: where play starts, each next step, and the end at live", () =>
   }
   assert.equal(t, null, "it ends at live");
   assert.equal(steps, 18, "three hours of 10-minute steps, then live");
+});
+
+test("a click inside a SIGMET finds it; outside, nothing", () => {
+  const square = [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]];
+  assert.equal(pointInRing(5, 5, square), true);
+  assert.equal(pointInRing(15, 5, square), false);
+  assert.equal(pointInRing(-1, -1, square), false);
+  const project = ([x, y]) => ({ x, y });
+  const sigs = [{ key: "a", rings: [square] }, { key: "b", rings: [[[20, 20]]] }];
+  assert.equal(sigmetAt(sigs, 5, 5, project)?.key, "a");
+  assert.equal(sigmetAt(sigs, 22, 21, project)?.key, "b", "a point SIGMET within reach of its marker");
+  assert.equal(sigmetAt(sigs, 50, 50, project), null);
+});
+
+test("SIGMET labels say what, how bad, which levels, where", () => {
+  assert.equal(sigmetLabel({ kind: "SIGMET", hazard: "TURB", qualifier: "SEV", base: 300, top: 380, fir: "EGGX SHANWICK" }), "SIGMET TURB SEV FL300-380 · SHANWICK");
+  assert.equal(sigmetLabel({ kind: "SIGMET", hazard: "VA", qualifier: "ERUPTION MT REVENTADOR", base: 0, top: 150, fir: "SEFG GUAYAQUIL" }), "SIGMET VA ERUPTION MT REVENTADOR SFC-FL150 · GUAYAQUIL");
+  assert.equal(sigmetLabel({ kind: "CONVECTIVE", hazard: "CONVECTIVE", base: null, top: 240 }), "CONVECTIVE SIGMET tops FL240");
+});
+
+test("the satellite stamp names both images: GOES and the world mosaic", () => {
+  const now = Date.UTC(2026, 10, 16, 23, 10) / 1000;
+  const on = { radar: false, satellite: true, hazards: false };
+  const base = { now, at: now, selection: { radar: [], satellite: now - 300, satelliteGlobal: now - 600 } };
+  assert.equal(stamp(base, on), "Satellite 23:05Z obs, world 23:00Z");
+  assert.equal(stamp({ ...base, selection: { radar: [], satellite: null, satelliteGlobal: now - 600 } }, on), "Satellite world 23:00Z obs");
+  assert.equal(stamp({ ...base, at: now + 7200, selection: { radar: [], satellite: null, satelliteGlobal: null } }, on), "Satellite: observations only");
 });

@@ -9,8 +9,6 @@
 pub const CACHE_URL: &str = "https://aviationweather.gov/data/cache/metars.cache.csv.gz";
 /// A station's report stands for this long after it was observed (METARs are hourly).
 pub const VALID_FOR: i64 = 75 * 60;
-/// The stations kept: the same box as the satellite imagery (latitude 15..60, longitude -135..-55).
-pub const BOX: [f64; 4] = crate::satellite::BBOX_LONLAT;
 
 /// 0 = not reported, 1 = VFR, 2 = MVFR, 3 = IFR, 4 = LIFR
 pub fn category(s: &str) -> u8 {
@@ -54,7 +52,7 @@ fn fields(line: &str) -> Vec<String> {
     out
 }
 
-/// The reports in the cache file's CSV that lie in [`BOX`] and have a time and a position. A file
+/// Every report in the cache file's CSV with a time and a position: the whole world. A file
 /// without the expected columns is an error; a row that cannot be read is skipped and counted.
 pub fn parse_cache(csv: &str) -> Result<(Vec<Metar>, usize), String> {
     let mut lines = csv.lines();
@@ -91,11 +89,7 @@ pub fn parse_cache(csv: &str) -> Result<(Vec<Metar>, usize), String> {
             })
         })();
         match m {
-            Some(m) if !m.id.is_empty() => {
-                if m.lon >= BOX[0] && m.lat >= BOX[1] && m.lon <= BOX[2] && m.lat <= BOX[3] {
-                    out.push(m);
-                }
-            }
+            Some(m) if !m.id.is_empty() => out.push(m),
             _ => skipped += 1,
         }
     }
@@ -133,15 +127,15 @@ mod tests {
         assert_eq!(skipped, 1, "the row without a position");
         assert_eq!(
             m.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(),
-            vec!["KLAX", "KSFO", "KNUL"],
-            "London is outside the box"
+            vec!["KLAX", "KSFO", "EGLL", "KNUL"],
+            "the whole world: London too"
         );
         assert_eq!(
             m[0].raw,
             "METAR KLAX 162153Z 25010KT 10SM FEW020 18/12 A3001 RMK AO2, \"quoted\""
         );
         assert_eq!(
-            (m[0].cat, m[1].cat, m[2].cat),
+            (m[0].cat, m[1].cat, m[3].cat),
             (1, 4, 0),
             "\"null\" is not reported"
         );
@@ -212,9 +206,9 @@ mod tests {
             .map(|c| m.iter().filter(|x| x.cat == c).count())
             .collect::<Vec<_>>();
         eprintln!(
-            "{} in the box, {skipped} skipped, by category {cats:?}",
+            "{} stations, {skipped} skipped, by category {cats:?}",
             m.len()
         );
-        assert!(m.len() > 1000);
+        assert!(m.len() > 4000, "the whole world");
     }
 }

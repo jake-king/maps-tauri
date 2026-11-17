@@ -375,6 +375,37 @@ async fn wx_wind(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// One global infrared mosaic image (hourly, the world outside GOES's view), grey levels on the GOES
+/// scale, fetched first if not held; on the blocking pool.
+#[tauri::command]
+async fn wx_satellite_global(
+    time: i64,
+    w: tauri::State<'_, Arc<weather::Weather>>,
+) -> Result<tauri::ipc::Response, String> {
+    let w = Arc::clone(&w);
+    let src = w.source().ok_or("weather is off")?;
+    let bytes =
+        tauri::async_runtime::spawn_blocking(move || w.satellite_global_image(src.as_ref(), time))
+            .await
+            .map_err(|e| format!("global satellite task: {e}"))??;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// The SIGMETs (international and US convective) in force at `at` (default now). A past time's are
+/// fetched from aviationweather.gov first if not held, so this runs on the blocking pool.
+#[tauri::command]
+async fn wx_sigmets(
+    at: Option<i64>,
+    w: tauri::State<'_, Arc<weather::Weather>>,
+) -> Result<Value, String> {
+    let w = Arc::clone(&w);
+    let src = w.source().ok_or("weather is off")?;
+    let now = unix_now();
+    tauri::async_runtime::spawn_blocking(move || w.sigmets(src.as_ref(), at.unwrap_or(now), now))
+        .await
+        .map_err(|e| format!("sigmets task: {e}"))
+}
+
 /// The METARs in force at `at` (default now), compact: [id, lon, lat, category, time] each, with the
 /// range collected and a version that changes when anything new arrives.
 #[tauri::command]
@@ -530,7 +561,9 @@ pub fn run() {
             wx_satellite,
             wx_metars,
             wx_metar,
-            wx_wind
+            wx_wind,
+            wx_sigmets,
+            wx_satellite_global
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

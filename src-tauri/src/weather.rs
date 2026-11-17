@@ -30,10 +30,18 @@ pub const FORECASTS: [u32; 5] = [0, 3, 6, 9, 12];
 pub const HISTORY: i64 = 18 * 3600;
 const LIVE_EVERY: Duration = Duration::from_secs(120);
 const HAZARDS_EVERY: i64 = 15 * 60;
+/// SIGMETs are issued and cancelled at any time: the current ones are fetched every five minutes.
+const SIGMETS_EVERY: i64 = 5 * 60;
+/// A past time's SIGMETs are fetched once per half hour of history.
+const SIGMET_BUCKET: i64 = 30 * 60;
 /// Compressed radar frames and satellite images kept (memory and disk). An 18-hour window at the
 /// bar's 10-minute step is 108 radar frames; a radar frame compresses to a few hundred KB.
 pub const RADAR_KEEP: usize = 160;
 pub const SAT_KEEP: usize = 40;
+/// Global mosaic images kept (hourly, about 10 MB each uncompressed).
+pub const SAT_GLOBAL_KEEP: usize = 6;
+/// A global image older than this, relative to the chosen time, is not shown (it is hourly).
+pub const SAT_GLOBAL_REACH: i64 = 90 * 60;
 /// Wind fields kept (memory and disk): each is the world at one level, about 2 MB uncompressed.
 pub const WIND_KEEP: usize = 12;
 
@@ -47,6 +55,13 @@ pub trait Source: Send + Sync {
     fn satellite(&self, t: i64) -> Result<Vec<u8>, String>;
     /// U and V at `hpa` from GFS run `run`, forecast hour `fhr`
     fn wind(&self, run: i64, fhr: i64, hpa: u32) -> Result<wx::wind::Wind, String>;
+    /// international SIGMETs in force now, or at `date`
+    fn sigmets_international(&self, date: Option<i64>) -> Result<String, String>;
+    /// US domestic SIGMETs in force now
+    fn sigmets_domestic(&self) -> Result<String, String>;
+    /// the hourly global infrared mosaic's times, and its PNG for a time
+    fn satellite_global_times(&self) -> Result<Vec<i64>, String>;
+    fn satellite_global(&self, t: i64) -> Result<Vec<u8>, String>;
 }
 
 pub struct Noaa(wx::fetch::Agent);
@@ -76,6 +91,18 @@ impl Source for Noaa {
     fn wind(&self, run: i64, fhr: i64, hpa: u32) -> Result<wx::wind::Wind, String> {
         wx::fetch::wind(&self.0, run, fhr, hpa)
     }
+    fn sigmets_international(&self, date: Option<i64>) -> Result<String, String> {
+        wx::fetch::sigmets_international(&self.0, date)
+    }
+    fn sigmets_domestic(&self) -> Result<String, String> {
+        wx::fetch::sigmets_domestic(&self.0)
+    }
+    fn satellite_global_times(&self) -> Result<Vec<i64>, String> {
+        wx::fetch::satellite_global_times(&self.0)
+    }
+    fn satellite_global(&self, t: i64) -> Result<Vec<u8>, String> {
+        wx::fetch::satellite_global_image(&self.0, t)
+    }
 }
 
 /// The radar grid every frame shares (MRMS CONUS, thinned).
@@ -100,13 +127,20 @@ struct Inner {
     /// radar frames on the server: (file name, time)
     index: Vec<(String, i64)>,
     sat_times: Vec<i64>,
+    sat_global_times: Vec<i64>,
     radar: Store,
     sat: Store,
+    sat_global: Store,
     /// encoded wind fields (wx::wind::encode), keyed by run, forecast hour and level
     wind: Store,
     grid: Option<Grid>,
     /// each forecast hour's features, replaced only by a successful fetch of that hour
     gairmet: HashMap<u32, Vec<Hazard>>,
+    /// every SIGMET seen, by wx::sigmet::key
+    sigmets: HashMap<String, wx::sigmet::Sigmet>,
+    sigmets_ok: Option<i64>,
+    /// the half hours of history whose SIGMETs have been fetched
+    sigmet_history: HashSet<i64>,
     radar_ok: Option<i64>,
     hazards_ok: Option<i64>,
     sat_ok: Option<i64>,
@@ -244,12 +278,13 @@ impl Weather {
 
     fn load_from_disk(&self) {
         let Some(db) = &self.db else { return };
-        let (radar, sat, wind, gair, grid) = {
+        let (radar, sat, wind, sat_global, gair, grid) = {
             let c = db.lock().expect("weather db lock");
             (
                 read_blobs(&c, "radar").unwrap_or_default(),
                 read_blobs(&c, "satellite").unwrap_or_default(),
                 read_blobs(&c, "wind").unwrap_or_default(),
+                read_blobs(&c, "satellite_global").unwrap_or_default(),
                 read_gairmet(&c).unwrap_or_default(),
                 read_grid(&c),
             )
@@ -274,10 +309,37 @@ impl Weather {
                 g.from_disk = true;
             }
         }
+        let mut gone_global = Vec::new();
+        if g.sat_global.data.is_empty() {
+            for (t, d) in sat_global {
+                gone_global.extend(g.sat_global.put(
+                    t,
+                    Arc::new(d),
+                    &mut g.clock,
+                    SAT_GLOBAL_KEEP,
+                    &[],
+                ));
+            }
+        }
         let mut gone_wind = Vec::new();
         if g.wind.data.is_empty() {
             for (k, d) in wind {
                 gone_wind.extend(g.wind.put(k, Arc::new(d), &mut g.clock, WIND_KEEP, &[]));
+            }
+        }
+        let sigs: Vec<String> = db
+            .lock()
+            .expect("weather db lock")
+            .prepare("SELECT data FROM sigmet")
+            .and_then(|mut st| st.query_map([], |r| r.get(0))?.collect())
+            .unwrap_or_default();
+        for d in sigs {
+            if let Some(sg) = serde_json::from_str(&d)
+                .ok()
+                .as_ref()
+                .and_then(sigmet_from_value)
+            {
+                g.sigmets.insert(wx::sigmet::key(&sg), sg);
             }
         }
         for (fore, json) in gair {
@@ -290,6 +352,7 @@ impl Weather {
         self.delete_blobs("radar", &gone_radar);
         self.delete_blobs("satellite", &gone_sat);
         self.delete_blobs("wind", &gone_wind);
+        self.delete_blobs("satellite_global", &gone_global);
     }
 
     /// The radar times that exist: the server's, plus any held (offline, or since rotated off).
@@ -317,6 +380,28 @@ impl Weather {
         t.sort_unstable();
         t.dedup();
         t
+    }
+
+    fn sat_global_times(&self) -> Vec<i64> {
+        let g = self.lock();
+        let mut t: Vec<i64> = g
+            .sat_global_times
+            .iter()
+            .copied()
+            .chain(g.sat_global.data.keys().copied())
+            .collect();
+        t.sort_unstable();
+        t.dedup();
+        t
+    }
+
+    /// The global mosaic image to show at `at`: the newest at or before it, no older than 90 minutes.
+    pub fn global_for(&self, at: i64) -> Option<i64> {
+        let t = self.sat_global_times();
+        let i = t.partition_point(|&x| x <= at);
+        i.checked_sub(1)
+            .map(|k| t[k])
+            .filter(|&x| at - x <= SAT_GLOBAL_REACH)
     }
 
     fn hazard_times(&self) -> Vec<i64> {
@@ -503,6 +588,98 @@ impl Weather {
         ))
     }
 
+    /// Keep `list`, written to disk; drop what lapsed before the bar's history began.
+    fn merge_sigmets(&self, list: Vec<wx::sigmet::Sigmet>, now: i64) {
+        let cutoff = now - HISTORY - 3600;
+        let fresh: Vec<(String, wx::sigmet::Sigmet)> = {
+            let mut g = self.lock();
+            let mut fresh = Vec::new();
+            for sg in list {
+                let k = wx::sigmet::key(&sg);
+                if sg.to >= cutoff && !g.sigmets.contains_key(&k) {
+                    g.sigmets.insert(k.clone(), sg.clone());
+                    fresh.push((k, sg));
+                }
+            }
+            g.sigmets.retain(|_, sg| sg.to >= cutoff);
+            fresh
+        };
+        if let Some(db) = &self.db {
+            let c = db.lock().expect("weather db lock");
+            for (k, sg) in &fresh {
+                let _ = c.execute(
+                    "INSERT OR REPLACE INTO sigmet(key, data, valid_to) VALUES (?1, ?2, ?3)",
+                    params![k, sigmet_to_value(sg).to_string(), sg.to],
+                );
+            }
+            let _ = c.execute("DELETE FROM sigmet WHERE valid_to < ?1", params![cutoff]);
+        }
+    }
+
+    /// The SIGMETs in force at `at`, international and US convective, sorted. A past time's are
+    /// fetched once per half hour of history (the present's come from the round).
+    pub fn sigmets(&self, src: &dyn Source, at: i64, now: i64) -> Value {
+        let bucket = at.div_euclid(SIGMET_BUCKET);
+        let need = at < now - 15 * 60 && !self.lock().sigmet_history.contains(&bucket);
+        if need {
+            if let Ok((list, _)) = src
+                .sigmets_international(Some(at))
+                .and_then(|j| wx::sigmet::parse_international(&j))
+            {
+                self.merge_sigmets(list, now);
+                self.lock().sigmet_history.insert(bucket);
+            }
+        }
+        let g = self.lock();
+        let mut list: Vec<(&String, &wx::sigmet::Sigmet)> = g
+            .sigmets
+            .iter()
+            .filter(|(_, sg)| sg.active_at(at))
+            .collect();
+        list.sort_by(|a, b| (&a.1.kind, &a.1.hazard, a.0).cmp(&(&b.1.kind, &b.1.hazard, b.0)));
+        Value::Array(
+            list.into_iter()
+                .map(|(k, sg)| {
+                    let fl = |ft: Option<i64>| ft.map(|f| (f + 50) / 100);
+                    json!({ "key": k, "kind": sg.kind, "hazard": sg.hazard, "qualifier": sg.qualifier, "fir": sg.fir,
+                            "base": fl(sg.base_ft), "top": fl(sg.top_ft), "from": sg.from, "to": sg.to, "rings": sg.rings, "raw": sg.raw })
+                })
+                .collect(),
+        )
+    }
+
+    /// One global mosaic image's grey levels, on the GOES scale (wx::satellite::to_goes_scale).
+    pub fn satellite_global_image(&self, src: &dyn Source, t: i64) -> Result<Vec<u8>, String> {
+        let held = || {
+            let mut g = self.lock();
+            let g = &mut *g;
+            g.sat_global.get(t, &mut g.clock)
+        };
+        let d = self.single_flight(('g', t), held, || {
+            let png = src.satellite_global(t)?;
+            let (_, h) = satellite::global_bbox();
+            let mut img = satellite::decode(&png, satellite::GLOBAL_WIDTH, h)?;
+            for g in img.grey.iter_mut() {
+                *g = satellite::to_goes_scale(*g);
+            }
+            let d = Arc::new(deflate(&img.grey));
+            let live_at = self.lock().live_at;
+            let pinned: Vec<i64> = live_at
+                .and_then(|at| self.global_for(at))
+                .into_iter()
+                .collect();
+            let gone = {
+                let mut g = self.lock();
+                let g = &mut *g;
+                g.sat_global
+                    .put(t, d.clone(), &mut g.clock, SAT_GLOBAL_KEEP, &pinned)
+            };
+            self.store_blob("satellite_global", t, &d, &gone);
+            Ok(d)
+        })?;
+        inflate(&d)
+    }
+
     /// The present's loop is never evicted by browsing the past.
     fn pinned_radar(&self) -> Vec<i64> {
         let at = self.lock().live_at;
@@ -572,6 +749,30 @@ impl Weather {
             }
         }
 
+        let sig_due = self
+            .lock()
+            .sigmets_ok
+            .is_none_or(|t| now - t >= SIGMETS_EVERY);
+        if sig_due {
+            let intl = src
+                .sigmets_international(None)
+                .and_then(|j| wx::sigmet::parse_international(&j));
+            let dom = src
+                .sigmets_domestic()
+                .and_then(|j| wx::sigmet::parse_domestic(&j));
+            let ok = intl.is_ok() && dom.is_ok();
+            for r in [intl, dom] {
+                match r {
+                    Ok((list, _)) => self.merge_sigmets(list, now),
+                    Err(e) => err(format!("sigmets: {e}")),
+                }
+            }
+            if ok {
+                self.lock().sigmets_ok = Some(now);
+            }
+            changed();
+        }
+
         if let Some(t) = sel.satellite {
             match self.satellite_image(src, t) {
                 Ok(_) => {
@@ -579,6 +780,18 @@ impl Weather {
                     changed();
                 }
                 Err(e) => err(format!("satellite: {e}")),
+            }
+        }
+
+        // the rest of the world's clouds: the hourly global mosaic
+        match src.satellite_global_times() {
+            Ok(t) => self.lock().sat_global_times = t,
+            Err(e) => err(format!("global satellite times: {e}")),
+        }
+        if let Some(t) = self.global_for(now) {
+            match self.satellite_global_image(src, t) {
+                Ok(_) => changed(),
+                Err(e) => err(format!("global satellite: {e}")),
             }
         }
 
@@ -670,6 +883,8 @@ impl Weather {
     /// exists over the bar's range, and how fresh it all is.
     pub fn state(&self, at: i64, now: i64) -> Value {
         let sel = self.select(at);
+        let sat_global = self.global_for(at);
+        let ([gx0, gy0, gx1, gy1], gh) = satellite::global_bbox();
         let radar_t = self.radar_times();
         let sat_t = self.sat_times();
         let hz_t = self.hazard_times();
@@ -691,10 +906,11 @@ impl Weather {
             "now": now,
             "at": at,
             "history": HISTORY,
-            "selection": { "radar": sel.radar, "satellite": sel.satellite, "hazards": sel.hazards },
+            "selection": { "radar": sel.radar, "satellite": sel.satellite, "satelliteGlobal": sat_global, "hazards": sel.hazards },
             "heldRadar": held_radar,
             "grid": g.grid.map(|r| json!({ "ni": r.ni, "nj": r.nj, "lat0": r.lat0, "lon0": r.lon0, "dlat": r.dlat, "dlon": r.dlon })),
             "satellite": { "width": satellite::WIDTH, "height": sat_h, "bbox3857": [x0, y0, x1, y1] },
+            "satelliteGlobal": { "width": satellite::GLOBAL_WIDTH, "height": gh, "bbox3857": [gx0, gy0, gx1, gy1] },
             "available": { "radar": span(&radar_t), "satellite": span(&sat_t), "hazards": hz_t },
             "hazards": snap.iter().map(hazard_json).collect::<Vec<_>>(),
             "hazardsValid": sel.hazards,
@@ -731,6 +947,27 @@ fn snapshot(by_fore: &HashMap<u32, Vec<Hazard>>, valid: i64) -> Vec<Hazard> {
     }
 }
 
+fn sigmet_to_value(s: &wx::sigmet::Sigmet) -> Value {
+    json!({ "kind": s.kind, "hazard": s.hazard, "qualifier": s.qualifier, "fir": s.fir, "base_ft": s.base_ft,
+            "top_ft": s.top_ft, "from": s.from, "to": s.to, "rings": s.rings, "raw": s.raw })
+}
+
+fn sigmet_from_value(v: &Value) -> Option<wx::sigmet::Sigmet> {
+    let rings: Vec<Vec<[f64; 2]>> = serde_json::from_value(v.get("rings")?.clone()).ok()?;
+    Some(wx::sigmet::Sigmet {
+        kind: v.get("kind")?.as_str()?.into(),
+        hazard: v.get("hazard")?.as_str()?.into(),
+        qualifier: v.get("qualifier").and_then(Value::as_str).map(Into::into),
+        fir: v.get("fir").and_then(Value::as_str).map(Into::into),
+        base_ft: v.get("base_ft").and_then(Value::as_i64),
+        top_ft: v.get("top_ft").and_then(Value::as_i64),
+        from: v.get("from")?.as_i64()?,
+        to: v.get("to")?.as_i64()?,
+        rings,
+        raw: v.get("raw")?.as_str()?.into(),
+    })
+}
+
 fn hazard_json(h: &Hazard) -> Value {
     let (kind, coords) = match &h.shape {
         Shape::Polygon(rings) => ("polygon", json!(rings)),
@@ -762,6 +999,8 @@ fn open_db(p: &Path) -> rusqlite::Result<Connection> {
          CREATE TABLE IF NOT EXISTS radar(time INTEGER PRIMARY KEY, data BLOB NOT NULL);
          CREATE TABLE IF NOT EXISTS satellite(time INTEGER PRIMARY KEY, data BLOB NOT NULL);
          CREATE TABLE IF NOT EXISTS wind(time INTEGER PRIMARY KEY, data BLOB NOT NULL);
+         CREATE TABLE IF NOT EXISTS satellite_global(time INTEGER PRIMARY KEY, data BLOB NOT NULL);
+         CREATE TABLE IF NOT EXISTS sigmet(key TEXT PRIMARY KEY, data TEXT NOT NULL, valid_to INTEGER NOT NULL);
          CREATE TABLE IF NOT EXISTS gairmet(fore INTEGER PRIMARY KEY, json TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
@@ -887,6 +1126,23 @@ mod tests {
         out
     }
 
+    /// A global-mosaic PNG of the real size, every pixel grey `g`.
+    fn global_png(g: u8) -> Vec<u8> {
+        let (_, h) = satellite::global_bbox();
+        let mut out = Vec::new();
+        {
+            let mut e = png::Encoder::new(&mut out, satellite::GLOBAL_WIDTH, h);
+            e.set_color(png::ColorType::GrayscaleAlpha);
+            e.set_depth(png::BitDepth::Eight);
+            let mut w = e.write_header().unwrap();
+            let px: Vec<u8> = std::iter::repeat_n([g, 255], (satellite::GLOBAL_WIDTH * h) as usize)
+                .flatten()
+                .collect();
+            w.write_image_data(&px).unwrap();
+        }
+        out
+    }
+
     /// One TURB-HI area valid `fore` hours after 2026-11-16 18:00Z, as a G-AIRMET response holds it.
     fn turb(fore: u32) -> String {
         format!(
@@ -909,6 +1165,8 @@ mod tests {
         gair_calls: M<u32>,
         wind_calls: M<Vec<(i64, i64, u32)>>,
         wind_missing: M<Vec<i64>>,
+        sig_calls: M<Vec<Option<i64>>>,
+        global_calls: M<Vec<i64>>,
     }
 
     impl Fake {
@@ -922,6 +1180,8 @@ mod tests {
                 gair_calls: M::new(0),
                 wind_calls: M::new(vec![]),
                 wind_missing: M::new(vec![]),
+                sig_calls: M::new(vec![]),
+                global_calls: M::new(vec![]),
             }
         }
         fn live() -> Fake {
@@ -981,6 +1241,40 @@ mod tests {
                 u: vec![10.0, 20.0, 30.0, hpa as f32],
                 v: vec![0.0; 4],
             })
+        }
+        fn sigmets_international(&self, date: Option<i64>) -> Result<String, String> {
+            self.sig_calls.lock().unwrap().push(date);
+            self.up()?;
+            // one SIGMET in force for 4 hours around whenever it is asked for
+            let t = date.unwrap_or(NOW);
+            Ok(format!(
+                r#"[{{"firName":"EGGX SHANWICK","validTimeFrom":{},"validTimeTo":{},"hazard":"TURB","qualifier":"SEV","base":null,"top":"38000",
+                  "coords":[{{"lon":-30,"lat":50}},{{"lon":-20,"lat":50}},{{"lon":-20,"lat":55}},{{"lon":-30,"lat":50}}],"rawSigmet":"WSNT01 EGGX {}"}}]"#,
+                t - 7200,
+                t + 7200,
+                t
+            ))
+        }
+        fn sigmets_domestic(&self) -> Result<String, String> {
+            self.up()?;
+            Ok(format!(
+                r#"[{{"airSigmetType":"SIGMET","hazard":"CONVECTIVE","altitudeLow1":"None","altitudeHi1":"24000","validTimeFrom":"{}","validTimeTo":"{}",
+                  "rawAirSigmet":"CONVECTIVE SIGMET 6W","coords":[{{"lon":-122,"lat":40}},{{"lon":-121,"lat":39}},{{"lon":-120,"lat":40}},{{"lon":-122,"lat":40}}]}}]"#,
+                NOW - 600,
+                NOW + 6600
+            ))
+        }
+        fn satellite_global_times(&self) -> Result<Vec<i64>, String> {
+            self.up()?;
+            Ok((0..8)
+                .rev()
+                .map(|k| (NOW / 3600) * 3600 - k * 3600)
+                .collect())
+        }
+        fn satellite_global(&self, t: i64) -> Result<Vec<u8>, String> {
+            self.global_calls.lock().unwrap().push(t);
+            self.up()?;
+            Ok(global_png(100))
         }
     }
 
@@ -1060,6 +1354,18 @@ mod tests {
             }
             fn wind(&self, run: i64, fhr: i64, hpa: u32) -> Result<wx::wind::Wind, String> {
                 self.0.wind(run, fhr, hpa)
+            }
+            fn sigmets_international(&self, d: Option<i64>) -> Result<String, String> {
+                self.0.sigmets_international(d)
+            }
+            fn sigmets_domestic(&self) -> Result<String, String> {
+                self.0.sigmets_domestic()
+            }
+            fn satellite_global_times(&self) -> Result<Vec<i64>, String> {
+                self.0.satellite_global_times()
+            }
+            fn satellite_global(&self, t: i64) -> Result<Vec<u8>, String> {
+                self.0.satellite_global(t)
             }
         }
         let w = Arc::new(Weather::open(None));
@@ -1206,6 +1512,124 @@ mod tests {
             "served from disk, nothing asked"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn sig_ids(v: &Value) -> Vec<(String, String)> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|x| {
+                (
+                    x["kind"].as_str().unwrap().to_string(),
+                    x["hazard"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sigmets_in_force_now_from_both_feeds() {
+        let w = Weather::open(None);
+        let src = Fake::live();
+        w.round(&src, NOW, &|| {});
+        let now = w.sigmets(&src, NOW, NOW);
+        assert_eq!(
+            sig_ids(&now),
+            vec![
+                ("CONVECTIVE".to_string(), "CONVECTIVE".to_string()),
+                ("SIGMET".to_string(), "TURB".to_string())
+            ]
+        );
+        let turb = &now.as_array().unwrap()[1];
+        assert_eq!(
+            (turb["base"].clone(), turb["top"].clone()),
+            (Value::Null, json!(380)),
+            "flight levels from feet"
+        );
+        assert_eq!(turb["fir"], "EGGX SHANWICK");
+        assert!(turb["raw"].as_str().unwrap().starts_with("WSNT01"));
+        // the round does not ask again until five minutes have passed
+        let calls = src.sig_calls.lock().unwrap().len();
+        w.round(&src, NOW + 120, &|| {});
+        assert_eq!(src.sig_calls.lock().unwrap().len(), calls);
+    }
+
+    #[test]
+    fn a_past_time_fetches_its_sigmets_once_per_half_hour() {
+        let w = Weather::open(None);
+        let src = Fake::live();
+        w.round(&src, NOW, &|| {});
+        let before = src.sig_calls.lock().unwrap().len();
+        let past = NOW - 6 * 3600;
+        let then = w.sigmets(&src, past, NOW);
+        assert_eq!(
+            sig_ids(&then),
+            vec![("SIGMET".to_string(), "TURB".to_string())],
+            "the convective SIGMET was not in force then"
+        );
+        assert_eq!(src.sig_calls.lock().unwrap()[before], Some(past));
+        w.sigmets(&src, past + 600, NOW);
+        assert_eq!(
+            src.sig_calls.lock().unwrap().len(),
+            before + 1,
+            "the same half hour is not asked again"
+        );
+        // the present needs no history request: the round's fetch covers it
+        w.sigmets(&src, NOW, NOW);
+        assert_eq!(src.sig_calls.lock().unwrap().len(), before + 1);
+    }
+
+    #[test]
+    fn sigmets_from_disk_offline() {
+        let dir = std::env::temp_dir().join(format!("wx-sig-{}", std::process::id()));
+        let path = dir.join("weather.sqlite");
+        let _ = std::fs::remove_dir_all(&dir);
+        {
+            let w = Weather::open(Some(&path));
+            w.round(&Fake::live(), NOW, &|| {});
+        }
+        let w = Weather::open(Some(&path));
+        w.load_from_disk();
+        let src = Fake::live();
+        src.down.store(true, Ordering::SeqCst);
+        assert_eq!(w.sigmets(&src, NOW, NOW).as_array().unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_global_mosaic_newest_at_or_before_the_time_on_the_goes_scale() {
+        let w = Weather::open(None);
+        let src = Fake::live();
+        w.round(&src, NOW, &|| {});
+        let hour = (NOW / 3600) * 3600;
+        let s = w.state(NOW, NOW);
+        assert_eq!(
+            s["selection"]["satelliteGlobal"], hour,
+            "the newest hourly image"
+        );
+        assert_eq!(
+            src.global_calls.lock().unwrap().as_slice(),
+            &[hour],
+            "fetched by the round"
+        );
+        let grey = w.satellite_global_image(&src, hour).unwrap();
+        assert!(
+            grey.iter().all(|&g| g == satellite::to_goes_scale(100)),
+            "converted to the GOES scale"
+        );
+        assert_eq!(src.global_calls.lock().unwrap().len(), 1, "then held");
+        assert_eq!(
+            w.state(hour - 1, NOW)["selection"]["satelliteGlobal"],
+            hour - 3600
+        );
+        assert!(
+            w.state(hour - 8 * 3600 - 7200, NOW)["selection"]["satelliteGlobal"].is_null(),
+            "older than its history: none"
+        );
+        assert!(
+            w.state(NOW + 3 * 3600, NOW)["selection"]["satelliteGlobal"].is_null(),
+            "the future: none"
+        );
     }
 
     #[test]

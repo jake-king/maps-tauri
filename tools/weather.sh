@@ -52,8 +52,17 @@ if any(t > r["back"] for t in past["selection"]["radar"]):
     fail.append(f"3 h back: a radar frame from after the chosen time: {past['selection']['radar']} > {r['back']}")
 if past["selection"]["satellite"] is None or past["selection"]["satellite"] > r["back"]:
     fail.append(f"3 h back: satellite {past['selection']['satellite']} is not at or before {r['back']}")
-if (w["metars"] or 0) < 1000:
-    fail.append(f"live: {w['metars']} METAR stations")
+if (w["metars"] or 0) < 4000:
+    fail.append(f"live: {w['metars']} METAR stations (the world has about 5,000)")
+wo = r["world"]
+if wo["shown_global"] is None:
+    fail.append("the world view: no global satellite image drawn")
+if (wo["sigmets"] or 0) < 20:
+    fail.append(f"the world view: {wo['sigmets']} SIGMETs in force")
+if not (r["sigmetPopup"] or "").startswith(("SIGMET", "CONVECTIVE")):
+    fail.append(f"a click inside a SIGMET did not open it: {r['sigmetPopup']!r}")
+if (past["sigmets"] or 0) < 10:
+    fail.append(f"3 h back: {past['sigmets']} SIGMETs (the history fetch)")
 if not (r["popup"] or "").startswith("KLAX"):
     fail.append(f"a click on KLAX did not open its report: {r['popup']!r}")
 if past["metars"] != 0 or "collected from" not in past["stamp"]:
@@ -98,7 +107,7 @@ else:
         fail.append(f"probe: cell drawn {dx}, {dy} px from the pier (half a cell is {cell / 2:.0f} x {tall / 2:.0f})")
     if abs(bw - cell) > 2 or abs(bh - tall) > 2:
         fail.append(f"probe: cell drawn {bw} x {bh} px, expected {cell} x {tall:.0f}")
-print(f"weather: winds {wd}, FL180 {r['wind180']}, cost {r['windCost']}; time-lapse {len(steps)} steps in {pl['ms'] / 1000:.1f} s, ended live {pl['ended_live']}; METARs {w['metars']} stations, popup {(r['popup'] or '')[:60]!r}; live ready in {r['live_ms'] / 1000:.1f} s, 3 h back in {r['past_ms'] / 1000:.1f} s, changed mid-load {c}; GPU {past['gpu_bytes'] / 1e6:.0f} MB; hazards by level {lv}; probe {p}")
+print(f"weather: world: global sat {wo['shown_global']}, SIGMETs {wo['sigmets']} (3 h back {past['sigmets']}), METARs {w['metars']}, SIGMET popup {(r['sigmetPopup'] or '')[:50]!r}; winds {wd}, FL180 {r['wind180']}, cost {r['windCost']}; time-lapse {len(steps)} steps in {pl['ms'] / 1000:.1f} s, ended live {pl['ended_live']}; METARs {w['metars']} stations, popup {(r['popup'] or '')[:60]!r}; live ready in {r['live_ms'] / 1000:.1f} s, 3 h back in {r['past_ms'] / 1000:.1f} s, changed mid-load {c}; GPU {past['gpu_bytes'] / 1e6:.0f} MB; hazards by level {lv}; probe {p}")
 if fail:
     print("weather: FAILED:\n  " + "\n  ".join(fail))
     sys.exit(1)

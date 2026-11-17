@@ -57,8 +57,33 @@ pub fn gairmet(agent: &ureq::Agent, fore: u32) -> Result<String, String> {
 
 /// The satellite image times nowCOAST offers now (its WMS capabilities), ascending.
 pub fn satellite_times(agent: &ureq::Agent) -> Result<Vec<i64>, String> {
+    satellite_times_of(agent, crate::satellite::LAYER)
+}
+
+/// The global mosaic's image times (hourly), ascending.
+pub fn satellite_global_times(agent: &ureq::Agent) -> Result<Vec<i64>, String> {
+    satellite_times_of(agent, crate::satellite::GLOBAL_LAYER)
+}
+
+/// The global mosaic's image valid at `t`, as the server's PNG.
+pub fn satellite_global_image(agent: &ureq::Agent, t: i64) -> Result<Vec<u8>, String> {
+    let body = get(
+        agent,
+        &crate::satellite::url_global(&crate::satellite::iso(t)),
+        MAX_FRAME,
+    )?;
+    if !body.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(format!(
+            "global satellite {}: not a PNG",
+            crate::satellite::iso(t)
+        ));
+    }
+    Ok(body)
+}
+
+fn satellite_times_of(agent: &ureq::Agent, layer: &str) -> Result<Vec<i64>, String> {
     let xml = get(agent, &crate::satellite::capabilities_url(), 16 << 20)?;
-    let t = crate::satellite::times(&String::from_utf8_lossy(&xml));
+    let t = crate::satellite::times_of(&String::from_utf8_lossy(&xml), layer);
     if t.is_empty() {
         return Err("satellite: no image times in the capabilities".into());
     }
@@ -100,4 +125,24 @@ pub fn wind(
 ) -> Result<crate::wind::Wind, String> {
     let bytes = get(agent, &crate::wind::url(run, fhr, hpa), 16 << 20)?;
     crate::wind::from_grib(&bytes, hpa)
+}
+
+/// International SIGMETs in force now, or at `date` (Unix seconds) if given, as JSON text.
+pub fn sigmets_international(agent: &ureq::Agent, date: Option<i64>) -> Result<String, String> {
+    let mut url = "https://aviationweather.gov/api/data/isigmet?format=json".to_string();
+    if let Some(t) = date {
+        url.push_str(&format!("&date={}", crate::satellite::iso(t)));
+    }
+    let body = get(agent, &url, 16 << 20)?;
+    String::from_utf8(body).map_err(|e| format!("isigmet: {e}"))
+}
+
+/// US domestic SIGMETs (convective among them) in force now, as JSON text.
+pub fn sigmets_domestic(agent: &ureq::Agent) -> Result<String, String> {
+    let body = get(
+        agent,
+        "https://aviationweather.gov/api/data/airsigmet?format=json",
+        16 << 20,
+    )?;
+    String::from_utf8(body).map_err(|e| format!("airsigmet: {e}"))
 }

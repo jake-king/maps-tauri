@@ -95,7 +95,7 @@ const layers = () => ({ radar: radarBox.checked, satellite: satBox.checked, haza
 const weather = new WeatherLayer(map, {
   onChange: (s) => {
     wxStatus.textContent = wxStatusText(s, layers(), weather.progress());
-    wxStamp.textContent = wxStampText(s, layers(), weather.metars, weather.wind);
+    wxStamp.textContent = wxStampText(s, layers(), weather.metars, weather.wind, weather.sigmets?.length ?? null);
     wxStamp.style.display = wxStamp.textContent ? "block" : "none";
     timeBar.update(s, weather.metars?.range);
   },
@@ -255,6 +255,10 @@ map.whenIdle().then(async () => {
         const p = weather.progress(), sel = weather.state?.selection ?? {};
         // complete for that time: its radar loop, its satellite image if one exists, its hazards if a
         // snapshot is in reach (none is the right answer far from any)
+        // the present: the background round must have finished (SIGMETs and the global mosaic come
+        // late in it), and the SIGMETs reached the layer
+        if (weather.at == null && (weather.state.loading?.busy !== false || weather.state.radarOk == null)) return false;
+        if (weather.hazardsOn && weather.sigmets == null) return false;
         return sel.radar?.length > 0 && p.radar === sel.radar.length && (sel.satellite == null || p.satellite === true) && (sel.hazards == null ? weather.state.hazardsOk != null || weather.state.available?.hazards?.length > 0 : weather.state.hazards?.length > 0) && weather.metars != null && !!weather.wind;
       };
       // wait on the layer's own updates, as a user would: no extra polling from here
@@ -300,6 +304,32 @@ map.whenIdle().then(async () => {
       const wind180 = { hpa: weather.wind?.hpa ?? null, ms: Math.round(performance.now() - l0) };
       weather.setLevel(null);
       await weather.set(keep);
+      // the world: global clouds, SIGMETs everywhere, METARs everywhere; and a click inside a SIGMET
+      const world = { center: [-30, 30], zoom: 2.4, bearing: 0 };
+      map.jumpTo(world);
+      await new Promise((r) => setTimeout(r, 1500));
+      const worldPath = await snapshot(map, "weather-world", world, (ctx) => ctx.drawImage(weather.canvas, 0, 0, ctx.canvas.width, ctx.canvas.height));
+      let sigmetPopup = null;
+      const target = (weather.sigmets ?? []).find((sg) => sg.rings[0].length > 3 && atLevel(sg, weather.level));
+      if (target) {
+        const ring = target.rings[0];
+        const c = ring.reduce((a, ll) => [a[0] + ll[0] / ring.length, a[1] + ll[1] / ring.length], [0, 0]);
+        map.jumpTo({ center: c, zoom: 5, bearing: 0 });
+        await new Promise((r) => map.once("render", r));
+        // with METARs off: a station within 10 px of the click rightly wins over a large SIGMET area
+        const metarsWere = weather.metarOn;
+        weather.metarOn = false;
+        // the centroid of a concave area can lie outside it: try it and its ring's points pulled inward
+        for (const ll of [c, ...ring.map((q) => [c[0] + (q[0] - c[0]) * 0.5, c[1] + (q[1] - c[1]) * 0.5])]) {
+          const q = map.project(ll);
+          await weather.clicked(q.x, q.y);
+          if (weather.popup?.style.display === "block") break;
+        }
+        sigmetPopup = weather.popup?.style.display === "block" ? weather.popup.textContent : null;
+        weather.closePopup();
+        weather.metarOn = metarsWere;
+      }
+      const worldReport = weather.report();
       // a click on LAX's dot opens its report
       const lax = weather.metars?.stations?.find((x) => x[0] === "KLAX");
       let popup = null;
@@ -352,7 +382,7 @@ map.whenIdle().then(async () => {
       const play = { steps: visited.filter((v) => v.at !== null).map((v) => v.at), incomplete: visited.filter((v) => v.at !== null && !v.complete).map((v) => v.at), ended_live: weather.at === null && !timeBar.player, ms: Math.round(performance.now() - playT0) };
       timeBar.pick(null);
       const probe = await weather.probe();
-      return invoke("bench_done", { result: { weather: live, wind: windLive, wind180, windCost, windPath, popup, play, live_ms: liveMs, past, past_ms: pastMs, past_wait_ms: Math.round(performance.now() - p0), back, levels, changed, statuses: [...statuses], probe, snapshots: [livePath, pastPath] } });
+      return invoke("bench_done", { result: { weather: live, world: worldReport, worldPath, sigmetPopup, wind: windLive, wind180, windCost, windPath, popup, play, live_ms: liveMs, past, past_ms: pastMs, past_wait_ms: Math.round(performance.now() - p0), back, levels, changed, statuses: [...statuses], probe, snapshots: [livePath, pastPath] } });
     },
   });
 });
