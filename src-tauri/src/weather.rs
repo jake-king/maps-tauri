@@ -40,8 +40,9 @@ pub const RADAR_KEEP: usize = 160;
 pub const SAT_KEEP: usize = 40;
 /// Global mosaic images kept (hourly, about 10 MB each uncompressed).
 pub const SAT_GLOBAL_KEEP: usize = 6;
-/// A global image older than this, relative to the chosen time, is not shown (it is hourly).
-pub const SAT_GLOBAL_REACH: i64 = 90 * 60;
+/// A global image older than this, relative to the chosen time, is not shown. It is hourly and
+/// published late (at 00:36Z the newest was 23:00Z, measured 2026-11-17); the stamp shows its time.
+pub const SAT_GLOBAL_REACH: i64 = 150 * 60;
 /// Wind fields kept (memory and disk): each is the world at one level, about 2 MB uncompressed.
 pub const WIND_KEEP: usize = 12;
 
@@ -395,7 +396,7 @@ impl Weather {
         t
     }
 
-    /// The global mosaic image to show at `at`: the newest at or before it, no older than 90 minutes.
+    /// The global mosaic image to show at `at`: the newest at or before it, no older than SAT_GLOBAL_REACH.
     pub fn global_for(&self, at: i64) -> Option<i64> {
         let t = self.sat_global_times();
         let i = t.partition_point(|&x| x <= at);
@@ -1629,6 +1630,13 @@ mod tests {
         assert!(
             w.state(NOW + 3 * 3600, NOW)["selection"]["satelliteGlobal"].is_null(),
             "the future: none"
+        );
+        // nowCOAST publishes the mosaic late: at 00:36Z the newest was 23:00Z (measured 2026-11-17)
+        let late = hour + 100 * 60;
+        assert_eq!(
+            w.state(late, late)["selection"]["satelliteGlobal"],
+            hour,
+            "an image 100 minutes old is still the newest there is"
         );
     }
 

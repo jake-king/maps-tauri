@@ -391,6 +391,40 @@ async fn wx_satellite_global(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// Everything time `at` will need, fetched into Rust's caches without sending it to the webview: the
+/// newest radar frame of its loop, its satellite and global images, its SIGMETs, and (with `fl`) its
+/// winds. For buffering a time-lapse before it plays; returns the selection.
+#[tauri::command]
+async fn wx_prefetch(
+    at: i64,
+    winds: bool,
+    fl: Option<u32>,
+    w: tauri::State<'_, Arc<weather::Weather>>,
+) -> Result<Value, String> {
+    let w = Arc::clone(&w);
+    let src = w.source().ok_or("weather is off")?;
+    let now = unix_now();
+    tauri::async_runtime::spawn_blocking(move || {
+        let sel = w.select(at);
+        if let Some(&t) = sel.radar.last() {
+            let _ = w.radar_frame(src.as_ref(), t);
+        }
+        if let Some(t) = sel.satellite {
+            let _ = w.satellite_image(src.as_ref(), t);
+        }
+        if let Some(t) = w.global_for(at) {
+            let _ = w.satellite_global_image(src.as_ref(), t);
+        }
+        let _ = w.sigmets(src.as_ref(), at, now);
+        if winds {
+            let _ = w.wind(src.as_ref(), at, fl, now);
+        }
+        w.state(at, now)["selection"].clone()
+    })
+    .await
+    .map_err(|e| format!("prefetch task: {e}"))
+}
+
 /// The SIGMETs (international and US convective) in force at `at` (default now). A past time's are
 /// fetched from aviationweather.gov first if not held, so this runs on the blocking pool.
 #[tauri::command]
@@ -563,7 +597,8 @@ pub fn run() {
             wx_metar,
             wx_wind,
             wx_sigmets,
-            wx_satellite_global
+            wx_satellite_global,
+            wx_prefetch
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

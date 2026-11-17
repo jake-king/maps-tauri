@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-wx-prefetch"
+description = "Enables the wx_prefetch command without any pre-configured scope."
+commands.allow = ["wx_prefetch"]
+
+[[permission]]
+identifier = "deny-wx-prefetch"
+description = "Denies the wx_prefetch command without any pre-configured scope."
+commands.deny = ["wx_prefetch"]

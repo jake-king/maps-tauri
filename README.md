@@ -98,8 +98,10 @@ each piece arrives. Whatever was fetched is shown again offline, marked as such.
 
 `tools/weather.sh` checks it end to end against NOAA: the present and three hours back must each load
 fully with nothing shown from after the chosen time; a change of time mid-load must settle on the new
-time with nothing uploaded for the old one; the time-lapse must step 10 minutes at a time to live
-without leaving a step before it is on screen; METARs must cover the present, a click on LAX must open
+time with nothing uploaded for the old one; the time-lapse must buffer first, then step 10 minutes at a time to live
+with no frame where a layer goes blank and no gap over 1.2 s between steps; the world view must
+show the global clouds, SIGMETs and non-overlapping hazard labels, and a click inside a SIGMET must
+open it; METARs must cover the present, a click on LAX must open
 its report, and the flight-level filter must narrow the hazards; and a synthetic one-cell radar frame at a known point
 must land where the map's own projection puts that point, one cell wide and 1/cos(latitude) cells
 tall.

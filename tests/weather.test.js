@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { lut, codeToDbz, hazardLabel, age, status, stamp, metarStamp, nearestStation, atLevel, flightLevel, zulu, relative, mercToWorld, pointInRing, sigmetAt, sigmetLabel, DBZ_COLORS } from "../src/rust-renderer/weather.js";
-import { range, chosen, along, stepFrom, playStart, nextPlay } from "../src/rust-renderer/timebar.js";
+import { lut, codeToDbz, hazardLabel, age, status, stamp, metarStamp, nearestStation, atLevel, flightLevel, zulu, relative, mercToWorld, pointInRing, sigmetAt, sigmetLabel, placeLabels, sigmetPriority, DBZ_COLORS } from "../src/rust-renderer/weather.js";
+import { range, chosen, along, stepFrom, playStart, nextPlay, playSteps } from "../src/rust-renderer/timebar.js";
 
 test("codes map back to dBZ as wx::radar writes them", () => {
   assert.equal(codeToDbz(0), null);
@@ -187,4 +187,59 @@ test("the satellite stamp names both images: GOES and the world mosaic", () => {
   assert.equal(stamp(base, on), "Satellite 23:05Z obs, world 23:00Z");
   assert.equal(stamp({ ...base, selection: { radar: [], satellite: null, satelliteGlobal: now - 600 } }, on), "Satellite world 23:00Z obs");
   assert.equal(stamp({ ...base, at: now + 7200, selection: { radar: [], satellite: null, satelliteGlobal: null } }, on), "Satellite: observations only");
+});
+
+test("the time-lapse's steps, listed up front so they can be buffered before playing", () => {
+  const now = Date.UTC(2026, 10, 16, 22, 7) / 1000;
+  const r = range(now, 18 * 3600);
+  const steps = playSteps(null, now, r);
+  assert.equal(steps.length, 18, "19:00 to 21:50: three hours back to the last step before live");
+  assert.equal(steps[0], playStart(null, now, r));
+  assert.ok(steps.every((t, i) => i === 0 || t - steps[i - 1] === 600));
+  assert.equal(nextPlay(steps.at(-1), now), null, "after the last comes live");
+  assert.deepEqual(playSteps(now - 1800, now, r), [now - 1800, now - 1200, now - 600], "from a chosen time, while a whole step from now remains");
+});
+
+test("with the loop held, the status counts only the frame shown, not the whole loop", () => {
+  const now = Date.UTC(2026, 10, 16, 22, 10) / 1000;
+  const sel = { radar: [now - 2400, now - 1800, now - 1200, now - 600, now], satellite: null, hazards: null };
+  const s = { now, at: now, selection: sel, radarOk: now, satelliteOk: now, hazardsOk: now, hazardsValid: null, fromDisk: false, errors: [], loading: { busy: false, hazards: false } };
+  const on = { radar: true, satellite: false, hazards: false };
+  assert.equal(status(s, on, { radar: 1, radarWant: 1 }), "", "the newest frame is all a held loop needs");
+  assert.equal(status(s, on, { radar: 0, radarWant: 1 }), "radar: loading 0 of 1…");
+  assert.equal(status(s, on, { radar: 3 }), "radar: loading 3 of 5…", "looping: the whole loop");
+});
+
+const overlaps = (a, b) => a.x - a.w / 2 < b.x + b.w / 2 && b.x - b.w / 2 < a.x + a.w / 2 && a.y - a.h / 2 < b.y + b.h / 2 && b.y - b.h / 2 < a.y + a.h / 2;
+
+test("hazard labels never overlap: the more important is placed first, the rest move or drop", () => {
+  const items = [
+    { x: 100, y: 100, w: 120, h: 14, priority: 1 },
+    { x: 105, y: 102, w: 120, h: 14, priority: 5 },
+    { x: 100, y: 100, w: 120, h: 14, priority: 3 },
+    { x: 400, y: 300, w: 80, h: 14, priority: 2 },
+  ];
+  const placed = placeLabels(items, 800, 600);
+  assert.ok(placed[1], "the most important is placed");
+  assert.deepEqual([placed[1].x, placed[1].y], [105, 102], "where it wanted to be");
+  const boxes = placed.map((p, i) => p && { ...p, w: items[i].w, h: items[i].h }).filter(Boolean);
+  for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) assert.ok(!overlaps(boxes[i], boxes[j]), `labels ${i} and ${j} overlap`);
+  assert.ok(placed[2], "the next one found room nearby");
+  assert.ok(placed[3], "one far away is untouched");
+  assert.deepEqual([placed[3].x, placed[3].y], [400, 300]);
+});
+
+test("a crowd keeps only what fits, and nothing off screen", () => {
+  const crowd = Array.from({ length: 40 }, (_, i) => ({ x: 200, y: 200, w: 150, h: 14, priority: i % 3 }));
+  const placed = placeLabels(crowd, 800, 600);
+  const kept = placed.filter(Boolean).length;
+  assert.ok(kept >= 3 && kept < 40, `${kept} of 40 kept`);
+  assert.equal(placeLabels([{ x: -200, y: 50, w: 100, h: 14, priority: 9 }], 800, 600)[0], null, "off screen: not placed");
+});
+
+test("which hazard label wins when space is short", () => {
+  const p = (hazard, qualifier) => sigmetPriority({ hazard, qualifier });
+  assert.ok(p("VA") > p("TS") && p("TC") > p("CONVECTIVE"), "ash and cyclones first");
+  assert.ok(p("TS") > p("TURB", "SEV") && p("CONVECTIVE") > p("ICE", "SEV"), "then thunderstorms");
+  assert.ok(p("TURB", "SEV") > p("MTW") && p("MTW") > p("TURB", "MOD") && p("TURB", "MOD") > 1, "then severe, then the rest, all above G-AIRMETs");
 });

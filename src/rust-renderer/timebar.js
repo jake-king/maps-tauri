@@ -42,6 +42,13 @@ export function nextPlay(t, now) {
   return now - n < STEP ? null : n;
 }
 
+/** Every step of a time-lapse from `at` (see playStart), in order, up to the last before live. */
+export function playSteps(at, now, r) {
+  const out = [];
+  for (let t = playStart(at, now, r); t !== null && out.length < 200; t = nextPlay(t, now)) out.push(t);
+  return out;
+}
+
 /** Position of `t` along the bar, 0..1, clamped. */
 export function along(t, [start, end]) {
   return Math.max(0, Math.min(1, (t - start) / (end - start)));
@@ -55,9 +62,9 @@ const el = (tag, css, text) => {
 };
 
 export class TimeBar {
-  constructor(container, { onTime, onLevel, onLoop, isReady = () => true, onPlay = () => {}, prefetch = () => {} }) {
+  constructor(container, { onTime, onLevel, onLoop, isReady = () => true, onPlay = () => {}, bufferSteps = async () => {}, prepareStep = () => {}, isPrepared = () => true }) {
     this.onTime = onTime;
-    Object.assign(this, { isReady, onPlay, prefetch });
+    Object.assign(this, { isReady, onPlay, bufferSteps, prepareStep, isPrepared });
     this.root = el("div", "position:absolute;left:290px;right:16px;bottom:10px;z-index:20;padding:6px 10px 4px;background:#fffe;" +
       "border-radius:6px;box-shadow:0 1px 4px #0003;font:12px 'Noto Sans',sans-serif;color:#222;display:none;user-select:none;");
     const row = el("div", "display:flex;align-items:center;gap:6px;margin-bottom:4px;");
@@ -135,28 +142,41 @@ export class TimeBar {
     this.onTime(at);
   }
 
-  /** Time-lapse: advance a step once the current one is fully on screen and at least 600 ms has
-   *  passed, so a slow fetch slows the playback rather than showing a half-loaded picture. */
-  toggle() {
-    if (this.player) return this.stop();
-    this.pick(playStart(this.at, this.now, range(this.now, this.history ?? 18 * 3600)));
+  /** Time-lapse. First every step's data is buffered (the button counts it), then it plays: a step
+   *  moves on once it is on screen, at least 600 ms has passed, and the next step's textures are
+   *  already on the GPU, so each change is a swap, not a load. Pressing again stops it. */
+  async toggle() {
+    if (this.player || this.buffering) return this.stop();
+    const steps = playSteps(this.at, this.now, range(this.now, this.history ?? 18 * 3600));
+    if (!steps.length) return;
+    this.buffering = true;
     this.onPlay(true);
+    this.playButton.textContent = `Buffering 0/${steps.length}`;
+    await this.bufferSteps(steps, (k, n) => {
+      if (this.buffering) this.playButton.textContent = `Buffering ${k}/${n}`;
+    });
+    if (!this.buffering) return; // stopped while buffering
+    this.buffering = false;
     this.playButton.textContent = "Pause";
+    let i = 0;
+    this.pick(steps[0]);
     let shownAt = performance.now();
-    this.prefetch(nextPlay(this.at, this.now));
+    this.prepareStep(steps[1] ?? null);
     this.player = setInterval(() => {
-      if (!this.isReady() || performance.now() - shownAt < 600) return;
-      const n = nextPlay(this.at, this.now);
-      this.pick(n);
+      const next = i + 1 < steps.length ? steps[i + 1] : null;
+      if (!this.isReady() || performance.now() - shownAt < 600 || !this.isPrepared(next)) return;
+      i += 1;
+      this.pick(next);
       shownAt = performance.now();
-      if (n === null) return this.stop();
-      this.prefetch(nextPlay(n, this.now));
+      if (next === null) return this.stop();
+      this.prepareStep(i + 1 < steps.length ? steps[i + 1] : null);
     }, 50);
   }
 
   stop() {
     clearInterval(this.player);
     this.player = null;
+    this.buffering = false;
     this.playButton.textContent = "Play";
     this.onPlay(false);
   }

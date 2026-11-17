@@ -55,6 +55,9 @@ if past["selection"]["satellite"] is None or past["selection"]["satellite"] > r[
 if (w["metars"] or 0) < 4000:
     fail.append(f"live: {w['metars']} METAR stations (the world has about 5,000)")
 wo = r["world"]
+lb = wo.get("labels") or {}
+if not (lb.get("placed") or 0) >= 5:
+    fail.append(f"the world view: {lb.get('placed')} of {lb.get('wanted')} hazard labels placed")
 if wo["shown_global"] is None:
     fail.append("the world view: no global satellite image drawn")
 if (wo["sigmets"] or 0) < 20:
@@ -86,6 +89,10 @@ if len(steps) < 10 or any(b - a != 600 for a, b in zip(steps, steps[1:])):
     fail.append(f"the time-lapse did not step 10 minutes at a time from 2 hours back: {steps}")
 if pl["incomplete"]:
     fail.append(f"the time-lapse left steps before they were on screen: {pl['incomplete']}")
+if pl["blank_frames"]:
+    fail.append(f"the time-lapse showed a layer blank in {pl['blank_frames']} of {pl['frames']} frames (the flash)")
+if pl["max_gap_ms"] is not None and pl["max_gap_ms"] > 1200:
+    fail.append(f"the time-lapse stalled: {pl['max_gap_ms']} ms between steps (buffered, it should not)")
 if pl["ms"] > 60000:
     fail.append(f"the time-lapse took {pl['ms']} ms for {len(steps)} steps")
 c = r["changed"]
@@ -107,6 +114,7 @@ else:
         fail.append(f"probe: cell drawn {dx}, {dy} px from the pier (half a cell is {cell / 2:.0f} x {tall / 2:.0f})")
     if abs(bw - cell) > 2 or abs(bh - tall) > 2:
         fail.append(f"probe: cell drawn {bw} x {bh} px, expected {cell} x {tall:.0f}")
+print(f"weather: time-lapse buffer {pl['buffer_ms']} ms, then {len(pl['steps'])} steps in {pl['ms']} ms, longest gap {pl['max_gap_ms']} ms, blank frames {pl['blank_frames']} of {pl['frames']}")
 print(f"weather: world: global sat {wo['shown_global']}, SIGMETs {wo['sigmets']} (3 h back {past['sigmets']}), METARs {w['metars']}, SIGMET popup {(r['sigmetPopup'] or '')[:50]!r}; winds {wd}, FL180 {r['wind180']}, cost {r['windCost']}; time-lapse {len(steps)} steps in {pl['ms'] / 1000:.1f} s, ended live {pl['ended_live']}; METARs {w['metars']} stations, popup {(r['popup'] or '')[:60]!r}; live ready in {r['live_ms'] / 1000:.1f} s, 3 h back in {r['past_ms'] / 1000:.1f} s, changed mid-load {c}; GPU {past['gpu_bytes'] / 1e6:.0f} MB; hazards by level {lv}; probe {p}")
 if fail:
     print("weather: FAILED:\n  " + "\n  ".join(fail))

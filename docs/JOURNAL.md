@@ -1284,3 +1284,33 @@ right behaviour; the check now clicks with METARs off. The world picture: severe
 Shanwick and Santa Maria, severe icing from Scotland to Paris, thunderstorms over South America and
 Africa, volcanic ash from Fuego and Reventador. Where SIGMETs cluster the labels overlap; they need the
 collision handling the map's own labels have.
+
+## The time-lapse buffers; the flash; hazard labels that do not collide
+
+Measured before changing anything: the time-lapse's 12 steps took 11.9 s, the longest gap between
+steps 1.8 s (the first run downloads each step when it reaches it), and in 342 of 714 frames a layer
+that had something for the chosen time drew nothing. That is the flash: on each step the selection
+moved to textures not yet on the GPU, and the draw showed nothing until they arrived.
+
+Three changes. Play now buffers first: every step's radar frame, satellite and global images,
+SIGMETs and winds are fetched into Rust's caches (`wx_prefetch`, three at a time; nothing goes to
+the webview yet) while the button counts "Buffering k/n". While a step is on screen the next step's
+textures are uploaded from Rust's memory and kept from eviction, and the player moves on only when
+they are on the GPU. And the draw holds the last picture until the chosen time's texture arrives,
+instead of drawing nothing. A held loop now fetches only the radar frame it shows, not all five.
+After: buffering 6 to 8 s, then 12 steps in 7.5 s, longest gap 0.65 s (each step holds 0.6 s by
+design), blank frames 0 of 448. The gate now fails on any blank frame or a gap over 1.2 s.
+
+Changing what radar fetches broke the gate's readiness, which still waited for all five loop frames:
+the 3-hours-back wait ran to 286 s and the run hit its timeout. Readiness and the status line now count
+what will be shown.
+
+Labels: G-AIRMET and SIGMET labels are gathered and placed together, the most important first
+(volcanic ash and cyclones, then thunderstorms, then severe turbulence or icing, then the rest, then
+G-AIRMETs), each at its area's centre if free, else a little above or below or to a side, else left
+out; the outline is still drawn and a click still opens it. Over the Atlantic at zoom 2.4, 13 of
+157 labels fit, none overlapping.
+
+The world view failed once more, on a real gap: at 00:36Z nowCOAST's newest global mosaic was 23:00Z,
+96 minutes old, past the 90 minutes I had allowed, so the world's clouds disappeared. Allowed now 150;
+the stamp shows the image's own time.
