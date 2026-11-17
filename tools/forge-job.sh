@@ -5,8 +5,9 @@
 #   tools/forge-job.sh e2e     setup, unit tests, the release build, then the end-to-end checks on the
 #                              recorded tape in a virtual display (the Linux leg of platforms.yml)
 #   tools/forge-job.sh release for a pushed tag v<version>: the gate, the Debian package, then a forge
-#                              release holding it and its SHA256SUMS (RELEASE_DRY_RUN=1 builds, lists
-#                              what it would publish, and stops)
+#                              release holding it, the documentation site (book + API reference) as a
+#                              tarball, and their SHA256SUMS (RELEASE_DRY_RUN=1 builds, lists what it
+#                              would publish, and stops)
 # The runner mounts a directory that outlives jobs at $CI_CACHE: rustup, cargo, npm's cache and the
 # build tree are kept there, so only the first job builds from nothing. Without $CI_CACHE (a local
 # run through tools/ci-local.sh) everything stays in the container. The e2e job takes the fixtures
@@ -83,7 +84,9 @@ if [[ $job == release ]]; then
   rm -rf "$out"
   mkdir -p "$out"
   cp target/release/bundle/deb/*.deb "$out/"
-  (cd "$out" && sha256sum -- *.deb >SHA256SUMS)
+  tools/docs.sh --archive
+  cp target/maps-tauri-docs.tar.gz "$out/maps-tauri-docs-$tag.tar.gz"
+  (cd "$out" && sha256sum -- *.deb *.tar.gz >SHA256SUMS)
   echo "forge-job: $tag (prerelease $prerelease):"
   (cd "$out" && ls -l && cat SHA256SUMS)
   if [[ ${RELEASE_DRY_RUN:-} == 1 ]]; then
@@ -106,7 +109,7 @@ EOF
     -o "$out/release.json" -w '%{http_code}' -X POST "$api/releases")
   [[ $code == 201 ]] || { echo "forge-job: creating the release answered $code" >&2; cat "$out/release.json" >&2; exit 1; }
   id=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["id"])' "$out/release.json")
-  for f in "$out"/*.deb "$out/SHA256SUMS"; do
+  for f in "$out"/*.deb "$out"/*.tar.gz "$out/SHA256SUMS"; do
     code=$(auth | curl -sS -H @- -F "attachment=@$f" -o "$out/asset.json" -w '%{http_code}' \
       "$api/releases/$id/assets?name=$(basename "$f")")
     [[ $code == 201 ]] || { echo "forge-job: uploading $(basename "$f") answered $code" >&2; cat "$out/asset.json" >&2; exit 1; }

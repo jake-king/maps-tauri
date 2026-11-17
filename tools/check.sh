@@ -31,6 +31,8 @@ run rustfmt 120 cargo fmt --all -- --check
 run clippy 900 cargo clippy --workspace --all-targets --all-features -q -- -D warnings
 # the API docs build with every rustdoc warning fatal (the lints are in the workspace Cargo.toml)
 run rustdoc 900 env RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked -q
+# the book builds without a warning, and the site it is published as has every API page it links to
+run docs-site 300 tools/docs.sh
 run eslint 300 npx eslint .
 run ruff 120 sh -c 'ruff check tools/*.py && ruff format --check tools/*.py'
 run shellcheck 120 sh -c 'shellcheck tools/*.sh'

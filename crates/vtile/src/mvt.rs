@@ -229,6 +229,17 @@ pub fn decode(b: &[u8]) -> io::Result<Vec<Layer>> {
 /// as `@mapbox/vector-tile`'s `loadGeometry` returns it (checked over every tile by
 /// `tools/mvt_diff.mjs`). `out` is cleared and reused, so a caller decoding many features
 /// allocates only when a feature is bigger than any before it.
+///
+/// # Examples
+///
+/// The polygon from the Mapbox Vector Tile spec's own example: one `MoveTo`, two `LineTo`s, a
+/// `ClosePath`, with zigzag-encoded deltas.
+///
+/// ```
+/// let mut rings = Vec::new();
+/// vtile::mvt::geometry(&[9, 6, 12, 18, 10, 12, 24, 44, 15], &mut rings);
+/// assert_eq!(rings, vec![vec![[3, 6], [8, 12], [20, 34], [3, 6]]]);
+/// ```
 pub fn geometry(cmds: &[u32], out: &mut Vec<Vec<[i32; 2]>>) {
     let mut used = 0;
     let (mut x, mut y) = (0i32, 0i32);

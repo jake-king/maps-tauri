@@ -14,6 +14,13 @@ pub const VALID_FOR: i64 = 75 * 60;
 
 /// The flight category as a number: 0 = not reported (or unrecognised), 1 = VFR, 2 = MVFR, 3 = IFR,
 /// 4 = LIFR.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(wx::metar::category("IFR"), 3);
+/// assert_eq!(wx::metar::category(""), 0);
+/// ```
 pub fn category(s: &str) -> u8 {
     match s {
         "VFR" => 1,

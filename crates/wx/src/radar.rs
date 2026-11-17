@@ -31,6 +31,17 @@ pub struct Radar {
 }
 
 /// The byte code of a reflectivity in dBZ: 0 below [`MIN_DBZ`], for NaN and for the fill values.
+///
+/// # Examples
+///
+/// ```
+/// use wx::radar::{code, dbz};
+///
+/// assert_eq!(code(-999.0), 0); // the no-data fill value
+/// assert_eq!(code(5.0), 1);
+/// assert_eq!(dbz(code(42.5)), Some(42.5)); // half-dBZ steps survive the round trip
+/// assert_eq!(dbz(0), None);
+/// ```
 pub fn code(dbz: f32) -> u8 {
     if dbz.is_nan() || dbz < MIN_DBZ {
         return 0; // also the -999 / -99 fill values

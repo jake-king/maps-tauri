@@ -39,6 +39,14 @@ pub const STEP_H: i64 = 3;
 /// # Panics
 ///
 /// Never: [`LEVELS`] is not empty.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(wx::wind::pressure_for(180), 500);
+/// assert_eq!(wx::wind::pressure_for(60), 850); // FL060 is nearest FL050
+/// ```
+///
 pub fn pressure_for(fl: u32) -> u32 {
     LEVELS
         .iter()

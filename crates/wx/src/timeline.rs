@@ -73,6 +73,13 @@ pub fn select(at: i64, radar: &[i64], satellite: &[i64], hazards: &[i64]) -> Sel
 }
 
 /// Snap a chosen time to the bar's step (seconds), towards the past.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(wx::timeline::snap(1_000_299, 300), 1_000_200);
+/// assert_eq!(wx::timeline::snap(-1, 300), -300); // towards the past, also before 1970
+/// ```
 pub fn snap(t: i64, step: i64) -> i64 {
     t.div_euclid(step) * step
 }

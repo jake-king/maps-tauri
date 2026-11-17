@@ -10,3 +10,6 @@ __pycache__/
 
 # end-to-end fixtures, unpacked from the release archive (tools/fixtures.py)
 /fixtures/
+
+# the book as mdBook builds it (tools/docs.sh)
+/book/book

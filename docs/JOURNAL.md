@@ -1457,3 +1457,28 @@ Mercator metres and is in degrees; `Tape::replay` said it returns `None` for an 
 returns an error naming it; `fetch::metars` said "those in the box" and returns every station; a
 GetMap parameter was misnamed; one item carried two conflicting paragraphs. Coverage is now 100% in all
 four crates, and the gate keeps it there.
+
+## Doctests, a book, and documentation in every release
+
+Ten doctests now sit on the APIs a reader meets first: `parse_coords`, `fold` and `fts_query`; the
+PMTiles tile-id mapping and varint; MVT geometry decoding, on the polygon from the format spec's own
+example; radar codes, METAR categories, the time bar's `snap`, and the wind level lookup. They run in
+the gate's `cargo test`. All ten passed first time, which proves nothing, so a real bug was planted:
+`snap` with truncating division instead of `div_euclid`. The doctest for a time before 1970 failed
+(0, want -300).
+
+`book/` is an mdBook of eight short chapters, drawn from this journal and the README with the code as
+the arbiter. `tools/docs.sh` builds it and the API reference into one site (`target/site`, the book
+at the root, rustdoc under `api/`), and the gate runs it as the `docs-site` step.
+
+mdBook 0.5.4 checks almost nothing on its own, which a probe showed before anything relied on it: a
+chapter named in `SUMMARY.md` but never written is created empty, and a broken link or image builds
+with exit 0 and no warning. `book.toml` now sets `create-missing = false`, and `tools/linkcheck.py`
+resolves every relative link and `#anchor` in the book's built pages against the assembled site (334
+links over 11 pages). Its own controls: a missing file, a missing anchor and a path out of the site
+are each reported. Against the real book, a deleted chapter and a mistyped API link each fail the
+step. mdBook's 404 page is dropped from the site: its `<base href="/">` is only right on a server with
+the book at its root.
+
+A release now also carries `maps-tauri-docs-<tag>.tar.gz`, the same site, listed in SHA256SUMS.
+mdBook is pinned (0.5.4) and installed by `tools/ci-setup.sh`, like the other tools CI needs.

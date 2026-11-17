@@ -99,6 +99,16 @@ pub fn parse_header(b: &[u8]) -> io::Result<Header> {
 /// # Errors
 ///
 /// `InvalidData` when `b` ends before the varint does, or it runs past 10 bytes.
+///
+/// # Examples
+///
+/// ```
+/// let b = [0xac, 0x02, 0x05];
+/// let mut pos = 0;
+/// assert_eq!(vtile::pmtiles::varint(&b, &mut pos).unwrap(), 300);
+/// assert_eq!(pos, 2);
+/// assert!(vtile::pmtiles::varint(&[0x80], &mut 0).is_err()); // ends mid-varint
+/// ```
 pub fn varint(b: &[u8], pos: &mut usize) -> io::Result<u64> {
     let mut v: u64 = 0;
     for shift in (0..64).step_by(7) {
@@ -165,6 +175,18 @@ pub fn parse_directory(b: &[u8]) -> io::Result<Vec<Entry>> {
 }
 
 /// The Hilbert tile id of z/x/y, as the spec defines it.
+///
+/// # Examples
+///
+/// ```
+/// use vtile::pmtiles::{tile_id_to_zxy, zxy_to_tile_id};
+///
+/// assert_eq!(zxy_to_tile_id(0, 0, 0), 0);
+/// // ids count every tile of the lower zooms first: zoom 1 starts at 1, zoom 2 at 5
+/// assert_eq!(zxy_to_tile_id(1, 0, 0), 1);
+/// assert_eq!(zxy_to_tile_id(2, 0, 0), 5);
+/// assert_eq!(tile_id_to_zxy(zxy_to_tile_id(12, 703, 1635)), (12, 703, 1635));
+/// ```
 pub fn zxy_to_tile_id(z: u8, x: u32, y: u32) -> u64 {
     let mut acc: u64 = ((1u64 << (2 * z as u64)) - 1) / 3; // tiles at all lower zooms
     let (mut x, mut y) = (x as u64, y as u64);

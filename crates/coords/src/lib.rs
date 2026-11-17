@@ -128,6 +128,20 @@ fn value(m: &Captures, i: u8) -> Option<(f64, Option<char>, bool)> {
 /// Every component must carry a mark that says "coordinate" (a decimal point, a sign, a
 /// hemisphere letter, or a degree/minute/second symbol), so postcodes like `110 00` and
 /// half-typed names like `N1 9` are refused.
+///
+/// # Examples
+///
+/// ```
+/// use coords::parse_coords;
+///
+/// // a hemisphere letter says which number is which: one reading
+/// assert_eq!(parse_coords("34.05 N, 118.25 W"), vec![(34.05, -118.25)]);
+/// // two signed decimals could be either order: both in-range readings, lat-lon first
+/// assert_eq!(parse_coords("34.05, -118.25"), vec![(34.05, -118.25)]);
+/// assert_eq!(parse_coords("10.5, 20.5"), vec![(10.5, 20.5), (20.5, 10.5)]);
+/// // no coordinate mark: left to the gazetteer
+/// assert!(parse_coords("110 00").is_empty());
+/// ```
 pub fn parse_coords(raw: &str) -> Vec<(f64, f64)> {
     if raw.chars().count() > MAX_QUERY {
         return Vec::new();
@@ -174,6 +188,13 @@ fn split_whitespace_like_python(s: &str) -> Vec<&str> {
 }
 
 /// The gazetteer's `name_fold`: lowercase, canonical decomposition, combining marks removed.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(coords::fold("São Paulo"), "sao paulo");
+/// assert_eq!(coords::fold("Zürich"), "zurich");
+/// ```
 pub fn fold(s: &str) -> String {
     s.to_lowercase()
         .nfd()
@@ -185,6 +206,15 @@ pub fn fold(s: &str) -> String {
 ///
 /// Returns `None` when there is nothing to search for. Only alphanumeric runs survive, so no
 /// operator (`"`, `*`, `^`, `NEAR`, `OR`) can reach the match expression as syntax.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(coords::fts_query("santa mon").as_deref(), Some("\"santa mon\"*"));
+/// // operators are dropped, never passed through
+/// assert_eq!(coords::fts_query("a\" OR \"b*").as_deref(), Some("\"a OR b\"*"));
+/// assert_eq!(coords::fts_query("*^()"), None);
+/// ```
 pub fn fts_query(raw: &str) -> Option<String> {
     let tokens: Vec<&str> = raw
         .split(|c: char| !is_python_word_alnum(c))

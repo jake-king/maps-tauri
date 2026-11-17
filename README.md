@@ -7,6 +7,12 @@ and a small WebGL2 renderer in the webview draws them. It can read a whole-plane
 HTTP range requests and keeps what it has seen in a SQLite cache, so places visited once still draw
 with the network gone.
 
+## Documentation
+
+`book/` is a short engineering book (mdBook): the architecture, the native renderer, weather, search,
+how things were measured, and how they are checked. `tools/docs.sh` builds it with the Rust API
+reference beside it under `api/`; every public item is documented, and the gate keeps it so.
+
 ## How this was built
 
 I built this in November 2026 with an AI coding agent. I set the goals, chose what to measure and
