@@ -7,7 +7,8 @@
 # The runner mounts a directory that outlives jobs at $CI_CACHE: rustup, cargo, npm's cache and the
 # build tree are kept there, so only the first job builds from nothing. Without $CI_CACHE (a local
 # run through tools/ci-local.sh) everything stays in the container. The e2e job takes the fixtures
-# from ./e2e-fixtures.tar.gz when present (tools/ci-local.sh's FIXTURES=), else downloads them.
+# from ./e2e-fixtures.tar.gz when present (tools/ci-local.sh's FIXTURES=), else from the cache, else
+# from the forge's e2e-fixtures branch with the job's token in $TOKEN.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 job=${1:-}
@@ -57,8 +58,27 @@ npm test
 npx tauri build --no-bundle
 archive=e2e-fixtures.tar.gz
 if [[ ! -f $archive ]]; then
-  python3 tools/fixtures.py fetch logs/fixtures
-  archive=logs/fixtures/e2e-fixtures.tar.gz
+  want=$(python3 -c 'import json; print(json.load(open("tools/fixtures.lock"))["sha256"])')
+  kept=${CI_CACHE:+$CI_CACHE/maps-tauri/fixtures/$want.tar.gz}
+  if [[ -n $kept && -f $kept ]]; then
+    archive=$kept
+  else
+    # The archive is kept on the forge's e2e-fixtures branch, away from the code branches (and so
+    # from the public copy). The job's token is accepted by git and the API, not by the forge's
+    # web downloads, so a release asset is out of reach; the token goes in git's environment.
+    mkdir -p logs
+    archive=logs/e2e-fixtures.tar.gz
+    (
+      export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="Authorization: token ${TOKEN:?}"
+      git fetch -q --depth 1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" e2e-fixtures
+    )
+    git show FETCH_HEAD:e2e-fixtures.tar.gz >"$archive"
+    echo "$want  $archive" | sha256sum -c --quiet
+    if [[ -n $kept ]]; then
+      mkdir -p "${kept%/*}"
+      cp "$archive" "$kept.$$" && mv "$kept.$$" "$kept"
+    fi
+  fi
 fi
 python3 tools/fixtures.py unpack "$archive"
 # a virtual display (not xvfb-run: its ready signal was seen lost), and WebKitGTK's DMA-BUF renderer
