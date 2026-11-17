@@ -66,13 +66,14 @@ jobs:
           python tools/fixtures.py unpack "$RUNNER_TEMP/$file"
       - name: End to end, on the tape
         run: |
+          args=(--tape fixtures/tape --no-timing --out e2e-out)
           if [[ $RUNNER_OS == Linux ]]; then
-            # WebKitGTK's DMA-BUF renderer needs a GPU; Xvfb has none
+            # a virtual display (not xvfb-run: its ready signal was seen lost), and WebKitGTK's
+            # DMA-BUF renderer off, as it needs a GPU and Xvfb has none
             export WEBKIT_DISABLE_DMABUF_RENDERER=1
-            xvfb-run -a -s "-screen 0 1280x900x24" python tools/e2e.py --tape fixtures/tape --no-timing --out e2e-out
-          else
-            python tools/e2e.py --tape fixtures/tape --no-timing --out e2e-out
+            args+=(--xvfb)
           fi
+          python tools/e2e.py "${args[@]}"
       - name: Snapshots and logs
         if: always()
         uses: actions/upload-artifact@v4
