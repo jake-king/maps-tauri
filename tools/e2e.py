@@ -94,6 +94,8 @@ def main():
         MAPS_SNAPSHOT_DIR=str(out),
     )
     if a.tape:
+        if not (Path(a.tape) / "now.txt").is_file():
+            sys.exit(f"{a.tape}: not a tape (no now.txt)")
         env["MAPS_TAPE_REPLAY"] = str(Path(a.tape).resolve())
     if a.record:
         env["MAPS_TAPE_RECORD"] = str(Path(a.record).resolve())
@@ -108,7 +110,12 @@ def main():
             400,
             lambda log: e2e_check.weather(log, timing=not a.no_timing),
         ),
-        ("wind", {"MAPS_WIND_MOTION": "1"}, 180, e2e_check.wind),
+        (
+            "wind",
+            {"MAPS_WIND_MOTION": "1"},
+            180,
+            lambda log: e2e_check.wind(log, timing=not a.no_timing),
+        ),
     ):
         log = out / f"{name}.log"
         run(app, dict(env, **extra), log, timeout)

@@ -1373,3 +1373,21 @@ went through the guard. On the dev box `wx_state` answers within the 30 ms betwe
 software GL it does not. It now drops a state whose generation is stale and passes the generation it
 started with into `sync`. A unit test with a fake backend whose answer for the first time is slow
 reproduces it (red on the old code: the abandoned time's satellite image uploaded), green on the fix.
+
+The second container run never finished: it hit its hour. The container was still up afterwards (the
+timeout killed `ci-local.sh`, not the container), so I could look inside it. `xvfb-run` sat in its
+`wait` for Xvfb's ready signal (SIGUSR1), while Xvfb had been listening on its socket the whole time
+and the app had never started. `tools/e2e.py --xvfb` now starts Xvfb itself and waits on its
+`-displayfd` pipe, which is written once the server is ready; the workflow uses it on Linux.
+`ci-local.sh` names its container and removes it when the script exits, killed or not.
+
+The third run passed the weather checks and failed one wind-motion check by 0.1%: 38,198 trail segments
+in the sample taken mid-wheel, against a floor of 60% of 63,712. That sample counts the trails grown in
+the frames the zoom has run so far, so it follows the frame rate: 81% of the starting count on the dev
+box's GPU, 74% in software GL on the dev box (a frame every 17 ms), 60% in the container (every 37 ms).
+The samples after each move were all over 100%. Like the speed limits, the mid-move samples are now
+judged only with timing on. On a planted report, the container's mid-move value fails with timing and
+passes without, and trails lost after a slow move fail both ways.
+
+Found on the way: pointed at a directory with no tape, the app panicked in a fetch thread and then
+waited out the 400 s timeout. `e2e.py` refuses such a directory before starting the app.

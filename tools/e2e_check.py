@@ -3,10 +3,10 @@
 Plain Python, no dependencies, so the same checks run on Linux, macOS and Windows.
 
   e2e_check.py weather LOG [--no-timing]   the weather run (MAPS_WEATHER=1)
-  e2e_check.py wind LOG                    the wind-trail motion run (MAPS_WIND_MOTION=1)
+  e2e_check.py wind LOG [--no-timing]      the wind-trail motion run (MAPS_WIND_MOTION=1)
 
 --no-timing drops the limits that measure speed (buffering, gaps between time-lapse steps, total
-time): CI's runners draw WebGL in software, so only correctness is checked there. Exit 1 on failure.
+time, and wind trail counts taken mid-move, which follow the frame rate): CI's runners draw WebGL in software, so only correctness is checked there. Exit 1 on failure.
 """
 
 import json
@@ -160,7 +160,7 @@ def weather(path, timing=True):
     print("weather: all passed")
 
 
-def wind(path):
+def wind(path, timing=True):
     bench = [
         l
         for l in Path(path).read_text(encoding="utf-8").split("\n")
@@ -183,6 +183,11 @@ def wind(path):
         "16-atlantic",
         "17-atlantic-fastpan-after",
     ]
+    if not timing:
+        # a sample taken mid-move counts trails grown in the frames the move has run so far, so it
+        # follows the frame rate (81% of before on the dev box's GPU, 74% in software GL there, 60% in
+        # the CI container); the samples after each move do not
+        slow = [k for k in slow if not k.endswith("-mid")]
     low = {k: c[k] for k in slow if c[k] < 0.6 * before}
     bunched = {k: v["cv"] for k, v in st.items() if v["cv"] is None or v["cv"] > 0.35}
     stretched = {k: v["long"] for k, v in st.items() if v["long"]}
@@ -214,4 +219,4 @@ if __name__ == "__main__":
     if args[0] == "weather":
         weather(args[1], timing="--no-timing" not in sys.argv)
     else:
-        wind(args[1])
+        wind(args[1], timing="--no-timing" not in sys.argv)
