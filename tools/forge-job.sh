@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# One job of the forge's CI (.forgejo/workflows/ci.yml), run from the checked-out tree inside a bare
-# Ubuntu 24.04 container on the forge's runner:
+# One job of the self-hosted forge's CI (its workflow, .forgejo/, is kept out of the public copy), run
+# from the checked-out tree inside a bare Ubuntu 24.04 container on the forge's runner:
 #   tools/forge-job.sh check   setup, then tools/check.sh (the gate the dev box runs before a commit)
 #   tools/forge-job.sh e2e     setup, unit tests, the release build, then the end-to-end checks on the
 #                              recorded tape in a virtual display (the Linux leg of platforms.yml)
