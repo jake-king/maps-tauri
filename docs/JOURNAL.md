@@ -1391,3 +1391,28 @@ passes without, and trails lost after a slow move fail both ways.
 
 Found on the way: pointed at a directory with no tape, the app panicked in a fetch thread and then
 waited out the 400 s timeout. `e2e.py` refuses such a directory before starting the app.
+
+## CI on the self-hosted forge
+
+The repository now lives on a self-hosted Forgejo forge first, and its CI runs there
+(`.forgejo/workflows/ci.yml`): the gate, then the Linux end-to-end leg, each in a bare Ubuntu 24.04
+container on the forge's one shared runner. The job logic is `tools/forge-job.sh`, so a job runs the same
+way in a local container. GitHub's workflows are kept as they are, for macOS and Windows later.
+
+The runner keeps one directory between jobs, so rustup, cargo, npm's cache and the build tree live
+there (the tree is linked as `./target`, since the scripts name that path, and emptied past 20 GB:
+the disk is shared with other projects' CI and cargo never shrinks a tree). With the cache warm, the gate
+takes about two minutes and the end-to-end leg about three, including the release build.
+
+Two things only the real runner showed. First, the container has no Node until setup installs it,
+and Forgejo runs JavaScript actions inside the job container, so the checkout is a plain `git fetch`
+with the job's token in git's environment. Second, the end-to-end fixtures could not be a release
+asset: the job's token is accepted by git and the API but not by the forge's web download route.
+A throwaway workflow measured it: 404 with the token as a header, as a bearer token and as basic auth,
+and a redirect to sign-in with none. The archive now sits on an `e2e-fixtures` branch with no code on
+it. The job fetches it over git, checks it against `tools/fixtures.lock`, and keeps it in the cache.
+
+Also caught before the first push: the log-tail step meant to print a failed check's log ran `grep`
+over a passing run, found nothing, exited 1, and under `pipefail` failed a passing gate. With a
+planted formatting error the job now goes red and prints each failed step's log; on a clean tree it
+is green.
