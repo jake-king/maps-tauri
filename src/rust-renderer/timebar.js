@@ -152,9 +152,17 @@ export class TimeBar {
     this.buffering = true;
     this.onPlay(true);
     this.playButton.textContent = `Buffering 0/${steps.length}`;
-    await this.bufferSteps(steps, (k, n) => {
+    // play once the first steps are fetched; the rest keep buffering ahead of the player (data
+    // fetched ahead in the background makes this immediate)
+    const first = new Set(steps.slice(0, 3));
+    let started;
+    const ready = new Promise((r) => (started = r));
+    const all = this.bufferSteps(steps, (k, n, at) => {
+      first.delete(at);
       if (this.buffering) this.playButton.textContent = `Buffering ${k}/${n}`;
+      if (!first.size) started();
     });
+    await Promise.race([ready, all]);
     if (!this.buffering) return; // stopped while buffering
     this.buffering = false;
     this.playButton.textContent = "Pause";

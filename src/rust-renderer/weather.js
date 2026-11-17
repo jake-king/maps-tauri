@@ -57,10 +57,12 @@ uniform vec2 u_rot;
 uniform vec4 u_box;     // the image's world box: x0, y0 (top), x1, y1 (bottom), in [0,1)
 uniform float u_opacity;
 uniform sampler2D u_sat; // R8 grey, 0 = no data
-// the global mosaic gives way where GOES has data: its texture and box as a mask (u_useMask 1)
+// with the global mosaic: GOES (u_mask, over u_maskBox) blended in where it has data, from none at
+// the edge of its coverage to all of it about 1.5 degrees inside, so the two meet without a seam
 uniform sampler2D u_mask;
 uniform vec4 u_maskBox;
 uniform float u_useMask;
+uniform float u_feather; // the blend's width, as a fraction of the GOES box's width
 out vec4 o;
 void main() {
   vec2 p = vec2(gl_FragCoord.x, u_size.y * u_dpr - gl_FragCoord.y) / u_dpr;
@@ -68,11 +70,43 @@ void main() {
   vec2 w = u_center + vec2(d.x * u_rot.x - d.y * u_rot.y, d.x * u_rot.y + d.y * u_rot.x) / u_scale;
   vec2 uv = (w - u_box.xy) / (u_box.zw - u_box.xy);
   if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) discard;
+  float g = texture(u_sat, uv).r;
   if (u_useMask > 0.5) {
     vec2 mv = (w - u_maskBox.xy) / (u_maskBox.zw - u_maskBox.xy);
-    if (mv.x >= 0.0 && mv.y >= 0.0 && mv.x <= 1.0 && mv.y <= 1.0 && texture(u_mask, mv).r > 0.0) discard;
+    bool inBox = mv.x >= 0.0 && mv.y >= 0.0 && mv.x <= 1.0 && mv.y <= 1.0;
+    vec2 sz = vec2(textureSize(u_mask, 0));
+    // filtered, a pixel at the edge of GOES's coverage is mixed with no data and reads dimmer (a thin
+    // light line along the edge): only where the pixel itself has data, then filtered within it
+    float own = inBox ? texelFetch(u_mask, ivec2(min(mv * sz, sz - 1.0)), 0).r : 0.0;
+    float here = 0.0;
+    if (own > 0.0) {
+      // bilinear over the four texels around, counting only those with data
+      vec2 f = mv * sz - 0.5;
+      vec2 fr = fract(f);
+      ivec2 i0 = ivec2(floor(f));
+      ivec2 top = ivec2(sz) - 1;
+      float sum = 0.0, wsum = 0.0;
+      for (int k = 0; k < 4; k++) {
+        ivec2 o4 = ivec2(k & 1, k >> 1);
+        float v = texelFetch(u_mask, clamp(i0 + o4, ivec2(0), top), 0).r;
+        float wt = (o4.x == 1 ? fr.x : 1.0 - fr.x) * (o4.y == 1 ? fr.y : 1.0 - fr.y);
+        if (v > 0.0) { sum += v * wt; wsum += wt; }
+      }
+      here = wsum > 0.0 ? sum / wsum : own;
+    }
+    if (here > 0.0) {
+      // the share of a disc around this point that GOES covers: 0.5 at a straight edge, 1 deep inside
+      vec2 rad = vec2(u_feather, u_feather * sz.x / sz.y);
+      float covered = 0.0;
+      for (int k = 0; k < 16; k++) {
+        float ang = float(k) * 0.39269908;
+        vec2 q = mv + vec2(cos(ang), sin(ang)) * rad * (k % 2 == 0 ? 1.0 : 0.5);
+        if (q.x >= 0.0 && q.y >= 0.0 && q.x <= 1.0 && q.y <= 1.0 && texture(u_mask, q).r > 0.0) covered += 1.0;
+      }
+      float t = clamp((covered / 16.0 - 0.5) * 2.0, 0.0, 1.0);
+      g = g > 0.0 ? mix(g, here, t) : here;
+    }
   }
-  float g = texture(u_sat, uv).r;
   if (g <= 0.0) discard;
   float cold = smoothstep(130.0 / 255.0, 215.0 / 255.0, g);
   if (cold <= 0.0) discard;
@@ -388,7 +422,7 @@ export class WeatherLayer {
     this.marks = {};
     const gl = map.gl;
     this.prog = program(gl, FS, ["u_size", "u_dpr", "u_center", "u_scale", "u_rot", "u_grid", "u_dims", "u_opacity", "u_radar", "u_lut"]);
-    this.satProg = program(gl, SAT_FS, ["u_size", "u_dpr", "u_center", "u_scale", "u_rot", "u_box", "u_opacity", "u_sat", "u_mask", "u_maskBox", "u_useMask"]);
+    this.satProg = program(gl, SAT_FS, ["u_size", "u_dpr", "u_center", "u_scale", "u_rot", "u_box", "u_opacity", "u_sat", "u_mask", "u_maskBox", "u_useMask", "u_feather"]);
     this.vao = gl.createVertexArray();
     this.lutTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.lutTex);
@@ -657,7 +691,7 @@ export class WeatherLayer {
         } catch (e) {
           this.lastError = String(e?.message ?? e);
         }
-        progress?.(++done, times.length);
+        progress?.(++done, times.length, at);
       }
     };
     await Promise.all([worker(), worker(), worker()]);
@@ -738,7 +772,7 @@ export class WeatherLayer {
       const t = this.satNow() ?? (want != null && this.sats.has(this.shownSat) ? this.shownSat : null);
       this.shownSat = t;
       const s = t == null ? null : this.sats.get(t);
-      // the world first, from the hourly mosaic, giving way wherever GOES has data
+      // with the world's mosaic, one pass: it blends GOES in (SAT_FS); without it, GOES alone
       const gwant = this.state?.selection?.satelliteGlobal;
       const gt = gwant != null && this.globals.has(gwant) ? gwant : gwant != null && this.globals.has(this.shownGlobal) ? this.shownGlobal : null;
       const gs = gt == null ? null : this.globals.get(gt);
@@ -758,10 +792,15 @@ export class WeatherLayer {
         gl.uniform1i(u.u_mask, 1);
         gl.uniform4f(u.u_maskBox, ...(s ? s.box : [0, 0, 0, 0]));
         gl.uniform1f(u.u_useMask, s ? 1 : 0);
+        gl.uniform1f(u.u_feather, 1.5 / 80); // 1.5 degrees of the GOES box's 80
         gl.activeTexture(gl.TEXTURE0);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
+        if (s) {
+          this.drawn.sat = true;
+          s.used = performance.now();
+        }
       }
-      if (s) {
+      if (s && !gs) {
         this.drawn.sat = true;
         s.used = performance.now();
         const { p, u } = this.satProg;

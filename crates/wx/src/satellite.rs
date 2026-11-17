@@ -68,10 +68,119 @@ pub fn url_global(time_iso: &str) -> String {
 /// pixel over the central US with both images from 23Z on 2026-11-16 (r = 0.976, median error 1.6
 /// grey levels, 5.3 within cloud). 0 (no data) stays 0.
 pub fn to_goes_scale(g: u8) -> u8 {
+    to_scale(g, GAIN, OFFSET)
+}
+/// The fixed fit's gain and offset (see [`to_goes_scale`]); used when [`fit_edge`] cannot fit a pair.
+pub const GAIN: f64 = 0.650;
+pub const OFFSET: f64 = 51.4;
+
+/// A greyscale image in Web Mercator: `grey` row by row from the north, `box` its (x0, y0, x1, y1)
+/// in metres; 0 is no data.
+pub struct View<'a> {
+    pub grey: &'a [u8],
+    pub width: usize,
+    pub height: usize,
+    pub bbox: [f64; 4],
+}
+
+/// The global mosaic's grey levels on GOES's scale, fitted where it matters: along the edge of GOES's
+/// coverage, where one image gives way to the other. The relation is not one line everywhere (central
+/// US: GOES = 0.650 g + 51.4; the Canadian border: 0.420 g + 99.3, measured 2026-11-16 23Z), so a
+/// pair of images is fitted on the GOES pixels within about a degree of no data (or of the image's
+/// edge). Returns (gain, offset, samples), or None when too few pixels or too weak a relation.
+pub fn fit_edge(goes: &View, global: &View) -> Option<(f64, f64, usize)> {
+    let (w, h) = (goes.width, goes.height);
+    let [x0, y0, x1, y1] = goes.bbox;
+    let (dx, dy) = ((x1 - x0) / w as f64, (y1 - y0) / h as f64);
+    // the band's width: about a degree (111 km of Mercator x at the equator), in GOES pixels
+    let d = (111_319.0 / dx).ceil().max(1.0) as usize;
+    // no-data, by blocks of b pixels; a pixel is in the band if any block within r of its own has
+    // no data, or lies outside the image (the global image takes over there too)
+    let b = (d / 3).max(1);
+    let (bw, bh) = (w.div_ceil(b), h.div_ceil(b));
+    let mut empty = vec![false; bw * bh];
+    for y in 0..h {
+        for x in 0..w {
+            if goes.grey[y * w + x] == 0 {
+                empty[(y / b) * bw + x / b] = true;
+            }
+        }
+    }
+    let r = d.div_ceil(b) as isize;
+    let near_empty = |bx: isize, by: isize| {
+        (-r..=r).any(|oy| {
+            (-r..=r).any(|ox| {
+                let (cx, cy) = (bx + ox, by + oy);
+                cx < 0
+                    || cy < 0
+                    || cx >= bw as isize
+                    || cy >= bh as isize
+                    || empty[cy as usize * bw + cx as usize]
+            })
+        })
+    };
+    let [gx0, gy0, gx1, gy1] = global.bbox;
+    let (gdx, gdy) = (
+        (gx1 - gx0) / global.width as f64,
+        (gy1 - gy0) / global.height as f64,
+    );
+    let (mut n, mut sx, mut sy, mut sxx, mut sxy, mut syy) = (0usize, 0.0, 0.0, 0.0, 0.0, 0.0);
+    for by in 0..bh {
+        for bx in 0..bw {
+            if !near_empty(bx as isize, by as isize) {
+                continue;
+            }
+            for y in by * b..((by + 1) * b).min(h) {
+                for x in bx * b..((bx + 1) * b).min(w) {
+                    let v = goes.grey[y * w + x];
+                    if v == 0 {
+                        continue;
+                    }
+                    // the pixel's centre in metres, then in the global image
+                    let mx = x0 + (x as f64 + 0.5) * dx;
+                    let my = y1 - (y as f64 + 0.5) * dy;
+                    let gx = ((mx - gx0) / gdx).floor();
+                    let gy = ((gy1 - my) / gdy).floor();
+                    if gx < 0.0
+                        || gy < 0.0
+                        || gx >= global.width as f64
+                        || gy >= global.height as f64
+                    {
+                        continue;
+                    }
+                    let g = global.grey[gy as usize * global.width + gx as usize];
+                    if g == 0 {
+                        continue;
+                    }
+                    let (a, c) = (g as f64, v as f64);
+                    n += 1;
+                    sx += a;
+                    sy += c;
+                    sxx += a * a;
+                    sxy += a * c;
+                    syy += c * c;
+                }
+            }
+        }
+    }
+    if n < 500 {
+        return None;
+    }
+    let nf = n as f64;
+    let (vx, vy, cov) = (sxx - sx * sx / nf, syy - sy * sy / nf, sxy - sx * sy / nf);
+    if vx <= 0.0 || vy <= 0.0 || cov / (vx * vy).sqrt() < 0.8 {
+        return None;
+    }
+    let k = cov / vx;
+    Some((k, (sy - k * sx) / nf, n))
+}
+
+/// `g` (global mosaic, 0 = no data) as `gain * g + offset` on GOES's scale, kept in 1..255.
+pub fn to_scale(g: u8, gain: f64, offset: f64) -> u8 {
     if g == 0 {
         return 0;
     }
-    (0.650 * g as f64 + 51.4).round().clamp(1.0, 255.0) as u8
+    (gain * g as f64 + offset).round().clamp(1.0, 255.0) as u8
 }
 
 pub fn capabilities_url() -> String {
@@ -211,6 +320,105 @@ fn luma(r: u8, g: u8, b: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A GOES image whose top half has no data, and a global image over the same box whose relation to
+    /// GOES is one line near that edge and another deep inside: the fit must follow the edge's.
+    #[test]
+    fn the_fit_follows_the_edge_of_goes_coverage() {
+        let (w, h) = (200usize, 200usize);
+        let bbox = [0.0, 0.0, 2.0e6, 2.0e6];
+        let mut glob = vec![0u8; w * h];
+        let mut goes = vec![0u8; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let g = 40 + ((x * 7 + y * 13) % 160) as u8; // varied cloud
+                glob[y * w + x] = g;
+                if y >= 100 {
+                    // within ~25 px of the coverage edge (row 100) and of the sides: 0.42 g + 99;
+                    // deep inside: 0.65 g + 51
+                    let near = y < 125 || x < 25 || x >= w - 25 || y >= h - 25;
+                    let v = if near {
+                        0.42 * g as f64 + 99.3
+                    } else {
+                        0.65 * g as f64 + 51.4
+                    };
+                    goes[y * w + x] = v.round() as u8;
+                }
+            }
+        }
+        let gv = View {
+            grey: &goes,
+            width: w,
+            height: h,
+            bbox,
+        };
+        let wv = View {
+            grey: &glob,
+            width: w,
+            height: h,
+            bbox,
+        };
+        let (k, c, n) = fit_edge(&gv, &wv).expect("a fit");
+        assert!(
+            (k - 0.42).abs() < 0.03 && (c - 99.3).abs() < 4.0,
+            "fitted {k:.3} g + {c:.1} on {n}"
+        );
+        // too little overlap: no fit
+        let none = vec![0u8; w * h];
+        assert!(fit_edge(
+            &View {
+                grey: &none,
+                width: w,
+                height: h,
+                bbox
+            },
+            &wv
+        )
+        .is_none());
+    }
+
+    /// The global image covers a larger box at a different scale: pixels are matched by position.
+    #[test]
+    fn the_fit_matches_pixels_by_position_across_boxes() {
+        let (w, h) = (100usize, 100usize);
+        let gbox = [0.0, 0.0, 1.0e6, 1.0e6];
+        // the global image: 4x the area at half the resolution, its value a function of position
+        let wbox = [-1.0e6, -1.0e6, 3.0e6, 3.0e6];
+        let at = |x: f64, y: f64| {
+            40.0 + ((x / 1.0e5).floor() * 17.0 + (y / 1.0e5).floor() * 11.0) % 150.0
+        };
+        let glob: Vec<u8> = (0..200 * 200)
+            .map(|i| {
+                let (px, py) = ((i % 200) as f64 + 0.5, (i / 200) as f64 + 0.5);
+                at(-1.0e6 + px * 2.0e4, 3.0e6 - py * 2.0e4) as u8
+            })
+            .collect();
+        let goes: Vec<u8> = (0..w * h)
+            .map(|i| {
+                let (px, py) = ((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
+                (0.5 * at(px * 1.0e4, 1.0e6 - py * 1.0e4) + 80.0).round() as u8
+            })
+            .collect();
+        let (k, c, _) = fit_edge(
+            &View {
+                grey: &goes,
+                width: w,
+                height: h,
+                bbox: gbox,
+            },
+            &View {
+                grey: &glob,
+                width: 200,
+                height: 200,
+                bbox: wbox,
+            },
+        )
+        .expect("a fit");
+        assert!(
+            (k - 0.5).abs() < 0.05 && (c - 80.0).abs() < 6.0,
+            "fitted {k:.3} g + {c:.1}"
+        );
+    }
 
     fn indexed_png(w: u32, h: u32, idx: &[u8], palette: &[[u8; 3]], alpha: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();

@@ -1314,3 +1314,25 @@ out; the outline is still drawn and a click still opens it. Over the Atlantic at
 The world view failed once more, on a real gap: at 00:36Z nowCOAST's newest global mosaic was 23:00Z,
 96 minutes old, past the 90 minutes I had allowed, so the world's clouds disappeared. Allowed now 150;
 the stamp shows the image's own time.
+
+## The satellite seam; the time-lapse fetched ahead
+
+The seam over Canada was not where I had put GOES's box (60°N): nowCOAST's GOES layer stops near
+49.7°N there, and north of that the global mosaic showed through, about 23 grey levels darker. The
+fixed fit from the central US (GOES = 0.650 g + 51.4) does not hold at the border: over the same
+pixels at the same hour the relation is 0.420 g + 99.3. One line does not fit everywhere, so each
+global image is now fitted when it is decoded against the GOES image nearest its hour, on the GOES
+pixels within about a degree of no data or of the image's edge (`wx::satellite::fit_edge`; the
+fixed fit when there are too few pixels or r < 0.8). The fits measured live ran from 0.877 g + 33.3
+to 1.060 g + 15.7, each on 201,295 edge pixels. And the two images now meet in one pass: GOES is
+blended in from none at the edge of its coverage to all of it 1.5° inside, weighted by how much of
+a disc around each point it covers. A thin light line remained exactly on the edge: filtering mixed
+GOES's edge pixels with no data. Filtering there now counts only pixels with data. What still shows
+is the global image's coarser grain.
+
+Play started with 6 to 14 s of buffering. Now, after each live round, the backend fetches the
+default time-lapse's steps (three hours of 10-minute steps: each step's newest radar frame,
+satellite and global images, SIGMETs) into its caches, so after the first round only the newest step
+costs anything. Play still asks for every step, but from memory; it starts once its first three are
+in and keeps buffering ahead. From an empty cache, Play pressed about a minute after launch buffered
+94 ms. The gate fails over 2 s.

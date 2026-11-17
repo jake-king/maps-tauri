@@ -225,7 +225,48 @@ impl Store {
     }
 }
 
+/// The time-lapse's default steps at `now` (as timebar.js's playSteps from the present): every
+/// 10 minutes from three hours back to the last step a whole step before now.
+pub fn play_steps(now: i64) -> Vec<i64> {
+    const STEP: i64 = 600;
+    let mut t = (now - 3 * 3600).div_euclid(STEP) * STEP;
+    let mut out = Vec::new();
+    loop {
+        out.push(t);
+        if now - (t + STEP) < STEP {
+            return out;
+        }
+        t += STEP;
+    }
+}
+
 impl Weather {
+    /// Fetch ahead what the time-lapse will show, so Play starts at once.
+    /// Each step's newest radar frame, satellite and global images and SIGMETs, three at a time; what
+    /// is held is not fetched again, so after the first time only the newest step costs anything.
+    pub fn warm_play(&self, src: &dyn Source, now: i64) {
+        let queue = Mutex::new(play_steps(now).into_iter().rev());
+        std::thread::scope(|sc| {
+            for _ in 0..3 {
+                sc.spawn(|| loop {
+                    let next = queue.lock().expect("queue").next();
+                    let Some(at) = next else { break };
+                    let sel = self.select(at);
+                    if let Some(&t) = sel.radar.last() {
+                        let _ = self.radar_frame(src, t);
+                    }
+                    if let Some(t) = sel.satellite {
+                        let _ = self.satellite_image(src, t);
+                    }
+                    if let Some(t) = self.global_for(at) {
+                        let _ = self.satellite_global_image(src, t);
+                    }
+                    let _ = self.sigmets(src, at, now);
+                });
+            }
+        });
+    }
+
     /// `path` None: no disk copy (weather works, but not offline).
     pub fn open(path: Option<&Path>) -> Weather {
         Self::open_with(path, RADAR_KEEP, SAT_KEEP)
@@ -266,7 +307,10 @@ impl Weather {
                 me.load_from_disk();
                 changed();
                 loop {
-                    me.round(source.as_ref(), now(), changed.as_ref());
+                    let t = now();
+                    me.round(source.as_ref(), t, changed.as_ref());
+                    // then the time-lapse's steps, so Play does not wait on the network
+                    me.warm_play(source.as_ref(), t);
                     std::thread::sleep(LIVE_EVERY);
                 }
             })
@@ -660,8 +704,26 @@ impl Weather {
             let png = src.satellite_global(t)?;
             let (_, h) = satellite::global_bbox();
             let mut img = satellite::decode(&png, satellite::GLOBAL_WIDTH, h)?;
+            // onto GOES's grey scale, fitted along the edge of GOES's coverage against the GOES image
+            // nearest the same hour, so the two meet without a seam; the fixed fit if that fails
+            let (gain, offset) = self
+                .goes_nearest(t)
+                .and_then(|tg| self.satellite_image(src, tg).ok())
+                .and_then(|goes| {
+                    let (gbox, gh) = satellite::bbox();
+                    let (wbox, _) = satellite::global_bbox();
+                    satellite::fit_edge(
+                        &satellite::View { grey: &goes, width: satellite::WIDTH as usize, height: gh as usize, bbox: gbox },
+                        &satellite::View { grey: &img.grey, width: satellite::GLOBAL_WIDTH as usize, height: h as usize, bbox: wbox },
+                    )
+                })
+                .map(|(k, c, n)| {
+                    eprintln!("[weather] global mosaic {t}: GOES = {k:.3} g + {c:.1} along the GOES edge ({n} px)");
+                    (k, c)
+                })
+                .unwrap_or((satellite::GAIN, satellite::OFFSET));
             for g in img.grey.iter_mut() {
-                *g = satellite::to_goes_scale(*g);
+                *g = satellite::to_scale(*g, gain, offset);
             }
             let d = Arc::new(deflate(&img.grey));
             let live_at = self.lock().live_at;
@@ -679,6 +741,16 @@ impl Weather {
             Ok(d)
         })?;
         inflate(&d)
+    }
+
+    /// The GOES image time nearest `t`, within half an hour.
+    fn goes_nearest(&self, t: i64) -> Option<i64> {
+        self.lock()
+            .sat_times
+            .iter()
+            .copied()
+            .filter(|&x| (x - t).abs() <= 1800)
+            .min_by_key(|&x| (x - t).abs())
     }
 
     /// The present's loop is never evicted by browsing the past.
@@ -1595,6 +1667,49 @@ mod tests {
         src.down.store(true, Ordering::SeqCst);
         assert_eq!(w.sigmets(&src, NOW, NOW).as_array().unwrap().len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_time_lapse_is_fetched_ahead_once() {
+        let w = Weather::open(None);
+        let src = Fake::live();
+        w.round(&src, NOW, &|| {});
+        let steps = play_steps(NOW);
+        assert_eq!(
+            steps.len(),
+            18,
+            "three hours of 10-minute steps, the last a step before now"
+        );
+        assert!(NOW - steps[steps.len() - 1] >= 600 && NOW - steps[steps.len() - 1] < 1200);
+        let (f0, s0) = (
+            src.frame_calls.lock().unwrap().len(),
+            src.sat_calls.lock().unwrap().len(),
+        );
+        w.warm_play(&src, NOW);
+        let frames = src.frame_calls.lock().unwrap().clone();
+        let sats = src.sat_calls.lock().unwrap().clone();
+        for &at in &steps {
+            let sel = w.select(at);
+            assert!(
+                frames.contains(sel.radar.last().unwrap()),
+                "step {at}: its radar frame"
+            );
+            assert!(
+                sats.contains(&sel.satellite.unwrap()),
+                "step {at}: its satellite image"
+            );
+        }
+        assert!(frames.len() > f0 && sats.len() > s0);
+        let (f1, s1) = (frames.len(), sats.len());
+        w.warm_play(&src, NOW);
+        assert_eq!(
+            (
+                src.frame_calls.lock().unwrap().len(),
+                src.sat_calls.lock().unwrap().len()
+            ),
+            (f1, s1),
+            "held: nothing fetched again"
+        );
     }
 
     #[test]

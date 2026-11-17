@@ -311,6 +311,14 @@ map.whenIdle().then(async () => {
       map.jumpTo(world);
       await new Promise((r) => setTimeout(r, 1500));
       const worldPath = await snapshot(map, "weather-world", world, (ctx) => ctx.drawImage(weather.canvas, 0, 0, ctx.canvas.width, ctx.canvas.height));
+      // where GOES's coverage ends over Canada: the two cloud images must meet without a seam
+      const seam = { center: [-108, 50], zoom: 5.2, bearing: 0 };
+      const layersWere = { windOn: weather.windOn, hazardsOn: weather.hazardsOn, metarOn: weather.metarOn, radarOn: weather.radarOn };
+      Object.assign(weather, { windOn: false, hazardsOn: false, metarOn: false, radarOn: false });
+      map.jumpTo(seam);
+      await new Promise((r) => setTimeout(r, 1000));
+      await snapshot(map, "weather-seam", seam, (ctx) => ctx.drawImage(weather.canvas, 0, 0, ctx.canvas.width, ctx.canvas.height));
+      Object.assign(weather, layersWere);
       let sigmetPopup = null;
       const target = (weather.sigmets ?? []).find((sg) => sg.rings[0].length > 3 && atLevel(sg, weather.level));
       if (target) {

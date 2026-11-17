@@ -89,6 +89,8 @@ if len(steps) < 10 or any(b - a != 600 for a, b in zip(steps, steps[1:])):
     fail.append(f"the time-lapse did not step 10 minutes at a time from 2 hours back: {steps}")
 if pl["incomplete"]:
     fail.append(f"the time-lapse left steps before they were on screen: {pl['incomplete']}")
+if pl["buffer_ms"] > 2000:
+    fail.append(f"the time-lapse buffered {pl['buffer_ms']} ms before playing: its steps should have been fetched ahead")
 if pl["blank_frames"]:
     fail.append(f"the time-lapse showed a layer blank in {pl['blank_frames']} of {pl['frames']} frames (the flash)")
 if pl["max_gap_ms"] is not None and pl["max_gap_ms"] > 1200:
