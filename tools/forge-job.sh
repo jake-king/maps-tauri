@@ -18,6 +18,8 @@
 #                              the merge base with main (on main, against $BEFORE); +3% fails
 #   tools/forge-job.sh msrv    setup, then tools/msrv.sh: the workspace builds with Cargo.toml's
 #                              rust-version, not only with rust-toolchain.toml's newer Rust
+#   tools/forge-job.sh update  setup, then tools/update-e2e.sh: the updater installs a genuine update
+#                              and refuses forged ones, against a local HTTPS server
 #   tools/forge-job.sh audit   setup, then the RustSec advisories for Cargo.lock (cargo-deny, deny.toml)
 #                              and npm's for package-lock.json (tools/npm_audit.py), both fetched fresh
 #   tools/forge-job.sh release for a pushed tag v<version>: the gate, the Debian package, then a forge
@@ -32,7 +34,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 job=${1:-}
-[[ $job =~ ^(check|e2e|coverage|fuzz|perf|msrv|audit|mutants|mutants-full|mutants-total|release)$ ]] || { echo "usage: tools/forge-job.sh check|e2e|coverage|fuzz|perf|msrv|audit|mutants|mutants-full|mutants-total|release" >&2; exit 2; }
+[[ $job =~ ^(check|e2e|coverage|fuzz|perf|msrv|update|audit|mutants|mutants-full|mutants-total|release)$ ]] || { echo "usage: tools/forge-job.sh check|e2e|coverage|fuzz|perf|msrv|update|audit|mutants|mutants-full|mutants-total|release" >&2; exit 2; }
 
 if [[ $job == release ]]; then
   # Before any setup, so a wrong tag fails in seconds. The tag names the version in tauri.conf.json:
@@ -192,18 +194,31 @@ if [[ $job == release ]]; then
   wasm_pack
   npm ci --no-audit --no-fund
   gate
+  # The release's updater asks $UPDATE_URL (the forge variable) for newer versions; unset, the
+  # release has no updater, as the forge is not reachable from outside (src-tauri/src/update.rs).
+  # Empty is not unset to the build (option_env! sees ""), hence the unset.
+  if [[ -n ${UPDATE_URL:-} ]]; then export MAPS_UPDATE_URL=$UPDATE_URL; else unset MAPS_UPDATE_URL; fi
+  unset MAPS_UPDATE_PUBKEY
   npx tauri build --bundles deb
   out=logs/release
   rm -rf "$out"
   mkdir -p "$out"
   cp target/release/bundle/deb/*.deb "$out/"
+  # the updater's half: the .deb signed for the updater (bound to the version) and the manifest
+  # naming where the package will be, under $UPDATE_BASE, else this release's own download URL
+  deb=$(cd "$out" && ls -- *.deb)
+  base=${UPDATE_BASE:-$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$tag}
+  if [[ -n ${RELEASE_SIGNING_KEY:-} ]]; then
+    tools/update-manifest.sh "$out/$deb" "$conf" "$base/$deb" "$out/latest.json"
+  fi
   # the coverage report goes into the documentation site (tools/docs.sh picks up target/coverage)
   tools/coverage.sh --floor --html target/coverage
   tools/docs.sh --archive
   cp target/maps-tauri-docs.tar.gz "$out/maps-tauri-docs-$tag.tar.gz"
   # what the build contains, for anyone checking it against an advisory later
   tools/sbom.sh "$out" "maps-tauri-$tag"
-  (cd "$out" && sha256sum -- *.deb *.tar.gz *.cdx.json >SHA256SUMS)
+  # the updater's two files are there only when the release is signed (a dry run without the key)
+  (cd "$out" && shopt -s nullglob && sha256sum -- *.deb *.tar.gz *.cdx.json *.deb.sig latest*.json >SHA256SUMS)
   # one signature over the sums covers every asset; checked with the committed public key before
   # anything is published. A dry run without the key (a local one) says so; a release cannot
   if [[ ${RELEASE_DRY_RUN:-} == 1 && -z ${RELEASE_SIGNING_KEY:-} ]]; then
@@ -233,7 +248,7 @@ EOF
     -o "$out/release.json" -w '%{http_code}' -X POST "$api/releases")
   [[ $code == 201 ]] || { echo "forge-job: creating the release answered $code" >&2; cat "$out/release.json" >&2; exit 1; }
   id=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["id"])' "$out/release.json")
-  for f in "$out"/*.deb "$out"/*.tar.gz "$out"/*.cdx.json "$out/SHA256SUMS" "$out/SHA256SUMS.minisig"; do
+  for f in "$out"/*.deb "$out"/*.deb.sig "$out/latest.json" "$out"/*.tar.gz "$out"/*.cdx.json "$out/SHA256SUMS" "$out/SHA256SUMS.minisig"; do
     code=$(auth | curl -sS -H @- -F "attachment=@$f" -o "$out/asset.json" -w '%{http_code}' \
       "$api/releases/$id/assets?name=$(basename "$f")")
     [[ $code == 201 ]] || { echo "forge-job: uploading $(basename "$f") answered $code" >&2; cat "$out/asset.json" >&2; exit 1; }
@@ -282,6 +297,12 @@ if [[ $job == fuzz ]]; then
   tools/fuzz.sh seeds
   tools/fuzz.sh run "${FUZZ_SECONDS:-30}"
   [[ ${FUZZ_CMIN:-} == 1 ]] && tools/fuzz.sh cmin
+  exit 0
+fi
+
+if [[ $job == update ]]; then
+  npm ci --no-audit --no-fund
+  tools/update-e2e.sh
   exit 0
 fi
 

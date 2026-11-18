@@ -1885,3 +1885,32 @@ Forgejo has no private reporting channel (confidential issues are an open reques
 and the forge is not reachable from outside anyway, so email is the channel, as it is for Forgejo
 itself.
 
+## Updates, signed and checked
+
+The app can update itself: Tauri's updater plugin (2.14.1), asked from Rust when the window opens,
+with a notice and an "Install and restart" button in the window. A release now also publishes the
+`.deb`'s updater signature and `latest.json` (`tools/update-manifest.sh`), both listed in the signed
+SHA256SUMS. The release key verifies updates too: it was made with Tauri's signer for this.
+
+Facts that set the design, read from the plugin's source rather than its guide: on Linux it can
+update a `.deb` install (it downloads the package, checks it, and runs `dpkg -i` through `pkexec`),
+not only an AppImage, so releases stay `.deb` only; it knows which kind it is from a marker the
+bundler writes into the binary, which the test checks is there. The manifest is not signed, only
+the package is, so the signature carries the version (`tauri signer sign --app-version`) and the
+app compares it with the one announced.
+
+The update URL is a build-time setting, unset for now: the forge is not reachable from outside, so a
+release built today has no updater and makes no request. Setting the forge variables `UPDATE_URL`
+and `UPDATE_BASE` when the releases have a public home turns it on.
+
+`tools/update-e2e.sh` (weekly, `update.yml`) installs 0.1.0 in a fresh container, serves manifests
+over local HTTPS with a throwaway key, and runs the installed app: a genuine 0.1.1 installs; a
+tampered package, another key, a version replay and an unversioned replay are refused; 0.1.0 is
+"nothing newer". HTTPS, not HTTP, so the run goes through the TLS stack a real update uses.
+
+The planted defect, `requireSignedVersion` off, first passed the test. Reading the plugin explained
+it: it compares a signed version with the announced one whenever the signature has one, and the
+setting only decides what happens to a signature without one. The test had no such signature. With
+that case added, the plant failed it (the old package installed as 0.1.2), and with the setting on
+it is refused.
+

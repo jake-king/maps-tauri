@@ -45,6 +45,13 @@
       }
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [],
+      "pubkey": "set from release-signing.pub at startup (src-tauri/src/update.rs)",
+      "requireSignedVersion": true
+    }
+  },
   "bundle": {
     "active": false,
     "icon": [

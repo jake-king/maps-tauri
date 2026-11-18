@@ -277,3 +277,42 @@ checks, so the same key can later sign updates. To check a download:
 ```text
 minisign -Vm SHA256SUMS -p release-signing.pub && sha256sum -c --ignore-missing SHA256SUMS
 ```
+
+### Updates
+
+An installed copy can update itself (`src-tauri/src/update.rs`, Tauri's updater plugin). A release
+also publishes `latest.json`, a manifest naming the newest version and where its `.deb` is, and a
+signature of that `.deb` by the release key (`tools/update-manifest.sh`). The app asks the manifest
+when its window opens; if a newer version exists it shows a notice, and only the user's click
+downloads it, checks the signature against the release key compiled into the app, installs it with
+`dpkg` through the desktop's administrator prompt, and restarts.
+
+The signature is the only thing trusted. The manifest comes over TLS but is not signed, so the
+signature also names the version it was made for, and the app refuses a package whose signed
+version differs from the one the manifest announces. Without that, a manifest could pair a new
+version number with an older, genuinely signed release, and the app would install a downgrade.
+The plugin compares the two whenever the signature names a version; `requireSignedVersion` (on)
+also refuses a signature that names none, the kind older Tauri CLIs made, which could otherwise
+be replayed under any version number.
+
+Where the app looks is fixed at build time (`MAPS_UPDATE_URL`). The forge cannot be reached from
+outside, so until the releases have a public home the variable is unset, release builds have no
+updater, and they make no request for one; the manifest and signature are published anyway.
+
+`tools/update-e2e.sh` checks the whole path as a user would meet it, weekly and on demand
+(`update.yml`), in a fresh Ubuntu container: it builds 0.1.0 and 0.1.1 with a throwaway key,
+installs 0.1.0 from its package, serves manifests over local HTTPS, and runs the installed app.
+
+| Offered | Result |
+|---|---|
+| 0.1.1, signed for 0.1.1 | installed |
+| the same package with one byte appended | refused: the signature fails |
+| 0.1.1 signed by another key | refused: another key |
+| announced as 0.1.2, the package signed for 0.1.1 | refused: the versions differ |
+| announced as 0.1.2, the signature naming no version | refused: no signed version |
+| 0.1.0 | nothing newer |
+
+Switching `requireSignedVersion` off was the planted defect. The first version of the test passed
+anyway: its only replay case used a signature that names a version, and the plugin compares those
+whatever the setting. The unversioned case was added for that reason, and with the setting off it
+failed the test, the old package installed as 0.1.2.

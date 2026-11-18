@@ -22,9 +22,14 @@ coords = { path = "../crates/coords" }
 vtile = { path = "../crates/vtile", features = ["http"] }
 wx = { path = "../crates/wx", features = ["http"] }
 flate2 = "1"
+base64 = "0.23"
 
 [dev-dependencies]
 png = "0.18"
 
 [lints]
 workspace = true
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+# self-update (src/update.rs): rustls, as everywhere else, and no zip support (only .deb updates)
+tauri-plugin-updater = { version = "2.14.1", default-features = false, features = ["rustls-tls", "system-proxy"] }

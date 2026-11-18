@@ -8,6 +8,8 @@ mod diskcache;
 mod metars;
 pub mod search;
 mod tiles;
+#[cfg(desktop)]
+mod update;
 mod weather;
 
 use std::path::PathBuf;
@@ -594,6 +596,24 @@ pub fn run() {
                 responder.respond(res);
             });
         })
+        // The updater exists only in a build that names a release manifest (update.rs); with
+        // MAPS_UPDATE=install it installs what it finds and exits (tools/update-e2e.sh).
+        .setup(|app| {
+            #[cfg(desktop)]
+            {
+                use tauri::Manager as _;
+                app.manage(update::Pending::default());
+                if let Some(plugin) = update::plugin() {
+                    app.handle().plugin(plugin)?;
+                    if std::env::var("MAPS_UPDATE").is_ok_and(|v| v == "install") {
+                        update::install_now(app.handle().clone());
+                    }
+                }
+            }
+            #[cfg(not(desktop))]
+            let _ = app;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             report,
             search,
@@ -611,7 +631,11 @@ pub fn run() {
             wx_wind,
             wx_sigmets,
             wx_satellite_global,
-            wx_prefetch
+            wx_prefetch,
+            #[cfg(desktop)]
+            update::update_check,
+            #[cfg(desktop)]
+            update::update_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -22,6 +22,8 @@ fn main() {
             "wx_sigmets",
             "wx_satellite_global",
             "wx_prefetch",
+            "update_check",
+            "update_install",
         ]),
     ))
     .expect("failed to run tauri-build");

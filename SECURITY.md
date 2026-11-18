@@ -54,5 +54,8 @@ this repository:
 minisign -Vm SHA256SUMS -p release-signing.pub && sha256sum -c --ignore-missing SHA256SUMS
 ```
 
+An app built with an update URL checks updates the same way before installing them: the package
+must carry a signature by this key, for the version announced.
+
 The release key and the reporting key are separate: one signs what the project publishes, the other
 receives what is sent to it.

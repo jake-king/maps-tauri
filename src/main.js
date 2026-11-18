@@ -25,3 +25,27 @@ const flags = await invoke("dev_flags");
 if (flags.cspProbe) fetch("http://192.0.2.1/csp-probe").catch(() => {});
 if (flags.renderer === "rust") await import("./rust-renderer/app.js");
 else await import("./maplibre-app.js");
+
+// A newer release, when this build has an update URL (src-tauri/src/update.rs) and the release
+// manifest offers one: a notice with one button, which installs it and restarts. Nothing happens
+// without the user's click, and a failed check is reported, not shown.
+invoke("update_check")
+  .then((u) => u && showUpdate(u))
+  .catch((e) => invoke("report", { msg: `update check failed: ${e}` }).catch(() => {}));
+
+function showUpdate({ version }) {
+  const box = document.createElement("div");
+  box.id = "update";
+  box.textContent = `Version ${version} is available. `;
+  const button = document.createElement("button");
+  button.textContent = "Install and restart";
+  button.onclick = () => {
+    button.disabled = true;
+    button.textContent = "Installing…";
+    invoke("update_install").catch((e) => {
+      box.textContent = `The update was not installed: ${e}`;
+    });
+  };
+  box.append(button);
+  document.body.append(box);
+}
