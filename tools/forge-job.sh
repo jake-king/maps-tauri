@@ -16,6 +16,8 @@
 #                              (default 30) on a corpus kept in the cache; FUZZ_CMIN=1 minimises it after
 #   tools/forge-job.sh perf    setup, then tools/perf.sh: instruction counts of the benchmarks against
 #                              the merge base with main (on main, against $BEFORE); +3% fails
+#   tools/forge-job.sh msrv    setup, then tools/msrv.sh: the workspace builds with Cargo.toml's
+#                              rust-version, not only with rust-toolchain.toml's newer Rust
 #   tools/forge-job.sh audit   setup, then the RustSec advisories for Cargo.lock (cargo-deny, deny.toml)
 #                              and npm's for package-lock.json (tools/npm_audit.py), both fetched fresh
 #   tools/forge-job.sh release for a pushed tag v<version>: the gate, the Debian package, then a forge
@@ -280,6 +282,11 @@ if [[ $job == fuzz ]]; then
   tools/fuzz.sh seeds
   tools/fuzz.sh run "${FUZZ_SECONDS:-30}"
   [[ ${FUZZ_CMIN:-} == 1 ]] && tools/fuzz.sh cmin
+  exit 0
+fi
+
+if [[ $job == msrv ]]; then
+  tools/msrv.sh
   exit 0
 fi
 

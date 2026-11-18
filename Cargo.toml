@@ -2,6 +2,12 @@
 resolver = "2"
 members = ["src-tauri", "crates/coords", "crates/vtile", "crates/wx"]
 
+# The oldest Rust the workspace builds with, proven by tools/msrv.sh (CI's `msrv` job). The floor is
+# the dependencies' (tauri 2.12 needs 1.90); it moves only with them, never by accident: clippy's
+# incompatible_msrv lint reads it too.
+[workspace.package]
+rust-version = "1.90"
+
 # Documentation is part of the gate (tools/check.sh): every public item is documented, a function
 # that returns a Result or can panic says when, names in prose are code-formatted, and rustdoc's
 # own lints (broken intra-doc links, bare URLs) fail the `rustdoc` step.

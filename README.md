@@ -135,7 +135,7 @@ run the public-source steps above end to end from a fresh clone.
 
 ## Run
 
-Needs Rust, Node, [wasm-pack](https://rustwasm.github.io/wasm-pack/) and the Tauri 2 system
+Needs Rust 1.90 or newer (the gate itself runs the 1.99.1 that `rust-toolchain.toml` pins), Node, [wasm-pack](https://rustwasm.github.io/wasm-pack/) and the Tauri 2 system
 dependencies for your platform. Developed on Linux (WebKitGTK).
 
     npm install

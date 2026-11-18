@@ -128,6 +128,23 @@ directory, cargo gave both the same artifact names, and its freshness check, rea
 base build recorded, never rebuilt the head. The base now builds apart, and the gate rebuilds a head
 whose dependency lists name the base tree.
 
+### Rust version
+
+`rust-version = "1.90"` in the workspace `Cargo.toml` is a promise that the project builds with Rust
+1.90, and a CI job, `msrv` (`tools/msrv.sh`), keeps it: it installs that Rust and checks the whole
+workspace (every target and feature) and the WebAssembly crate with it. The gate itself runs the
+newer Rust that `rust-toolchain.toml` pins, so without the job a newer API or syntax would pass every
+check and break only for someone on an older compiler. 1.90 is the floor the dependencies set (Tauri
+2.12 and its runtime declare it); the project's own code asks for nothing newer. The number moves on
+purpose, with a reason in the commit.
+
+Two layers catch a slip. Clippy's `incompatible_msrv` lint, in the gate, reads `rust-version` and
+flags a standard-library item stabilized after it, before the commit. It knows nothing of language
+features, and the CI job, which compiles with 1.90 itself, catches both. Each was checked with
+`std::iter::chain` (stable since 1.91) planted in the search crate: the lint failed clippy, and the
+job failed with exit 1 naming the line. A member that does not inherit `rust-version` fails the job
+with exit 2.
+
 ### Dependencies
 
 The app is a few thousand lines of its own on 458 crates and a few hundred npm packages, so most of
@@ -196,6 +213,8 @@ flowchart LR
   check --> audit["audit<br/>RustSec and npm advisories"]
   check --> fuzz["fuzz<br/>7 parser targets, 30 s each"]
   check --> perf["perf<br/>instruction counts vs main, +3% fails"]
+  check --> msrv["msrv<br/>builds with rust-version (1.90)"]
+  msrv --> verdict
   fuzz --> verdict
   perf --> verdict
   audit --> verdict
@@ -211,7 +230,7 @@ flowchart LR
 ```
 
 Development happens on a self-hosted Forgejo forge, whose CI runs on every branch push: the gate,
-then the Linux end-to-end leg, the coverage, mutation, audit and fuzz jobs side by side, each in a bare Ubuntu 24.04
+then the Linux end-to-end leg, the coverage, mutation, audit, fuzz, performance and Rust-version jobs side by side, each in a bare Ubuntu 24.04
 container. The job logic lives in
 `tools/forge-job.sh`, so a job runs the same way in a local container (`tools/ci-local.sh`). The
 runner keeps rustup, cargo, npm's cache and the build tree between jobs, so with the cache warm the

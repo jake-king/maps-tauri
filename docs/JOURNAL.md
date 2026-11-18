@@ -1828,3 +1828,21 @@ UTC). npm stopped reporting it, and the `audit` job failed on main's next push w
 allowlist but no longer reported, remove it": the check that keeps the list from outliving its
 reasons, working as meant. The entry is gone and the list is empty.
 
+## The oldest Rust it builds with
+
+The workspace now declares `rust-version = "1.90"` and CI proves it: a job, `msrv`
+(`tools/msrv.sh`), installs Rust 1.90 and runs `cargo check` on the whole workspace (all targets and
+features) and on the search crate for `wasm32-unknown-unknown`. Until now the only Rust the project
+was known to build with was the 1.99.1 the gate pins.
+
+The number was measured, not chosen. Among the 467 resolved packages the highest declared
+`rust-version` is 1.90 (Tauri 2.12, its runtime, muda, tray-icon, bincode-next), so cargo refuses
+anything older; 1.90.0 then built everything with no change to our code. A `cargo check` is enough:
+the version decides whether the code compiles, and a test run would repeat the gate on an older std.
+
+Red first, on the dev box: `std::iter::chain` (stable since 1.91) planted in the search crate built
+on 1.99.1 and failed the job with exit 1 (E0658, the planted line); a member with its
+`rust-version.workspace = true` removed failed it with exit 2. Declaring the version also arms
+clippy's `incompatible_msrv` lint inside the gate, which failed on the same plant; that lint covers
+standard-library items only, so the job stays the authority for syntax.
+
