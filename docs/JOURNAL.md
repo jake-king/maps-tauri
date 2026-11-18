@@ -1866,3 +1866,22 @@ step (cargo-deny, `--offline`) failed there on `windows-sys` and `android_system
 cargo-deny reads the crates of every platform `deny.toml` lists, and nothing in the gate downloads
 the non-Linux ones; the forge passed because its runner cache already held them, and a new clone or
 GitHub's runner would not have. The step now runs `cargo fetch --locked` first.
+
+## A security policy
+
+`SECURITY.md` says how to report a vulnerability (email to a dedicated address, encrypted to the
+project's OpenPGP key if it holds anything sensitive), what a reporter can expect (acknowledgement
+in 7 days, assessment in 30, disclosure at 90 by default), that only the newest release is fixed,
+and what is in scope: the code that reads outside data, which is what the fuzz targets cover.
+
+The reporting key (`security-key.asc`, Ed25519 certification key with a Curve25519 encryption
+subkey, both expiring 2028-11-17) was made by the maintainer on their own machine; its private half
+and revocation certificate are in the password manager, never in the repository. It was checked
+before the policy named it: a message encrypted to the committed key file alone, in an empty
+keyring, was decrypted by the maintainer's key. It is separate from the release-signing key: one
+signs what the project publishes, the other receives what is sent to it.
+
+Forgejo has no private reporting channel (confidential issues are an open request, forgejo#4944),
+and the forge is not reachable from outside anyway, so email is the channel, as it is for Forgejo
+itself.
+

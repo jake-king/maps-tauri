@@ -173,6 +173,11 @@ the forge and are not part of this copy.
 Run the same end to end anywhere with `python3 tools/e2e.py --tape fixtures/tape`, and make a new
 tape with `--record DIR`.
 
+## Security
+
+Report a vulnerability privately, as [SECURITY.md](SECURITY.md) describes: email, encrypted to the
+project's key if it holds anything sensitive. Releases are signed; SECURITY.md also says how to check one.
+
 ## Licence
 
 Code: MIT or Apache-2.0, at your option. Map data © OpenStreetMap contributors (ODbL), basemap
