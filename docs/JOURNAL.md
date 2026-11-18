@@ -1738,3 +1738,16 @@ the tag on the then-unmerged branch and with no `main` to compare against, green
 `main`. The scheduled workflows (daily advisories, weekly fuzzing and full mutation run) run from
 the default branch, so they start running only now; until this merge they had run only when
 dispatched by hand.
+## The required check that could not fail
+
+Wiring a new CI job into `verdict` showed that `verdict` itself never failed. It worked out
+`success` or `failure` from the other jobs, published that as an event, and exited 0 either way (a
+cancelled run too): it had been written as a notifier, before anything depended on its status. Since
+this morning `main`'s branch protection requires `ci / verdict (push)` and nothing else, so a pull
+request with a red gate would have shown a green required check. Nothing red was merged (every pull
+request so far had all jobs green), but the protection was not protecting.
+
+The step now ends with `[ "$v" = success ]`: the event stays best effort, the status does not.
+Checked by running the step's script, taken from the workflow file, before and after, for four leg
+outcomes: all green, a red gate with the rest skipped, one red leg, one cancelled. Before: exit 0 for
+all four. After: 0 for all green, 1 for the other three.

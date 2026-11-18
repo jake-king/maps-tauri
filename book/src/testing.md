@@ -149,7 +149,7 @@ flowchart LR
   push["branch push"] --> check["check<br/>tools/check.sh"]
   check --> e2e["linux-e2e<br/>release build, recorded tape, Xvfb"]
   check --> cov["coverage<br/>llvm-cov and Node, with a floor"]
-  e2e --> verdict["verdict<br/>one event on a notification topic"]
+  e2e --> verdict["verdict<br/>passes only if every job passed;<br/>main's required check"]
   check --> mut["mutants<br/>on the changed lines"]
   check --> audit["audit<br/>RustSec and npm advisories"]
   check --> fuzz["fuzz<br/>7 parser targets, 30 s each"]
