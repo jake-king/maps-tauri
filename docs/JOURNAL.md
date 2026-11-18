@@ -1860,3 +1860,9 @@ Red through the gate itself with `coords` planted as a path dependency of `wx` (
 nothing else breaks for the wrong reason): `unused-deps` failed, and so did `docs-site`, correctly,
 because the book's crate graph is generated from the dependency graph and the plant changed it.
 
+
+Running the whole gate in a fresh container for this change turned up an older fault: the `deps`
+step (cargo-deny, `--offline`) failed there on `windows-sys` and `android_system_properties`.
+cargo-deny reads the crates of every platform `deny.toml` lists, and nothing in the gate downloads
+the non-Linux ones; the forge passed because its runner cache already held them, and a new clone or
+GitHub's runner would not have. The step now runs `cargo fetch --locked` first.

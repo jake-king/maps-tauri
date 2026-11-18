@@ -32,8 +32,10 @@ run rustfmt 120 sh -c 'cargo fmt --all -- --check && rustfmt --edition 2021 --ch
 run clippy 900 cargo clippy --workspace --all-targets --all-features -q -- -D warnings
 # the API docs build with every rustdoc warning fatal (the lints are in the workspace Cargo.toml)
 # the dependency tree against deny.toml: licenses, banned crates, sources. Offline: the advisory
-# databases change daily, so advisories are CI's `audit` job, not a verdict that moves under a commit
-run deps 120 cargo deny --offline check licenses bans sources
+# databases change daily, so advisories are CI's `audit` job, not a verdict that moves under a commit.
+# cargo-deny reads the crates of every platform deny.toml names (windows-sys, Android's), which no
+# build here downloads: on a fresh CARGO_HOME --offline failed on them until they were fetched first
+run deps 300 sh -c 'cargo fetch --locked -q && cargo deny --offline check licenses bans sources'
 # a dependency no code uses, in both workspaces (cargo-machete reads the sources, not a build). It
 # sees [dependencies] only: an unused dev- or build-dependency passes (its own TODO, 0.10.1)
 run unused-deps 60 cargo machete
