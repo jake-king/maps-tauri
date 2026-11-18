@@ -1514,7 +1514,7 @@ passes.
 native render pipeline, the weather flow, and CI and releases. The crate graph is generated from
 `cargo metadata` (`tools/crate_graph.py`) and the gate fails if it is stale. Mermaid draws in the
 browser, so a syntax error would build cleanly; `tools/mermaid_check.mjs` parses every diagram with
-the same Mermaid the pages load (11.17.2, from `package.json`, served in place of the older copy
+the same Mermaid the pages load (11.17.2 then, 12.3.0 now; from `package.json`, served in place of the older copy
 `mdbook-mermaid` bundles), under jsdom because Mermaid sanitises HTML labels with DOMPurify. A planted
 syntax error in a chapter and in the generated include each fail it. The pages were rendered in
 headless Chromium and looked at: the first layout of the system diagram read as a chain of data
@@ -1571,3 +1571,35 @@ missed (122 more do not compile), and 516 is the baseline. Most are in two place
 The shards were not even (235 missed in one, 67 in another): cargo-mutants' default sharding is
 consecutive slices of its list, not round-robin as the workflow's comment first said, so all of
 `mesh.rs` fell in one shard.
+
+## Dependencies and advisories
+
+Nothing checked the third-party code: 458 crates in Cargo.lock and the npm tree. Now `deny.toml`
+(cargo-deny 0.21.0, pinned in `tools/ci-setup.sh`) holds the policy, checked two ways. The gate's
+`deps` step runs licenses, bans and sources offline, so its verdict depends only on the commit. CI's
+`audit` job, on every push and daily (`.forgejo/workflows/audit.yml`), fetches the RustSec database
+for `cargo deny check advisories` and runs `tools/npm_audit.py`.
+
+What the first runs found:
+
+- Licenses: with no allow-list cargo-deny rejects all 435 crates; the list it needed is permissive
+  licenses plus MPL-2.0 (cssparser and selectors through Tauri, option-ext through dirs; copyleft
+  per file, so linking it unchanged is fine) and CDLA-Permissive-2.0 (Mozilla's CA list,
+  webpki-roots). LGPL appears only as one choice among MIT and Apache (r-efi), so it is not allowed.
+- None of the four crates said `publish = false`, so cargo-deny read the app's path dependencies as
+  wildcards. They now do.
+- One Rust advisory, no vulnerabilities: proc-macro-error is unmaintained (RUSTSEC-2024-0370), a
+  build-time macro crate reached through glib-macros in the GTK 0.18 bindings Tauri uses on Linux.
+  Accepted in `deny.toml` with that reason.
+- npm: picomatch's ReDoS (high), reached only through Vite's build with our own globs; no fixed
+  release exists, and npm's suggested fix is a downgrade of Vite 8 to 6. And a KaTeX prototype
+  pollution note (low) inside Mermaid, which the docs site serves: upgraded Mermaid 11.17.2 to
+  12.3.0 (KaTeX 0.18.10). All five diagrams still parse, and the pages were rendered in headless
+  Chromium to see them drawn.
+- npm has no way to accept an advisory, so `tools/npm_audit.py` keeps a list: each entry has a
+  reason and an expiry date, and an expired entry, or one that no longer matches anything, fails.
+
+Proven red: each cargo-deny section with a planted defect (MPL-2.0 removed from the list; the
+advisory ignore removed; `ring` banned; crates.io not an allowed registry), the `deps` gate step with
+MPL-2.0 removed, and the npm check four ways (an advisory not on the list, an expired entry, a stale
+entry, and an unusable report, which exits 2 rather than passing).

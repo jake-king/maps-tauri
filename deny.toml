@@ -1,0 +1,66 @@
+# What the dependency tree may contain, checked by cargo-deny: tools/check.sh runs licenses, bans and
+# sources offline in the gate; the CI `audit` job checks advisories against a freshly fetched RustSec
+# database on every push and daily. Every exception names its reason.
+
+[graph]
+# every platform the app ships on, so a Windows- or macOS-only crate is checked too
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-pc-windows-msvc",
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+  "aarch64-apple-ios",
+  "wasm32-unknown-unknown",
+]
+all-features = true
+
+[advisories]
+# unmaintained, unsound and yanked crates fail too, not only vulnerabilities
+yanked = "deny"
+ignore = [
+  # proc-macro-error 1.0.4: unmaintained, no vulnerability. A build-time macro crate, reached only
+  # through glib-macros in the GTK 0.18 bindings Tauri uses on Linux; no release of Tauri avoids it.
+  # Drop this when tauri moves to gtk-rs 0.19+.
+  { id = "RUSTSEC-2024-0370", reason = "build-time only, via Tauri's GTK 0.18 bindings; no upgrade exists" },
+]
+
+[licenses]
+# Permissive licenses, plus two that are not:
+# - MPL-2.0: copyleft per file, so a binary may link it unchanged under any license. Reached through
+#   Tauri's HTML handling (cssparser, selectors, dtoa-short) and dirs (option-ext).
+# - CDLA-Permissive-2.0: the license of Mozilla's CA certificate list (webpki-roots), permissive.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "MPL-2.0",
+  "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+# the workspace's own crates are not published
+ignore = true
+
+[bans]
+# Tauri's tree carries several versions of windows-sys, syn, toml and others; that is upstream's to
+# settle, and a warning on every run would be noise nobody acts on
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+  # TLS stays on rustls: no second TLS stack, and no system OpenSSL to match on each platform
+  { name = "openssl", reason = "TLS is rustls" },
+  { name = "openssl-sys", reason = "TLS is rustls" },
+  { name = "native-tls", reason = "TLS is rustls" },
+]
+
+[sources]
+# crates.io only: no git dependencies, no other registries
+unknown-registry = "deny"
+unknown-git = "deny"

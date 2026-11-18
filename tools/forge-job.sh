@@ -12,6 +12,8 @@
 #                              in the cache under the workflow run
 #   tools/forge-job.sh mutants-total the shards' missed lists together; fails if more are missed than the
 #                              recorded baseline
+#   tools/forge-job.sh audit   setup, then the RustSec advisories for Cargo.lock (cargo-deny, deny.toml)
+#                              and npm's for package-lock.json (tools/npm_audit.py), both fetched fresh
 #   tools/forge-job.sh release for a pushed tag v<version>: the gate, the Debian package, then a forge
 #                              release holding it, the documentation site (book + API reference) as a
 #                              tarball, and their SHA256SUMS (RELEASE_DRY_RUN=1 builds, lists what it
@@ -24,7 +26,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 job=${1:-}
-[[ $job =~ ^(check|e2e|coverage|mutants|mutants-full|mutants-total|release)$ ]] || { echo "usage: tools/forge-job.sh check|e2e|coverage|mutants|mutants-full|mutants-total|release" >&2; exit 2; }
+[[ $job =~ ^(check|e2e|coverage|audit|mutants|mutants-full|mutants-total|release)$ ]] || { echo "usage: tools/forge-job.sh check|e2e|coverage|audit|mutants|mutants-full|mutants-total|release" >&2; exit 2; }
 
 if [[ $job == release ]]; then
   # Before any setup, so a wrong tag fails in seconds. The tag names the version in tauri.conf.json:
@@ -112,6 +114,14 @@ if [[ $job == coverage ]]; then
   npm ci --no-audit --no-fund
   tools/coverage.sh --floor --html target/coverage
   exit
+fi
+
+if [[ $job == audit ]]; then
+  # both run, so one red does not hide the other
+  rc=0
+  cargo deny check advisories || rc=1
+  python3 tools/npm_audit.py || rc=1
+  exit "$rc"
 fi
 
 if [[ $job == mutants || $job == mutants-full ]]; then

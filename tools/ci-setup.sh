@@ -8,6 +8,7 @@ set -euo pipefail
 RUFF=0.17.3
 MDBOOK=0.5.4
 MDBOOK_MERMAID=0.17.1
+CARGO_DENY=0.21.0
 NODE=22
 sudo=; [[ $(id -u) == 0 ]] || sudo=sudo
 export DEBIAN_FRONTEND=noninteractive
@@ -34,4 +35,7 @@ if [[ $(mdbook --version 2>/dev/null) != "mdbook v$MDBOOK" ]]; then
 fi
 if [[ $(mdbook-mermaid --version 2>/dev/null) != "mdbook-mermaid $MDBOOK_MERMAID" ]]; then
   cargo install mdbook-mermaid --version "$MDBOOK_MERMAID" --locked
+fi
+if [[ $(cargo deny --version 2>/dev/null) != "cargo-deny $CARGO_DENY" ]]; then
+  cargo install cargo-deny --version "$CARGO_DENY" --locked
 fi

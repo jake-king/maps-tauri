@@ -69,6 +69,22 @@ The first trial, on the timeline, found four surviving mutants: no test had a ra
 after its slot than before it, an exact tie between two frames, or two hazard snapshots in reach at
 different distances. Two tests now pin those, and all 35 viable mutants there are caught.
 
+### Dependencies
+
+The app is a few thousand lines of its own on 458 crates and a few hundred npm packages, so most of
+the code it ships was written elsewhere. `deny.toml` says what that code may be: licenses from a
+list (permissive, plus MPL-2.0, which is copyleft per file and reached through Tauri's HTML parser),
+crates from crates.io only, no OpenSSL beside rustls. The gate checks it offline with `cargo-deny`.
+CI's `audit` job checks the lock files against the RustSec and npm advisory databases, fetched fresh,
+on every push and every day, since a new advisory concerns code nobody changed.
+
+An advisory with no fix can be accepted, with a reason in writing: in `deny.toml` for Rust (an
+unmaintained macro crate deep in the GTK bindings), in `tools/npm-audit-allow.json` for npm (a
+ReDoS in a glob library only Vite's build uses). npm has no such list of its own, so
+`tools/npm_audit.py` keeps one, and each entry has a date after which it fails again, so an
+accepted risk gets looked at again rather than forgotten. The first run also found a KaTeX advisory
+in the Mermaid that draws this book's diagrams; Mermaid 12 fixed it.
+
 ### Documentation is part of the gate
 
 Every crate inherits the workspace's lints: rustc's `missing_docs`; clippy's `missing_errors_doc`,
@@ -102,6 +118,8 @@ flowchart LR
   check --> cov["coverage<br/>llvm-cov and Node, with a floor"]
   e2e --> verdict["verdict<br/>one event on a notification topic"]
   check --> mut["mutants<br/>on the changed lines"]
+  check --> audit["audit<br/>RustSec and npm advisories"]
+  audit --> verdict
   cov --> verdict
   mut --> verdict
   check --> verdict
@@ -113,7 +131,7 @@ flowchart LR
 ```
 
 Development happens on a self-hosted Forgejo forge, whose CI runs on every branch push: the gate,
-then the Linux end-to-end leg, the coverage job and the mutation job side by side, each in a bare Ubuntu 24.04
+then the Linux end-to-end leg, the coverage, mutation and audit jobs side by side, each in a bare Ubuntu 24.04
 container. The job logic lives in
 `tools/forge-job.sh`, so a job runs the same way in a local container (`tools/ci-local.sh`). The
 runner keeps rustup, cargo, npm's cache and the build tree between jobs, so with the cache warm the
