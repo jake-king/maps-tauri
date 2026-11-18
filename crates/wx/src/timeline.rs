@@ -174,6 +174,35 @@ mod tests {
     }
 
     #[test]
+    fn a_radar_slot_takes_the_nearer_frame_and_the_later_on_a_tie() {
+        // the slot 10 minutes back; only it has frames within reach
+        let slot = NOW - LOOP_STEP;
+        assert_eq!(
+            select(NOW, &[slot - 100, slot + 40], &[], &[]).radar,
+            vec![slot + 40],
+            "the frame after the slot is nearer"
+        );
+        assert_eq!(
+            select(NOW, &[slot - 50, slot + 50], &[], &[]).radar,
+            vec![slot + 50],
+            "equally near: the newer frame"
+        );
+    }
+
+    #[test]
+    fn hazards_take_the_nearer_snapshot_when_two_are_in_reach() {
+        // snapshots off the 3-hour grid (an amended issue): the nearer one, before or after
+        assert_eq!(
+            select(10_000, &[], &[], &[7_000, 11_000]).hazards,
+            Some(11_000)
+        );
+        assert_eq!(
+            select(10_000, &[], &[], &[9_000, 13_000]).hazards,
+            Some(9_000)
+        );
+    }
+
+    #[test]
     fn snapping_goes_to_the_past() {
         assert_eq!(snap(1_000_599, 600), 1_000_200);
         assert_eq!(snap(1_000_200, 600), 1_000_200);

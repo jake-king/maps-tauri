@@ -45,6 +45,25 @@ held binaries from older builds. `llvm-cov` then reported "mismatched data" and 
 functions: four files read 31-60% instead of 63-100%. It now takes the binaries
 cargo reports for the build it just ran.
 
+### Mutation testing
+
+Coverage says a line ran, not that a test would notice it being wrong. `cargo-mutants` checks the
+second: it makes one small deliberate bug at a time (an operator swapped, a function body replaced by
+a default value, a match arm deleted), runs the tests, and lists each mutant they do not catch.
+`tools/mutants.sh` runs it with the settings in `.cargo/mutants.toml`, which skip the generated
+palette, the WebAssembly bindings, the app's start-up and the network fetcher, whose tests would be
+the network.
+
+The whole tree is about 2,600 mutants, hours of work, so CI splits it. Every push mutates only the
+lines that push changed, in place on the warm build tree, and fails if any of those mutants survives:
+new or edited code arrives with tests that would catch it breaking. A weekly workflow
+(`.forgejo/workflows/mutants.yml`, or run by hand) mutates everything and fails if more mutants are
+missed than `tools/mutants-baseline.txt` records; that number only goes down.
+
+The first trial, on the timeline, found four surviving mutants: no test had a radar frame nearer
+after its slot than before it, an exact tie between two frames, or two hazard snapshots in reach at
+different distances. Two tests now pin those, and all 35 viable mutants there are caught.
+
 ### Documentation is part of the gate
 
 Every crate inherits the workspace's lints: rustc's `missing_docs`; clippy's `missing_errors_doc`,
@@ -77,8 +96,11 @@ flowchart LR
   check --> e2e["linux-e2e<br/>release build, recorded tape, Xvfb"]
   check --> cov["coverage<br/>llvm-cov and Node, with a floor"]
   e2e --> verdict["verdict<br/>one event on a notification topic"]
+  check --> mut["mutants<br/>on the changed lines"]
   cov --> verdict
+  mut --> verdict
   check --> verdict
+  week["weekly"] --> mfull["mutants-full<br/>every mutant, against a baseline"]
   tag["tag v*"] --> vcheck["release: tag names the version?"]
   vcheck --> rgate["gate, .deb, coverage, docs site"]
   rgate --> draft["draft release<br/>.deb, docs tarball, SHA256SUMS"]
@@ -86,7 +108,7 @@ flowchart LR
 ```
 
 Development happens on a self-hosted Forgejo forge, whose CI runs on every branch push: the gate,
-then the Linux end-to-end leg and the coverage job side by side, each in a bare Ubuntu 24.04
+then the Linux end-to-end leg, the coverage job and the mutation job side by side, each in a bare Ubuntu 24.04
 container. The job logic lives in
 `tools/forge-job.sh`, so a job runs the same way in a local container (`tools/ci-local.sh`). The
 runner keeps rustup, cargo, npm's cache and the build tree between jobs, so with the cache warm the

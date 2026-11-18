@@ -6,6 +6,9 @@
 #                              recorded tape in a virtual display (the Linux leg of platforms.yml)
 #   tools/forge-job.sh coverage setup, then tools/coverage.sh with its floor, the HTML report kept in
 #                              target/coverage for the docs site
+#   tools/forge-job.sh mutants  cargo-mutants on the lines this push changed (since $BEFORE, else the
+#                              previous commit); a mutant no test catches fails the job
+#   tools/forge-job.sh mutants-full  every mutant; fails if more are missed than the recorded baseline
 #   tools/forge-job.sh release for a pushed tag v<version>: the gate, the Debian package, then a forge
 #                              release holding it, the documentation site (book + API reference) as a
 #                              tarball, and their SHA256SUMS (RELEASE_DRY_RUN=1 builds, lists what it
@@ -18,7 +21,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 job=${1:-}
-[[ $job == check || $job == e2e || $job == coverage || $job == release ]] || { echo "usage: tools/forge-job.sh check|e2e|coverage|release" >&2; exit 2; }
+[[ $job =~ ^(check|e2e|coverage|mutants|mutants-full|release)$ ]] || { echo "usage: tools/forge-job.sh check|e2e|coverage|mutants|mutants-full|release" >&2; exit 2; }
 
 if [[ $job == release ]]; then
   # Before any setup, so a wrong tag fails in seconds. The tag names the version in tauri.conf.json:
@@ -82,6 +85,64 @@ if [[ $job == coverage ]]; then
   npm ci --no-audit --no-fund
   tools/coverage.sh --floor --html target/coverage
   exit
+fi
+
+if [[ $job == mutants || $job == mutants-full ]]; then
+  MUTANTS=27.1.0
+  if [[ $(cargo mutants --version 2>/dev/null) != "cargo-mutants $MUTANTS" ]]; then
+    cargo install cargo-mutants --version "$MUTANTS" --locked
+  fi
+  # A run that finds nothing to mutate exits 0 without writing a report: never read an older one
+  rm -rf logs/mutants/mutants.out logs/mutants/mutants.out.old
+  if [[ $job == mutants ]]; then
+    # The base: the commit the branch was at before this push, when the checkout has it (a new
+    # branch or a force-push may not), else the previous commit.
+    base=${BEFORE:-}
+    if [[ -z $base || $base =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+      base=HEAD~1
+    fi
+    mkdir -p logs
+    git diff "$base" HEAD >logs/mutants.diff
+    echo "forge-job: mutants on the lines changed since $(git rev-parse --short "$base")"
+    # In place, one at a time, on the runner's warm build tree: a copied tree would build Tauri
+    # from nothing for every job. The checkout is thrown away after the job.
+    rc=0
+    tools/mutants.sh --in-place --in-diff logs/mutants.diff || rc=$?
+  else
+    rc=0
+    tools/mutants.sh || rc=$?
+  fi
+  out=logs/mutants/mutants.out
+  # exit 2: missed mutants; 3: timeouts only (a mutant that hangs the tests is caught by the timeout)
+  case $rc in
+    0 | 3) ;;
+    2) ;;
+    *) echo "forge-job: cargo-mutants failed (exit $rc)" >&2; exit "$rc" ;;
+  esac
+  missed=$(grep -c . "$out/missed.txt" 2>/dev/null || true)
+  if [[ $job == mutants ]]; then
+    if ((missed)); then
+      echo "forge-job: $missed mutant(s) on changed lines that no test catches:"
+      cat "$out/missed.txt"
+      exit 1
+    fi
+  else
+    total=$(cat "$out"/{caught,missed,timeout}.txt 2>/dev/null | grep -c . || true)
+    if [[ ! -f tools/mutants-baseline.txt ]]; then
+      # The first run records the number: report it with the list, and leave the gate to the next run.
+      echo "forge-job: $missed of $total viable mutants missed; no baseline recorded yet. Missed:"
+      cat "$out/missed.txt" 2>/dev/null || true
+      exit 0
+    fi
+    allowed=$(grep -v '^#' tools/mutants-baseline.txt)
+    echo "forge-job: $missed of $total viable mutants missed (baseline allows $allowed)"
+    if ((missed > allowed)); then
+      echo "forge-job: more mutants missed than the baseline allows; all missed:" >&2
+      cat "$out/missed.txt"
+      exit 1
+    fi
+  fi
+  exit 0
 fi
 
 if [[ $job == release ]]; then

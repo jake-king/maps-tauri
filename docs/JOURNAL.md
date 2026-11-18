@@ -1519,3 +1519,32 @@ the same Mermaid the pages load (11.17.2, from `package.json`, served in place o
 syntax error in a chapter and in the generated include each fail it. The pages were rendered in
 headless Chromium and looked at: the first layout of the system diagram read as a chain of data
 stores, and was regrouped.
+
+## Mutation testing
+
+`cargo-mutants` (27.1.0, pinned in `tools/forge-job.sh`) now runs in CI two ways. Every push mutates
+the lines it changed (`--in-diff` against the commit the branch was at before the push), in place on
+the runner's warm build tree, and fails on any surviving mutant. A weekly workflow, also runnable by
+hand, mutates the whole tree and compares the number missed with `tools/mutants-baseline.txt`.
+
+What it took:
+
+- The first full run on the dev box died after 11 seconds, silently. cargo-mutants 27 copies the
+  tree for each job and does not honour `.gitignore` by default, so every job copied the map data,
+  `node_modules` and the logs into `/tmp`, which is memory here. `gitignore = true` in
+  `.cargo/mutants.toml`, and scratch under `logs/`, fixed it.
+- `--in-place` and `--jobs` cannot be combined (cargo-mutants refuses at argument parsing), so the
+  per-push mode would have failed on its first run. A local trial with the CI job's own arguments
+  found it; `tools/mutants.sh` now passes `-j` only to copied-tree runs.
+- A run that finds nothing to mutate exits 0 without writing a report, so the job could have read the
+  previous run's `missed.txt`. It now deletes the old report first.
+- The whole tree is 2,583 mutants. A full run on the dev box was stopped for memory after 549 of
+  them (366 caught, 115 missed, 7 timeouts, 61 unviable); the misses were almost all in the app
+  crate's glue (`weather.rs`, `devstats.rs`, `tiles.rs`). The baseline is recorded from the first
+  full run on the CI runner instead.
+
+Proven both ways: a diff touching two lines of `timeline.rs` gave 4 missed mutants and exit 2 (the
+job fails and lists them); a diff with no Rust gave "no Rust source files" and exit 0. The four were
+real gaps (no test had a closer later radar frame, a tie between frames, or two hazard snapshots in
+reach at different distances); two new tests catch them, and the file's 35 viable mutants are all
+caught.

@@ -1,0 +1,19 @@
+# cargo-mutants (tools/mutants.sh): each mutant is a small deliberate bug; a mutant the tests do not
+# catch is a gap in the tests.
+
+# Copy only what git tracks into each scratch tree: data/, node_modules/ and the build trees under
+# logs/ are gigabytes, and the copy goes wherever TMPDIR points.
+gitignore = true
+
+# Not mutated, each for a reason:
+exclude_globs = [
+  # generated constants; tools/check.sh's palette-fresh step regenerates and compares them
+  "crates/vtile/src/palette.rs",
+  # wasm-bindgen shims over coords' functions, which are mutated in lib.rs; run only in a web view
+  "crates/coords/src/wasm.rs",
+  # Tauri setup and command glue, and the NOAA fetchers: they run only inside the app or against the
+  # network, which the end-to-end tape covers and cargo test does not
+  "src-tauri/src/main.rs",
+  "src-tauri/src/lib.rs",
+  "crates/wx/src/fetch.rs",
+]
