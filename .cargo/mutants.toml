@@ -5,6 +5,10 @@
 # logs/ are gigabytes, and the copy goes wherever TMPDIR points.
 gitignore = true
 
+# as the gate, clippy and coverage build: without it, code behind a feature (vtile's and wx's `http`)
+# is not compiled, and its mutants read as missed without a test ever running
+all_features = true
+
 # Not mutated, each for a reason:
 exclude_globs = [
   # generated constants; tools/check.sh's palette-fresh step regenerates and compares them

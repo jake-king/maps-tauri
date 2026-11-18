@@ -27,7 +27,8 @@ run() {
 skip() { printf '%-34s skipped: %s\n' "$1" "$2"; }
 mkdir -p logs
 
-run rustfmt 120 cargo fmt --all -- --check
+# the fuzz targets are a workspace of their own (fuzz/), so cargo fmt --all does not reach them
+run rustfmt 120 sh -c 'cargo fmt --all -- --check && rustfmt --edition 2021 --check fuzz/fuzz_targets/*.rs'
 run clippy 900 cargo clippy --workspace --all-targets --all-features -q -- -D warnings
 # the API docs build with every rustdoc warning fatal (the lints are in the workspace Cargo.toml)
 # the dependency tree against deny.toml: licenses, banned crates, sources. Offline: the advisory

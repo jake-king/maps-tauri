@@ -1603,3 +1603,56 @@ Proven red: each cargo-deny section with a planted defect (MPL-2.0 removed from 
 advisory ignore removed; `ring` banned; crates.io not an allowed registry), the `deps` gate step with
 MPL-2.0 removed, and the npm check four ways (an advisory not on the list, an expired entry, a stale
 entry, and an unusable report, which exits 2 rather than passing).
+
+## Fuzzing
+
+Seven cargo-fuzz targets (`fuzz/`, libFuzzer, on nightly-2026-07-11, the 1.99 line, since its
+sanitizer flags are nightly-only) cover every parser of outside bytes: the PMTiles archive read path
+through an in-memory `RangeCache`, PMTiles directories, MVT decode plus meshing, GRIB2 (MRMS and GFS
+winds), radar decompression, the weather services' text formats, and the search box (whose
+coordinates must come out in range). `tools/fuzz.sh seeds` takes starting inputs from the pinned
+e2e fixtures: the header and root directory and two tiles per zoom from the map (through a `vtile`
+example, so the real reader picks them), and one answer of each kind from the tape, cut down. CI
+fuzzes 30 seconds per target per push and 10 minutes weekly with corpus minimisation; the corpus
+lives in the runner's cache. Builds use `-a`: with overflow checks off, the bugs below would not
+crash but silently wrap.
+
+Real bugs found, in the first hour of fuzzing, all integer overflows on numbers from the input:
+
+- `archive`: the header's tile-data offset plus a directory entry's offset (`pmtiles.rs`, tile
+  lookup). A debug build panicked; a release build would have read from a wrapped offset. Fixing
+  it as a class, the same unchecked sums were in the leaf-directory offset (twice), the run end in
+  `find` and the tile lookup, `all_tiles`, and the HTTP Range header's last byte. Sums of two
+  file-supplied offsets now go through `offset_in`, and the run checks compare a distance (`id -
+  tile_id < run_length`, where `id >= tile_id` is already known), which cannot overflow.
+- `pmtiles_dir`: `tile_id_to_zxy` on an id past zoom 31 (the deepest a u64 id reaches) shifted past
+  64 bits. It now returns `None` for those.
+- `mvt_mesh`: route-shield placement added and subtracted two tile coordinates as `i32`; the
+  decoder deliberately wraps corrupt deltas, so coordinates near `i32::MAX` are reachable. Now in
+  i64 and f64. A bound on coordinates at decode would have fixed every mesher site at once, but the
+  decoder is diffed against @mapbox/vector-tile in the gate, and that decoder has no bound.
+
+Each has a unit test that failed first with the fuzzer's panic. The archive and directory crash
+inputs are in `fuzz/regressions/` (the mesh one was a 140 KB modified OpenStreetMap tile; its unit
+test is the regression).
+
+The fuzzer's own control: the tile-id overflow in `parse_directory` (fixed before, by hand) planted
+back. The archive target missed it for 10 minutes and 5.8 million runs: directories are gzipped in
+the file, and a mutation of gzipped bytes almost always fails the checksum, so the parser behind
+it was out of reach. That is what the `pmtiles_dir` target is for; it found the plant in 8
+seconds. Also seen: an archive target started with no seed ran 26 million inputs without getting
+past the magic number. Seeds matter.
+
+Throughput varies by four orders of magnitude: the search box runs ~40,000 inputs a second, GRIB2
+about 10 (its seeds are whole real messages, 350-700 KB). Smaller synthetic GRIB2 seeds would help
+that target most.
+
+The per-push mutation check, run locally on these fixes before committing, found two more things.
+cargo-mutants built without `--all-features`, so code behind vtile's and wx's `http` feature was
+never compiled: its 11 mutants read as missed though no test ran (the gate, clippy and coverage all
+build with every feature). `.cargo/mutants.toml` now sets `all_features = true`; the 516 baseline was
+measured without it, so it is a ceiling until the next full run gives the real number. And it showed
+that nothing but the end-to-end run checked the mesher's labels at all (`Mesher::labels` replaced by
+nothing survived); a test now places two route shields where only the right length arithmetic puts
+them. `find` lost a redundant condition that made one mutant equivalent. All 60 viable mutants on the
+changed lines are caught.

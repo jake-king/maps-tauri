@@ -185,7 +185,7 @@ pub fn parse_directory(b: &[u8]) -> io::Result<Vec<Entry>> {
 /// // ids count every tile of the lower zooms first: zoom 1 starts at 1, zoom 2 at 5
 /// assert_eq!(zxy_to_tile_id(1, 0, 0), 1);
 /// assert_eq!(zxy_to_tile_id(2, 0, 0), 5);
-/// assert_eq!(tile_id_to_zxy(zxy_to_tile_id(12, 703, 1635)), (12, 703, 1635));
+/// assert_eq!(tile_id_to_zxy(zxy_to_tile_id(12, 703, 1635)), Some((12, 703, 1635)));
 /// ```
 pub fn zxy_to_tile_id(z: u8, x: u32, y: u32) -> u64 {
     let mut acc: u64 = ((1u64 << (2 * z as u64)) - 1) / 3; // tiles at all lower zooms
@@ -208,15 +208,21 @@ pub fn zxy_to_tile_id(z: u8, x: u32, y: u32) -> u64 {
     acc
 }
 
+/// Where a section's entry starts in the file: the section's offset from the header plus the
+/// entry's offset in it. Both come from the file, so the sum is checked.
+fn offset_in(section: u64, offset: u64, what: &str) -> io::Result<u64> {
+    section
+        .checked_add(offset)
+        .ok_or_else(|| bad(&format!("{what} offset overflows")))
+}
+
 /// The entry covering `id`: an exact match, or a run that started before it.
 pub fn find(entries: &[Entry], id: u64) -> Option<Entry> {
     let i = entries.partition_point(|e| e.tile_id <= id);
     let e = *entries.get(i.checked_sub(1)?)?;
-    if e.tile_id == id
-        || (e.run_length > 0 && id < e.tile_id + u64::from(e.run_length))
-        || e.run_length == 0
-    {
-        // run_length 0 marks a leaf directory, which may hold the id
+    // run_length 0 marks a leaf directory, which may hold the id; otherwise the run covers it.
+    // id >= e.tile_id here, so the distance cannot underflow (or, compared, overflow)
+    if e.run_length == 0 || id - e.tile_id < u64::from(e.run_length) {
         Some(e)
     } else {
         None
@@ -293,7 +299,10 @@ fn fetch(
     if len == 0 {
         return Ok((Vec::new(), None));
     }
-    let range = format!("bytes={}-{}", offset, offset + len as u64 - 1);
+    let last = offset
+        .checked_add(len as u64 - 1)
+        .ok_or_else(|| bad("range end overflows"))?;
+    let range = format!("bytes={offset}-{last}");
     let mut req = agent.get(url).header("Range", &range);
     if let Some(tag) = if_range {
         req = req.header("If-Range", tag);
@@ -497,7 +506,8 @@ impl Archive {
         {
             return Ok(l.clone());
         }
-        let (dir, net) = Self::read_dir(&self.source, self.header.leaf_offset + offset, length)?;
+        let at = offset_in(self.header.leaf_offset, offset, "leaf directory")?;
+        let (dir, net) = Self::read_dir(&self.source, at, length)?;
         self.count(net);
         let dir = Arc::new(dir);
         let mut c = self.leaves.lock().expect("leaf cache");
@@ -543,12 +553,12 @@ impl Archive {
                 leaf = Some(self.leaf(e.offset, u64::from(e.length))?);
                 continue;
             }
-            if id >= e.tile_id + u64::from(e.run_length) {
+            // find() returned the entry at or before id, so the distance cannot underflow
+            if id - e.tile_id >= u64::from(e.run_length) {
                 return Ok(None);
             }
-            let (raw, net) = self
-                .source
-                .read(self.header.tile_data_offset + e.offset, e.length as usize)?;
+            let at = offset_in(self.header.tile_data_offset, e.offset, "tile")?;
+            let (raw, net) = self.source.read(at, e.length as usize)?;
             self.count(net);
             let mut out = Vec::new();
             gunzip(&raw, &mut out)?;
@@ -571,14 +581,18 @@ impl Archive {
                     stack.push(
                         Self::read_dir(
                             &self.source,
-                            self.header.leaf_offset + e.offset,
+                            offset_in(self.header.leaf_offset, e.offset, "leaf directory")?,
                             u64::from(e.length),
                         )?
                         .0,
                     );
                 } else {
-                    for id in e.tile_id..e.tile_id + u64::from(e.run_length) {
-                        out.push(tile_id_to_zxy(id));
+                    let end = e
+                        .tile_id
+                        .checked_add(u64::from(e.run_length))
+                        .ok_or_else(|| bad("tile id run overflows"))?;
+                    for id in e.tile_id..end {
+                        out.push(tile_id_to_zxy(id).ok_or_else(|| bad("tile id past zoom 31"))?);
                     }
                 }
             }
@@ -596,12 +610,17 @@ pub fn header_version(head: &[u8]) -> String {
     format!("h{h:016x}")
 }
 
-/// The inverse of [`zxy_to_tile_id`].
-pub fn tile_id_to_zxy(id: u64) -> (u8, u32, u32) {
+/// The inverse of [`zxy_to_tile_id`], or `None` for an id past zoom 31, the deepest a `u64` id
+/// reaches (such an id comes only from a corrupt directory).
+pub fn tile_id_to_zxy(id: u64) -> Option<(u8, u32, u32)> {
     let mut acc = 0u64;
     let mut z = 0u8;
     loop {
-        let n = 1u64 << (2 * z as u64);
+        if z > 31 {
+            return None;
+        }
+        // 4^z tiles at zoom z; acc + n stays below 2^63 up to zoom 31
+        let n = 1u64 << (2 * u64::from(z));
         if acc + n > id {
             break;
         }
@@ -627,7 +646,7 @@ pub fn tile_id_to_zxy(id: u64) -> (u8, u32, u32) {
         t /= 4;
         s *= 2;
     }
-    (z, x as u32, y as u32)
+    Some((z, x as u32, y as u32))
 }
 
 #[cfg(test)]
@@ -653,7 +672,7 @@ mod tests {
                 for y in (0..n).step_by(((n / 5).max(1)) as usize) {
                     assert_eq!(
                         tile_id_to_zxy(zxy_to_tile_id(z, x, y)),
-                        (z, x, y),
+                        Some((z, x, y)),
                         "{z}/{x}/{y}"
                     );
                 }
@@ -1021,6 +1040,50 @@ mod tests {
         assert_eq!(a.tile(1, 1, 0).unwrap().as_deref(), Some(T4)); // id 4, in the leaf
         assert_eq!(a.tile(2, 0, 0).unwrap().as_deref(), Some(T5)); // id 5, in the leaf
         assert_eq!(a.tile(2, 0, 1).unwrap(), None); // id 6: past the leaf's last run
+    }
+
+    /// Offsets in the header and directories are the file's word: added together they may pass
+    /// `u64::MAX`, which must be an error, not a debug-build panic or a read from a wrapped offset.
+    /// Found by the archive fuzz target (fuzz/regressions/archive).
+    #[test]
+    fn offsets_that_overflow_are_an_error_not_a_panic() {
+        let mut b = archive_bytes();
+        put_u64(&mut b, 56, u64::MAX - 1); // tile data offset
+        let f = Scratch::new("data-overflow", &b);
+        let a = Archive::open(&f.0).unwrap();
+        assert!(err_text(a.tile(1, 0, 0)).contains("overflows"));
+
+        // the leaf's entry in the root has offset 0, so here the sum fits and the read itself
+        // fails (past the end of any file): an error either way, and root tiles still read
+        let mut b = archive_bytes();
+        put_u64(&mut b, 40, u64::MAX - 1); // leaf directory offset
+        let f = Scratch::new("leaf-far", &b);
+        let a = Archive::open(&f.0).unwrap();
+        assert_eq!(a.tile(0, 0, 0).unwrap().as_deref(), Some(T0));
+        assert!(a.tile(1, 1, 0).is_err()); // id 4, in the leaf
+        assert!(a.all_tiles().is_err());
+
+        assert!(err_text(offset_in(u64::MAX - 1, 2, "leaf directory")).contains("overflows"));
+        assert_eq!(
+            offset_in(u64::MAX - 2, 2, "leaf directory").unwrap(),
+            u64::MAX
+        );
+    }
+
+    /// Zoom 31 is the deepest a u64 tile id reaches; ids past it come only from a corrupt
+    /// directory (found by the `pmtiles_dir` fuzz target).
+    #[test]
+    fn tile_ids_past_the_last_zoom_have_no_tile() {
+        let last = zxy_to_tile_id(31, (1 << 31) - 1, 0);
+        assert_eq!(tile_id_to_zxy(last).map(|t| t.0), Some(31));
+        assert_eq!(tile_id_to_zxy(u64::MAX), None);
+    }
+
+    #[test]
+    fn a_run_reaching_past_the_last_tile_id_is_not_a_panic() {
+        let run = [ent(u64::MAX - 1, 0, 1, 5)];
+        assert_eq!(find(&run, u64::MAX), Some(run[0]));
+        assert_eq!(find(&run, u64::MAX - 2), None);
     }
 
     #[test]

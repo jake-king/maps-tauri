@@ -717,11 +717,15 @@ impl Mesher {
                 mvt::geometry(&f.geometry, &mut self.rings);
                 for r in &self.rings {
                     for w in r.windows(2) {
-                        let mid = [(w[0][0] + w[1][0]) / 2, (w[0][1] + w[1][1]) / 2];
+                        // in i64 and f64: the coordinates are the tile's, and two near i32::MAX
+                        // neither add nor subtract in an i32
+                        let half = |a: i32, b: i32| ((i64::from(a) + i64::from(b)) / 2) as i32;
+                        let mid = [half(w[0][0], w[1][0]), half(w[0][1], w[1][1])];
                         if !inside(mid, l.extent) {
                             continue;
                         }
-                        let len = f64::from(w[1][0] - w[0][0]).hypot(f64::from(w[1][1] - w[0][1]));
+                        let d = |a: i32, b: i32| f64::from(b) - f64::from(a);
+                        let len = d(w[0][0], w[1][0]).hypot(d(w[0][1], w[1][1]));
                         let key = format!("{net}|{st}");
                         if shields.get(&key).is_some_and(|(bl, _)| *bl >= len) {
                             continue;
@@ -1308,6 +1312,85 @@ mod tests {
         }
         assert_eq!(casing_of(LineClass::Rail), None);
         assert_eq!(casing_of(LineClass::RoadOther), None);
+    }
+
+    /// A highway with a route shield, two points apart: the geometry is the tile's word.
+    fn shield_road(geometry: Vec<u32>) -> Layer {
+        Layer {
+            name: "roads".into(),
+            extent: 4096,
+            keys: vec!["kind".into(), "shield_text".into(), "network".into()],
+            values: vec![
+                mvt::Value::String("highway".into()),
+                mvt::Value::String("101".into()),
+                mvt::Value::String("US:US".into()),
+            ],
+            features: vec![mvt::Feature {
+                id: 1,
+                geom_type: 2,
+                tags: vec![0, 0, 1, 1, 2, 2],
+                geometry,
+            }],
+        }
+    }
+
+    #[test]
+    fn a_route_shield_sits_at_the_middle_of_its_longest_segment() {
+        let (moveto, lineto2) = (1 | 1 << 3, 2 | 2 << 3);
+        let zig = |v: i32| ((v << 1) ^ (v >> 31)) as u32;
+        let mut l = shield_road(vec![
+            moveto,
+            zig(1),
+            zig(1),
+            lineto2,
+            zig(30),
+            0,
+            zig(400),
+            0,
+        ]);
+        l.values.push(mvt::Value::String("405".into()));
+        l.features.push(mvt::Feature {
+            id: 2,
+            geom_type: 2,
+            tags: vec![0, 0, 1, 3, 2, 2],
+            geometry: vec![
+                moveto,
+                zig(3000),
+                zig(3000),
+                lineto2,
+                zig(50),
+                0,
+                0,
+                zig(-300),
+            ],
+        });
+        let mut m = Mesher::default();
+        let mesh = m.build(&[l], 14);
+        let mut shields: Vec<_> = mesh
+            .labels
+            .iter()
+            .filter(|lb| lb.kind == LabelKind::Shield)
+            .map(|lb| (lb.text.as_str(), lb.x, lb.y))
+            .collect();
+        shields.sort();
+        // 101: (1,1)-(31,1)-(431,1), the 400-long segment, not the 30 (whose coordinates divide to
+        // the larger ratio); 405: the 300-long segment, not the 50 (whose coordinates sum larger)
+        assert_eq!(shields, [("101", 231, 1), ("405", 3050, 2850)]);
+    }
+
+    /// Coordinates near `i32::MAX`, from a corrupt or hostile tile: the shield placement once added
+    /// and subtracted them as `i32` and panicked (found by the `mvt_mesh` fuzz target).
+    #[test]
+    fn far_coordinates_are_not_an_overflow_panic() {
+        // MoveTo (2e9, 10), LineTo (2.1e9, 10): the endpoints' sum passes i32::MAX
+        let moveto = 1 | 1 << 3;
+        let lineto = 2 | 1 << 3;
+        let far = shield_road(vec![moveto, 4_000_000_000, 20, lineto, 200_000_000, 0]);
+        Mesher::default().build(&[far], 14);
+        // MoveTo (2_147_000_000, 10), then a step that wraps to (-2_147_000_000, 10): the midpoint
+        // is inside the tile, and the step's length does not fit an i32
+        let wrapped = shield_road(vec![moveto, 4_294_000_000, 20, lineto, 1_934_592, 0]);
+        Mesher::default().build(&[wrapped], 14);
     }
 
     #[test]

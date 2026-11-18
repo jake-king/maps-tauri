@@ -1,0 +1,74 @@
+# Coverage-guided fuzzing of the parsers that read bytes from elsewhere (cargo-fuzz, libFuzzer).
+# Its own workspace: it builds on a pinned nightly with sanitizer flags, apart from the app.
+# Run through tools/fuzz.sh.
+[package]
+name = "maps-tauri-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+vtile = { path = "../crates/vtile" }
+wx = { path = "../crates/wx" }
+coords = { path = "../crates/coords" }
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "archive"
+path = "fuzz_targets/archive.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mvt_mesh"
+path = "fuzz_targets/mvt_mesh.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "grib"
+path = "fuzz_targets/grib.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "radar_gunzip"
+path = "fuzz_targets/radar_gunzip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wx_text"
+path = "fuzz_targets/wx_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "coords"
+path = "fuzz_targets/coords.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pmtiles_dir"
+path = "fuzz_targets/pmtiles_dir.rs"
+test = false
+doc = false
+bench = false
+

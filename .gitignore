@@ -16,3 +16,8 @@ __pycache__/
 # generated at build by tools/docs.sh (mdbook-mermaid install, node_modules/mermaid)
 /book/mermaid.min.js
 /book/mermaid-init.js
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+/fuzz/coverage
+/fuzz/Cargo.lock

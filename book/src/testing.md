@@ -69,6 +69,33 @@ The first trial, on the timeline, found four surviving mutants: no test had a ra
 after its slot than before it, an exact tie between two frames, or two hazard snapshots in reach at
 different distances. Two tests now pin those, and all 35 viable mutants there are caught.
 
+### Fuzzing
+
+Most of what the app parses comes from elsewhere: map tiles and archive directories over HTTP from a
+server it does not run, GRIB2 and radar files, text and JSON from NOAA's services, and whatever is
+typed in the search box. Each parser has a coverage-guided fuzz target (`fuzz/`, cargo-fuzz and
+libFuzzer): the PMTiles archive read path, PMTiles directories, MVT decoding with meshing, GRIB2,
+radar decompression, the weather services' text formats, and the search box. The fuzzer starts from
+real inputs taken from the recorded tape and map (`tools/fuzz.sh seeds`), mutates them, and keeps
+every input that reaches new code. The targets build with overflow checks on, so arithmetic that a
+release build would silently wrap is a crash.
+
+CI fuzzes each target for 30 seconds on every push, from a corpus kept between runs, and for 10
+minutes each weekly, after which the corpus is minimised. A crash fails the job and prints the
+input. Once fixed, the bug gets a unit test, and a small input also goes in `fuzz/regressions/`,
+which every run replays.
+
+The first hour found three real bugs, all integer overflows on values read from the input: the
+archive's tile-data offset plus an entry's offset (a release build would have read from a wrapped
+offset), a tile id past zoom 31 in `tile_id_to_zxy`, and coordinates near `i32::MAX` in the mesh
+builder's road-shield placement. The same class was then fixed wherever else the reader added two
+of the file's numbers.
+
+The fuzzer was checked the way any check is: a bug planted in the directory parser. The archive
+target missed it for ten minutes, because directories are gzipped inside the file and nearly every
+mutation broke the checksum before the parser ran. A target that feeds the directory parser
+directly found the same bug in eight seconds.
+
 ### Dependencies
 
 The app is a few thousand lines of its own on 458 crates and a few hundred npm packages, so most of
@@ -119,6 +146,8 @@ flowchart LR
   e2e --> verdict["verdict<br/>one event on a notification topic"]
   check --> mut["mutants<br/>on the changed lines"]
   check --> audit["audit<br/>RustSec and npm advisories"]
+  check --> fuzz["fuzz<br/>7 parser targets, 30 s each"]
+  fuzz --> verdict
   audit --> verdict
   cov --> verdict
   mut --> verdict
@@ -131,7 +160,7 @@ flowchart LR
 ```
 
 Development happens on a self-hosted Forgejo forge, whose CI runs on every branch push: the gate,
-then the Linux end-to-end leg, the coverage, mutation and audit jobs side by side, each in a bare Ubuntu 24.04
+then the Linux end-to-end leg, the coverage, mutation, audit and fuzz jobs side by side, each in a bare Ubuntu 24.04
 container. The job logic lives in
 `tools/forge-job.sh`, so a job runs the same way in a local container (`tools/ci-local.sh`). The
 runner keeps rustup, cargo, npm's cache and the build tree between jobs, so with the cache warm the
