@@ -32,7 +32,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 job=${1:-}
-[[ $job =~ ^(check|e2e|coverage|fuzz|perf|audit|mutants|mutants-full|mutants-total|release)$ ]] || { echo "usage: tools/forge-job.sh check|e2e|coverage|fuzz|perf|audit|mutants|mutants-full|mutants-total|release" >&2; exit 2; }
+[[ $job =~ ^(check|e2e|coverage|fuzz|perf|msrv|audit|mutants|mutants-full|mutants-total|release)$ ]] || { echo "usage: tools/forge-job.sh check|e2e|coverage|fuzz|perf|msrv|audit|mutants|mutants-full|mutants-total|release" >&2; exit 2; }
 
 if [[ $job == release ]]; then
   # Before any setup, so a wrong tag fails in seconds. The tag names the version in tauri.conf.json:
