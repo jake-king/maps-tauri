@@ -4,7 +4,7 @@ flowchart TD
   maps_tauri[maps-tauri]
   vtile[vtile]
   wx[wx]
-  earcutr([earcutr])
+  earcut([earcut])
   flate2([flate2])
   png([png])
   regex([regex])
@@ -27,12 +27,12 @@ flowchart TD
   maps_tauri --> tauri
   maps_tauri --> vtile
   maps_tauri --> wx
-  vtile --> earcutr
+  vtile --> earcut
   vtile --> flate2
   vtile -.-> ureq
   wx --> flate2
   wx --> png
   wx --> serde_json
   wx -.-> ureq
-  class earcutr,flate2,png,regex,rusqlite,serde,serde_json,tauri,unicode_normalization,ureq,wasm_bindgen external
+  class earcut,flate2,png,regex,rusqlite,serde,serde_json,tauri,unicode_normalization,ureq,wasm_bindgen external
   classDef external fill:#eee,stroke:#999,color:#333

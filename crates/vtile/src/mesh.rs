@@ -364,11 +364,13 @@ fn to_i16(v: i32) -> i16 {
 #[derive(Default)]
 pub struct Mesher {
     rings: Vec<Vec<[i32; 2]>>,
-    flat: Vec<f64>,
-    holes: Vec<usize>,
+    earcut: earcut::Earcut<f64>,
+    flat: Vec<[f64; 2]>,
+    holes: Vec<u32>,
+    tri: Vec<u32>,
     /// The mesh of the last tile meshed.
     pub mesh: Mesh,
-    /// polygons earcut could not triangulate (degenerate or self-intersecting), skipped
+    /// polygons earcut made no triangles of (zero area, or fewer than three points), skipped
     pub earcut_failures: u32,
 }
 
@@ -384,28 +386,30 @@ impl Mesher {
                 &r[..]
             };
             if n > 0 {
-                self.holes.push(self.flat.len() / 2);
+                self.holes.push(self.flat.len() as u32);
             }
-            for p in pts {
-                self.flat.push(f64::from(p[0]));
-                self.flat.push(f64::from(p[1]));
-            }
+            // clamped to the i16 the mesh stores, so the triangles are those of the points drawn,
+            // and every orientation test earcut makes is exact in f64 (products stay under 2^53)
+            self.flat
+                .extend(pts.iter().map(|p| p.map(|v| f64::from(to_i16(v)))));
         }
-        let Ok(tri) = earcutr::earcut(&self.flat, &self.holes, 2) else {
+        self.earcut
+            .earcut_slice(&self.flat, &self.holes, &mut self.tri);
+        if self.tri.is_empty() {
             self.earcut_failures += 1;
             return;
-        };
+        }
         let base = self.mesh.fill.len() as u32;
-        for p in self.flat.as_chunks::<2>().0 {
+        for p in &self.flat {
             self.mesh.fill.push(FillVertex {
-                x: to_i16(p[0] as i32),
-                y: to_i16(p[1] as i32),
+                x: p[0] as i16,
+                y: p[1] as i16,
                 color,
             });
         }
         self.mesh
             .fill_idx
-            .extend(tri.iter().map(|&i| base + i as u32));
+            .extend(self.tri.iter().map(|&i| base + i));
     }
 
     /// Every polygon of a feature, in one color.
@@ -1111,6 +1115,90 @@ mod tests {
         assert_eq!(tri_area(&m.mesh), 100.0 * 100.0 - 20.0 * 20.0);
         assert_eq!(m.mesh.fill.len(), 8, "closing duplicates dropped");
         assert!(m.mesh.fill.iter().all(|v| v.color == 7));
+    }
+
+    /// Mesh one polygon on another thread, failing the test, not hanging the suite, if it never ends.
+    fn fill_within(rings: Vec<Vec<[i32; 2]>>, secs: u64) -> Mesh {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let n = rings.len();
+            let mut m = Mesher {
+                rings,
+                ..Default::default()
+            };
+            m.fill_polygon(0..n, 1);
+            tx.send(m.mesh).ok();
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(secs))
+            .expect("triangulation did not finish")
+    }
+
+    #[test]
+    fn a_polygon_with_one_point_holes_is_triangulated_not_a_hang() {
+        // cut down from a fuzzed landuse feature: earcutr 0.5 never returned on it
+        let outer = [
+            [3351, 69],
+            [3344, 71],
+            [3325, 63],
+            [3319, 52],
+            [3314, 49],
+            [3317, 48],
+            [3316, 44],
+            [3314, 46],
+            [3310, 46],
+            [3308, 40],
+            [3304, 39],
+            [3305, 37],
+            [3310, 36],
+            [3306, 32],
+            [3304, 32],
+            [3301, 40],
+            [3296, 40],
+            [3300, 26],
+            [3308, 25],
+            [3296, 24],
+            [3296, 16],
+            [3287, 16],
+            [3287, 12],
+            [3288, 6],
+            [3372, -29],
+            [3396, -1],
+            [3421, 51],
+            [3372, 34],
+        ];
+        let points = [
+            [3393, 8],
+            [3384, 6],
+            [3376, -2],
+            [3381, -21],
+            [3356, -8],
+            [3354, -14],
+            [3353, -14],
+            [3353, -11],
+            [3345, -16],
+            [3322, 77],
+            [3335, 78],
+            [3336, 79],
+            [3334, 78],
+            [3333, 70],
+            [3295, 76],
+            [3297, 74],
+            [3299, 83],
+            [3302, 81],
+            [3305, 72],
+            [3300, 81],
+            [3302, 72],
+            [3294, 67],
+            [3356, 38],
+            [3369, 36],
+            [3374, 35],
+            [3372, 35],
+            [3371, 27],
+        ];
+        let mut rings = vec![outer.to_vec(), vec![[3392, 2], [3383, 6], [3387, 10]]];
+        rings.extend(points.iter().map(|&p| vec![p]));
+        let mesh = fill_within(rings, 10);
+        assert!(!mesh.fill_idx.is_empty());
     }
 
     #[test]

@@ -91,6 +91,12 @@ offset), a tile id past zoom 31 in `tile_id_to_zxy`, and coordinates near `i32::
 builder's road-shield placement. The same class was then fixed wherever else the reader added two
 of the file's numbers.
 
+The first weekly run found a hang: a fuzzed landuse polygon (a ring, a hole, and 27 one-point
+holes) on which the triangulation crate, `earcutr`, never returned. A tile like that from a server
+would have spun a render thread forever. The libFuzzer timeout (10 seconds an input) is what makes
+a hang a finding at all. The mesher now uses the maintained `earcut` crate, which also triangulates
+two polygons exactly that `earcutr` got 0.5% wrong, and is 20% faster.
+
 The fuzzer was checked the way any check is: a bug planted in the directory parser. The archive
 target missed it for ten minutes, because directories are gzipped inside the file and nearly every
 mutation broke the checksum before the parser ran. A target that feeds the directory parser

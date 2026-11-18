@@ -7,7 +7,7 @@ publish = false
 description = "PMTiles v3 reading and Mapbox Vector Tile decoding for the native renderer"
 
 [dependencies]
-earcutr = "0.5"
+earcut = "0.4.12"
 flate2 = "1"
 ureq = { version = "3", default-features = false, features = ["rustls"], optional = true }
 

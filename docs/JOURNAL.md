@@ -1656,3 +1656,44 @@ that nothing but the end-to-end run checked the mesher's labels at all (`Mesher:
 nothing survived); a test now places two route shields where only the right length arithmetic puts
 them. `find` lost a redundant condition that made one mutant equivalent. All 60 viable mutants on the
 changed lines are caught.
+
+## A hang the weekly fuzz run found
+
+The first weekly fuzz run (10 minutes a target) failed on `mvt_mesh` with a libFuzzer timeout: one
+48 KB fuzzed tile took longer than 10 seconds. Replayed locally it ran without end, CPU-bound, at
+56 MB. Stack samples under gdb put it in `earcutr::earcut_linked_hashed`, inside the ear-clipping
+passes `fill_polygon` calls. Timing every polygon of the tile separately (20 seconds a polygon, at
+release speed) named one landuse polygon: 162 points, 39 holes, ordinary coordinates. Greedy
+deletion of holes and points, keeping the hang, cut it to a 28-point ring, a triangular hole and 27
+one-point holes. That is the unit test, run on its own thread so a regression fails in 10 seconds
+instead of hanging the suite. It failed first against `earcutr`.
+
+`earcutr` 0.5.0 is the newest release, so the fix is a different crate. Three candidates, on the
+same tile:
+
+| Triangulator | As decoded | Clamped to i16 |
+|---|---|---|
+| `earcutr` 0.5.0 | hangs (the 162-point polygon) | hangs |
+| `earcut` 0.4.12, f64 | completes | completes |
+| `earcut` 0.4.12, `EarcutI32` | hangs (a polygon with x near -2e9) | completes |
+
+`earcut` (georust) tracks earcut.js 3.2.4, which is the version in MapLibre's lock file, so the two
+renderers now triangulate with the same algorithm. The integer variant's hang is an overflow: exact
+i64 predicates on coordinate differences near 4e9 overflow. The f64 one survived that polygon, but
+at that size its orientation tests are not exact either. Ring points are now clamped to i16 before
+triangulating. The mesh stored them as i16 already (`to_i16`), so earcut was computing triangles for
+points other than the ones drawn; clamped, every product it forms is under 2^53 and exact.
+
+On the whole West LA archive (`examples/meshcheck.rs`, 772 tiles, 85,711 polygon features), against
+HEAD:
+
+| | `earcutr` | `earcut` |
+|---|---|---|
+| features off their exact area | 2, worst 0.54% | 0 |
+| decode + mesh | 1.46 ms/tile | 1.13 ms/tile |
+
+A planned control for the clamp, a polygon with one vertex at -2e9 checked by area, passed against
+the old code too (the stored vertices were already clamped and the indices came out the same), so
+it showed nothing and is not in the suite. The clamp's evidence is the exactness argument and the
+integer variant's hang, not a test. Five more minutes of `mvt_mesh` from the CI corpus plus the
+timeout input: no findings.

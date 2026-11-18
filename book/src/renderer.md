@@ -36,9 +36,10 @@ point, and the Rust decoder now does the same.
 `mesh.rs` turns a decoded tile into two GPU-ready meshes:
 
 - **Fills.** Rings are grouped into polygons with holes by winding (as MapLibre's `classifyRings`
-  does) and triangulated with `earcutr`, a port of the earcut MapLibre uses. Over a whole archive,
-  25,300 of 25,302 polygon features triangulate to exactly their area; the other two, self-touching
-  polygons, are within 0.5%.
+  does) and triangulated with the `earcut` crate, a port of earcut 3.2.4, the version MapLibre
+  uses. Coordinates are clamped to the i16 range the mesh stores first, so the triangles are those
+  of the points drawn. Over a whole archive (772 tiles), all 85,711 polygon features triangulate to
+  exactly their area.
 - **Lines.** Two vertices per point, pushed apart along the miter (capped so sharp corners do not
   spike). The width is applied in the shader, so a mesh never needs rebuilding when the zoom changes.
   Road casings and dashed railways are built here too.
