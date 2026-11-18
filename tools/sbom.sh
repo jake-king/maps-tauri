@@ -24,16 +24,19 @@ trap 'rm -f "${raw[@]}"' EXIT
 cargo cyclonedx -q --manifest-path src-tauri/Cargo.toml -f json --spec-version 1.5 \
   --target x86_64-unknown-linux-gnu --override-filename sbom-tmp
 python3 - "$PWD" src-tauri/sbom-tmp.json "$out/$name.rust.cdx.json" <<'PY'
-import sys
+import re, sys
 root, src, dst = sys.argv[1:]
 text = open(src).read().replace("path+file://" + root + "/", "path+file:")
-if root in text:
+# the checkout's path as a path (followed by / or the end of a string), not as any substring:
+# a short root such as a container's /w is also the start of every "/wasm..." in the text
+if re.search(re.escape(root) + r'(/|")', text):
     sys.exit(f"sbom: {src} still names {root} after the rewrite")
 open(dst, "w").write(text)
 PY
 npm sbom --sbom-format cyclonedx --omit dev >"$out/$name.js.cdx.json"
 for f in "$out/$name".{rust,js}.cdx.json; do
-  if grep -qF -e "$PWD" -e "$HOME" "$f"; then
+  # a local path as a path (followed by / or the end of a string), as in the rewrite above
+  if ! python3 -c 'import re, sys; t = open(sys.argv[1]).read(); sys.exit(any(re.search(re.escape(p) + r"(/|\")", t) for p in sys.argv[2:]))' "$f" "$PWD" "$HOME"; then
     echo "sbom: $f names a local path" >&2
     exit 1
   fi
