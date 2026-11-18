@@ -161,7 +161,8 @@ flowchart LR
   week["weekly"] --> mfull["mutants, 4 shards<br/>every mutant, against a baseline"]
   tag["tag v*"] --> vcheck["release: tag names the version?"]
   vcheck --> rgate["gate, .deb, coverage, docs site"]
-  rgate --> draft["draft release<br/>.deb, docs tarball, SHA256SUMS"]
+  rgate --> sign["SBOMs, SHA256SUMS signed and checked"]
+  sign --> draft["draft release<br/>.deb, docs, SBOMs, signed SHA256SUMS"]
   draft --> pub["published"]
 ```
 
@@ -183,3 +184,15 @@ with its SHA256SUMS, and the API reference and this book with it (`tools/forge-j
 prerelease), and that is checked before any setup, so a wrong tag fails in seconds. The release is
 created as a draft, filled, then published, so a failed upload never leaves a public release with half
 its files.
+
+Each release also says what it contains and proves where it came from. Two software bills of
+materials (CycloneDX, `tools/sbom.sh`) list every crate and npm package in the build, so a later
+advisory can be checked against a release without rebuilding it. SHA256SUMS lists every asset and is
+signed with the project's key (`tools/sign-release.sh`); the signature is checked with the committed
+`release-signing.pub` before anything is published, and a release without the key fails rather than
+going out unsigned. The key is a minisign key made by Tauri's signer, the format Tauri's updater
+checks, so the same key can later sign updates. To check a download:
+
+```text
+minisign -Vm SHA256SUMS -p release-signing.pub && sha256sum -c --ignore-missing SHA256SUMS
+```

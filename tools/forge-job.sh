@@ -188,7 +188,16 @@ if [[ $job == release ]]; then
   tools/coverage.sh --floor --html target/coverage
   tools/docs.sh --archive
   cp target/maps-tauri-docs.tar.gz "$out/maps-tauri-docs-$tag.tar.gz"
-  (cd "$out" && sha256sum -- *.deb *.tar.gz >SHA256SUMS)
+  # what the build contains, for anyone checking it against an advisory later
+  tools/sbom.sh "$out" "maps-tauri-$tag"
+  (cd "$out" && sha256sum -- *.deb *.tar.gz *.cdx.json >SHA256SUMS)
+  # one signature over the sums covers every asset; checked with the committed public key before
+  # anything is published. A dry run without the key (a local one) says so; a release cannot
+  if [[ ${RELEASE_DRY_RUN:-} == 1 && -z ${RELEASE_SIGNING_KEY:-} ]]; then
+    echo "forge-job: RELEASE_DRY_RUN=1 without RELEASE_SIGNING_KEY: SHA256SUMS not signed"
+  else
+    tools/sign-release.sh "$out"
+  fi
   echo "forge-job: $tag (prerelease $prerelease):"
   (cd "$out" && ls -l && cat SHA256SUMS)
   if [[ ${RELEASE_DRY_RUN:-} == 1 ]]; then
@@ -211,7 +220,7 @@ EOF
     -o "$out/release.json" -w '%{http_code}' -X POST "$api/releases")
   [[ $code == 201 ]] || { echo "forge-job: creating the release answered $code" >&2; cat "$out/release.json" >&2; exit 1; }
   id=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["id"])' "$out/release.json")
-  for f in "$out"/*.deb "$out"/*.tar.gz "$out/SHA256SUMS"; do
+  for f in "$out"/*.deb "$out"/*.tar.gz "$out"/*.cdx.json "$out/SHA256SUMS" "$out/SHA256SUMS.minisig"; do
     code=$(auth | curl -sS -H @- -F "attachment=@$f" -o "$out/asset.json" -w '%{http_code}' \
       "$api/releases/$id/assets?name=$(basename "$f")")
     [[ $code == 201 ]] || { echo "forge-job: uploading $(basename "$f") answered $code" >&2; cat "$out/asset.json" >&2; exit 1; }

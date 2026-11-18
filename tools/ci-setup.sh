@@ -14,7 +14,7 @@ sudo=; [[ $(id -u) == 0 ]] || sudo=sudo
 export DEBIAN_FRONTEND=noninteractive
 $sudo apt-get update -q
 $sudo apt-get install -y -q --no-install-recommends \
-  build-essential curl ca-certificates git pkg-config python3 pipx shellcheck xz-utils \
+  build-essential curl ca-certificates git pkg-config python3 pipx shellcheck xz-utils minisign \
   libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev patchelf
 pipx install --force "ruff==$RUFF"
 if ! command -v rustup >/dev/null; then

@@ -1697,3 +1697,23 @@ the old code too (the stored vertices were already clamped and the indices came 
 it showed nothing and is not in the suite. The clamp's evidence is the exactness argument and the
 integer variant's hang, not a test. Five more minutes of `mvt_mesh` from the CI corpus plus the
 timeout input: no findings.
+
+## Release provenance: SBOMs and a signature
+
+A release now says what it is built from and who built it. `tools/sbom.sh` writes two CycloneDX 1.5
+SBOMs: the app crate with every crate it builds with on Linux x86-64 (`cargo-cyclonedx`, 305
+components), and the frontend's runtime npm packages (`npm sbom --omit dev`, 28). `cargo-cyclonedx`
+names the workspace's own crates by absolute path (`path+file:///home/...`), which would publish the
+builder's home directory; the script rewrites those to repository-relative paths and fails if the
+checkout's path or `$HOME` is still in either file. It also writes a raw report beside every
+workspace member, not only the one asked for (found as six stray files after a run); all of them are
+removed on exit, pass or fail.
+
+`SHA256SUMS` covers the packages and both SBOMs, and `tools/sign-release.sh` signs it with a minisign
+key (made with `tauri signer generate`, so the same key can later sign Tauri updater bundles), then
+verifies the signature against the committed `release-signing.pub` before anything is uploaded. A
+release with no key fails instead of publishing unsigned. The private key lives in the forge secret
+`RELEASE_SIGNING_KEY` and a password manager, never in the repository. Checked in the release
+container with a throwaway key: a good key signs and verifies; no key, the wrong public key, and a
+file changed after signing each fail. Then with the real key (ID 8BC05ECE547F9F2D): signs and
+verifies, and the signature does not verify a different file.
