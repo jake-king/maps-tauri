@@ -57,7 +57,8 @@ the network.
 The whole tree is about 2,600 mutants, hours of work, so CI splits it. Every push mutates only the
 lines that push changed, in place on the warm build tree, and fails if any of those mutants survives:
 new or edited code arrives with tests that would catch it breaking. A weekly workflow
-(`.forgejo/workflows/mutants.yml`, or run by hand) mutates everything and fails if more mutants are
+(`.forgejo/workflows/mutants.yml`, or run by hand) mutates everything, in four shards one after
+another because the whole is longer than the runner allows one job, and fails if more mutants are
 missed than `tools/mutants-baseline.txt` records; that number only goes down.
 
 The first trial, on the timeline, found four surviving mutants: no test had a radar frame nearer
@@ -100,7 +101,7 @@ flowchart LR
   cov --> verdict
   mut --> verdict
   check --> verdict
-  week["weekly"] --> mfull["mutants-full<br/>every mutant, against a baseline"]
+  week["weekly"] --> mfull["mutants, 4 shards<br/>every mutant, against a baseline"]
   tag["tag v*"] --> vcheck["release: tag names the version?"]
   vcheck --> rgate["gate, .deb, coverage, docs site"]
   rgate --> draft["draft release<br/>.deb, docs tarball, SHA256SUMS"]

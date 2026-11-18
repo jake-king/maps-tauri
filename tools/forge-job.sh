@@ -8,7 +8,10 @@
 #                              target/coverage for the docs site
 #   tools/forge-job.sh mutants  cargo-mutants on the lines this push changed (since $BEFORE, else the
 #                              previous commit); a mutant no test catches fails the job
-#   tools/forge-job.sh mutants-full  every mutant; fails if more are missed than the recorded baseline
+#   tools/forge-job.sh mutants-full  one shard of every mutant ($SHARD, k/n from 0), its missed list kept
+#                              in the cache under the workflow run
+#   tools/forge-job.sh mutants-total the shards' missed lists together; fails if more are missed than the
+#                              recorded baseline
 #   tools/forge-job.sh release for a pushed tag v<version>: the gate, the Debian package, then a forge
 #                              release holding it, the documentation site (book + API reference) as a
 #                              tarball, and their SHA256SUMS (RELEASE_DRY_RUN=1 builds, lists what it
@@ -21,7 +24,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 job=${1:-}
-[[ $job =~ ^(check|e2e|coverage|mutants|mutants-full|release)$ ]] || { echo "usage: tools/forge-job.sh check|e2e|coverage|mutants|mutants-full|release" >&2; exit 2; }
+[[ $job =~ ^(check|e2e|coverage|mutants|mutants-full|mutants-total|release)$ ]] || { echo "usage: tools/forge-job.sh check|e2e|coverage|mutants|mutants-full|mutants-total|release" >&2; exit 2; }
 
 if [[ $job == release ]]; then
   # Before any setup, so a wrong tag fails in seconds. The tag names the version in tauri.conf.json:
@@ -36,6 +39,30 @@ if [[ $job == release ]]; then
     *) echo "forge-job: tag $tag does not name the app version $conf" >&2; exit 1 ;;
   esac
   [[ $tag == v* ]] || { echo "forge-job: tag $tag does not start with v" >&2; exit 1; }
+fi
+
+# The full run is sharded (one job may not outlast the runner's 3-hour limit) and its shards' missed
+# lists meet in the cache, under the workflow run's id
+shards=${CI_CACHE:-$PWD/logs}/maps-tauri-mutants/${GITHUB_RUN_ID:-local}
+if [[ $job == mutants-total ]]; then
+  n=${SHARDS:?SHARDS: how many shards the run had}
+  for ((k = 0; k < n; k++)); do
+    [[ -f $shards/shard-$k ]] || { echo "forge-job: shard $k/$n left no result in $shards" >&2; exit 1; }
+  done
+  missed=$(cat "$shards"/shard-* | grep -c . || true)
+  total=$(cat "$shards"/total-* | awk '{ t += $1 } END { print t + 0 }')
+  echo "forge-job: $missed of $total viable mutants missed, over $n shards"
+  sort "$shards"/shard-*
+  # results of runs older than a week go
+  find "${shards%/*}" -mindepth 1 -maxdepth 1 -mtime +7 -exec rm -rf {} +
+  if [[ ! -f tools/mutants-baseline.txt ]]; then
+    echo "forge-job: no baseline recorded yet; this is the number to record"
+    exit 0
+  fi
+  allowed=$(grep -v '^#' tools/mutants-baseline.txt)
+  echo "forge-job: the baseline allows $allowed"
+  ((missed <= allowed)) || { echo "forge-job: more mutants missed than the baseline allows" >&2; exit 1; }
+  exit 0
 fi
 
 if [[ -n ${CI_CACHE:-} ]]; then
@@ -110,7 +137,7 @@ if [[ $job == mutants || $job == mutants-full ]]; then
     tools/mutants.sh --in-place --in-diff logs/mutants.diff || rc=$?
   else
     rc=0
-    tools/mutants.sh || rc=$?
+    tools/mutants.sh --shard "${SHARD:?SHARD: which shard, k/n from 0}" || rc=$?
   fi
   out=logs/mutants/mutants.out
   # exit 2: missed mutants; 3: timeouts only (a mutant that hangs the tests is caught by the timeout)
@@ -127,20 +154,11 @@ if [[ $job == mutants || $job == mutants-full ]]; then
       exit 1
     fi
   else
-    total=$(cat "$out"/{caught,missed,timeout}.txt 2>/dev/null | grep -c . || true)
-    if [[ ! -f tools/mutants-baseline.txt ]]; then
-      # The first run records the number: report it with the list, and leave the gate to the next run.
-      echo "forge-job: $missed of $total viable mutants missed; no baseline recorded yet. Missed:"
-      cat "$out/missed.txt" 2>/dev/null || true
-      exit 0
-    fi
-    allowed=$(grep -v '^#' tools/mutants-baseline.txt)
-    echo "forge-job: $missed of $total viable mutants missed (baseline allows $allowed)"
-    if ((missed > allowed)); then
-      echo "forge-job: more mutants missed than the baseline allows; all missed:" >&2
-      cat "$out/missed.txt"
-      exit 1
-    fi
+    mkdir -p "$shards"
+    k=${SHARD%/*}
+    cat "$out"/{caught,missed,timeout}.txt 2>/dev/null | grep -c . >"$shards/total-$k" || true
+    cp "$out/missed.txt" "$shards/shard-$k" 2>/dev/null || : >"$shards/shard-$k"
+    echo "forge-job: shard $SHARD: $(grep -c . "$shards/shard-$k" || true) missed of $(cat "$shards/total-$k") viable"
   fi
   exit 0
 fi

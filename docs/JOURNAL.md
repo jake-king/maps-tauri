@@ -1542,6 +1542,14 @@ What it took:
   them (366 caught, 115 missed, 7 timeouts, 61 unviable); the misses were almost all in the app
   crate's glue (`weather.rs`, `devstats.rs`, `tiles.rs`). The baseline is recorded from the first
   full run on the CI runner instead.
+- That run is longer than the runner allows. The ~600 app-crate mutants each relink Tauri and run
+  its tests, about a minute apiece; the ~2,000 in the libraries take seconds. Serially that is over
+  10 hours, and forgejo-runner stops a job at its `runner.timeout`, 3 hours by default (not set in
+  our runner's config; the documented default, not measured here), whatever the workflow's
+  `timeout-minutes` says. The weekly workflow is four `--shard` jobs one after another,
+  about an hour each, whose missed lists meet in the runner's cache; a last job adds them up against
+  the baseline. Copied trees build without debuginfo: 1.7 GB each on a 60 GB runner disk that six
+  repositories share.
 
 Proven both ways: a diff touching two lines of `timeline.rs` gave 4 missed mutants and exit 2 (the
 job fails and lists them); a diff with no Rust gave "no Rust source files" and exit 0. The four were
