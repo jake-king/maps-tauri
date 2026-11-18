@@ -14,6 +14,8 @@
 #                              recorded baseline
 #   tools/forge-job.sh fuzz    setup, seeds from the fixtures, then every fuzz target for $FUZZ_SECONDS
 #                              (default 30) on a corpus kept in the cache; FUZZ_CMIN=1 minimises it after
+#   tools/forge-job.sh perf    setup, then tools/perf.sh: instruction counts of the benchmarks against
+#                              the merge base with main (on main, against $BEFORE); +3% fails
 #   tools/forge-job.sh audit   setup, then the RustSec advisories for Cargo.lock (cargo-deny, deny.toml)
 #                              and npm's for package-lock.json (tools/npm_audit.py), both fetched fresh
 #   tools/forge-job.sh release for a pushed tag v<version>: the gate, the Debian package, then a forge
@@ -28,7 +30,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 job=${1:-}
-[[ $job =~ ^(check|e2e|coverage|fuzz|audit|mutants|mutants-full|mutants-total|release)$ ]] || { echo "usage: tools/forge-job.sh check|e2e|coverage|fuzz|audit|mutants|mutants-full|mutants-total|release" >&2; exit 2; }
+[[ $job =~ ^(check|e2e|coverage|fuzz|perf|audit|mutants|mutants-full|mutants-total|release)$ ]] || { echo "usage: tools/forge-job.sh check|e2e|coverage|fuzz|perf|audit|mutants|mutants-full|mutants-total|release" >&2; exit 2; }
 
 if [[ $job == release ]]; then
   # Before any setup, so a wrong tag fails in seconds. The tag names the version in tauri.conf.json:
@@ -278,6 +280,12 @@ if [[ $job == fuzz ]]; then
   tools/fuzz.sh seeds
   tools/fuzz.sh run "${FUZZ_SECONDS:-30}"
   [[ ${FUZZ_CMIN:-} == 1 ]] && tools/fuzz.sh cmin
+  exit 0
+fi
+
+if [[ $job == perf ]]; then
+  fixtures
+  tools/perf.sh
   exit 0
 fi
 

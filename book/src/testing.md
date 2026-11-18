@@ -102,6 +102,32 @@ target missed it for ten minutes, because directories are gzipped inside the fil
 mutation broke the checksum before the parser ran. A target that feeds the directory parser
 directly found the same bug in eight seconds.
 
+### Performance
+
+A change that makes the renderer or a decoder slower passes every test, so speed has its own check.
+Benchmarks (`crates/vtile/benches`, `crates/wx/benches`) cover the work done per tile and per
+weather update: decoding a vector tile and meshing it at three zooms, parsing the archive's root
+directory and looking up tiles in it, a radar frame through decompression, GRIB2 decoding and
+thinning, and a GFS wind field. Their inputs are the end-to-end fixtures.
+
+They count instructions under Valgrind's Callgrind (gungraun) instead of timing. CI runs on a shared
+machine, where a wall-clock benchmark measures whatever else is running. A count repeats to the
+instruction for the decoders and within 0.03% for the mesher, so `tools/perf.sh` can compare a
+branch with its merge base on `main`, both measured in the same job, and fail on any benchmark that
+rose by more than 3%. A count does not see cache misses, memory bandwidth or vector width, so it
+catches algorithmic regressions (lost buffer reuse, an extra pass, a worse search), not every kind
+of slowdown. A slowdown that is the price of a change is accepted in writing: a commit trailer
+`Perf-accepted: <why>`, printed with the result.
+
+The gate was checked against planted regressions. Rebuilding the triangulator's scratch buffers for
+every polygon raised the street-level mesh by 7.4% and failed it; the trailer let the same change
+through; unchanged code passed. The first plant, a linear search in place of the directory's binary
+search, made that benchmark 29% faster: the root directory is small and is searched in order. And
+the first version of the gate compared the base with itself: the two builds shared a target
+directory, cargo gave both the same artifact names, and its freshness check, reading the paths the
+base build recorded, never rebuilt the head. The base now builds apart, and the gate rebuilds a head
+whose dependency lists name the base tree.
+
 ### Dependencies
 
 The app is a few thousand lines of its own on 458 crates and a few hundred npm packages, so most of
@@ -153,7 +179,9 @@ flowchart LR
   check --> mut["mutants<br/>on the changed lines"]
   check --> audit["audit<br/>RustSec and npm advisories"]
   check --> fuzz["fuzz<br/>7 parser targets, 30 s each"]
+  check --> perf["perf<br/>instruction counts vs main, +3% fails"]
   fuzz --> verdict
+  perf --> verdict
   audit --> verdict
   cov --> verdict
   mut --> verdict

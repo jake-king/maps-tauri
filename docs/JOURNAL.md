@@ -1751,3 +1751,47 @@ The step now ends with `[ "$v" = success ]`: the event stays best effort, the st
 Checked by running the step's script, taken from the workflow file, before and after, for four leg
 outcomes: all green, a red gate with the rest skipped, one red leg, one cancelled. Before: exit 0 for
 all four. After: 0 for all green, 1 for the other three.
+## A performance gate
+
+Every check so far asks whether the code is right; none asked whether it got slower. The gate:
+benchmarks of the per-tile and per-update work (vector-tile decode and mesh at z5, z9 and z14, the
+largest tile of the fixture archive at each; the root directory parsed and searched for every tile
+id to z9; a radar frame gunzipped, decoded and thinned as `weather.rs` does it; a GFS wind field),
+counted in instructions under Callgrind through gungraun 0.20, compared by `tools/perf.sh` against
+the merge base with `main`, both sides measured in the same job, failing above +3% unless a commit
+carries `Perf-accepted: <why>`.
+
+Instructions, not time: the runner is shared by four concurrent jobs. Measured in the CI image,
+three runs of the same build: decode and directory identical to the instruction, the mesher within
+0.022% (its label placement uses a hash map), radar and wind identical. 3% is a hundred times that.
+The suite takes 13 seconds a side. In a container gungraun cannot turn address randomisation off
+(`setarch -R` needs `personality()`, which the seccomp policy refuses), so it runs with
+`GUNGRAUN_ALLOW_ASLR`; the repeat runs above were made that way.
+
+Proven against planted regressions, in the CI image:
+
+| Change | Result |
+|---|---|
+| nothing (base = head's code) | pass, every count within 0.004% |
+| triangulator scratch rebuilt per polygon | mesh z14 +7.4%, z5 +2.9%, z9 +1.5%: fail (exit 1) |
+| the same, with a `Perf-accepted:` trailer | pass, reason printed |
+| linear search in `pmtiles::find` | directory **-29%** |
+
+The last was meant as a regression. The root directory is short and the benchmark searches it in
+id order, where a linear scan beats a binary search; the plant measured a fact about the input, not
+a defect of the gate. The lost-reuse plant replaced it.
+
+Two of the gate's own bugs came out of those runs. gungraun clears the environment before it starts
+Valgrind, so the fixture paths (`MAPS_BENCH_ARCHIVE`, `MAPS_BENCH_TAPE`) reached only the head; they
+are passed by name with `--envs`. Worse, the first version compared the base with itself. Base and
+head built into one target directory; cargo names a workspace crate's artifacts the same whichever
+directory the source is in, and its freshness check reads the dependency list the last build wrote,
+which named the base tree's unchanged files. So the head was never rebuilt, and a planted regression
+read "No change". The base now builds in a target directory of its own, and before measuring, the
+gate rebuilds a head whose dependency lists name the base tree (proven by forcing the shared
+directory: the guard fired and the plant failed the gate). A third trap is handled before it could
+bite: given `--baseline` with no saved baseline, gungraun saves one and compares nothing, so the
+gate fails when the base run leaves no `*.out.base@base` file.
+
+The suite also turned up something worth knowing: the weather path's 1.1 billion instructions for
+one radar frame dwarf everything on the tile path (50 million for the heaviest mesh).

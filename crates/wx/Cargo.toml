@@ -22,3 +22,10 @@ required-features = ["http"]
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+gungraun = "0.20.0"
+
+[[bench]]
+name = "decode"
+harness = false
