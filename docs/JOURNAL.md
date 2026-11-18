@@ -1846,3 +1846,17 @@ on 1.99.1 and failed the job with exit 1 (E0658, the planted line); a member wit
 clippy's `incompatible_msrv` lint inside the gate, which failed on the same plant; that lint covers
 standard-library items only, so the job stays the authority for syntax.
 
+## Unused dependencies
+
+A gate step, `unused-deps`, runs cargo-machete 0.10.1 (pinned in `tools/ci-setup.sh`). The workspace
+was already clean. Planted dependencies, one per kind of table: an unused `[dependencies]` entry
+failed it in `coords` and in the separate fuzz workspace; one in `wx`'s `[dev-dependencies]` and one
+in the app's `[build-dependencies]` passed. Its source says why: `find_unused` reads
+`manifest.dependencies` only, under a "TODO extend to dev dependencies + build dependencies". So the
+step covers what ships; the few dev- and build-dependencies are left to review. A crate named only
+in a comment is still reported unused.
+
+Red through the gate itself with `coords` planted as a path dependency of `wx` (one that resolves, so
+nothing else breaks for the wrong reason): `unused-deps` failed, and so did `docs-site`, correctly,
+because the book's crate graph is generated from the dependency graph and the plant changed it.
+

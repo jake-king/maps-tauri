@@ -9,6 +9,7 @@ RUFF=0.17.3
 MDBOOK=0.5.4
 MDBOOK_MERMAID=0.17.1
 CARGO_DENY=0.21.0
+CARGO_MACHETE=0.10.1
 NODE=22
 GITLEAKS=8.30.1
 # the published sha256 of gitleaks_8.30.1_linux_x64.tar.gz (its release checksums file)
@@ -48,4 +49,7 @@ if [[ $(mdbook-mermaid --version 2>/dev/null) != "mdbook-mermaid $MDBOOK_MERMAID
 fi
 if [[ $(cargo deny --version 2>/dev/null) != "cargo-deny $CARGO_DENY" ]]; then
   cargo install cargo-deny --version "$CARGO_DENY" --locked
+fi
+if [[ $(cargo machete --version 2>/dev/null) != "$CARGO_MACHETE" ]]; then
+  cargo install cargo-machete --version "$CARGO_MACHETE" --locked
 fi

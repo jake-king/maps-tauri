@@ -154,6 +154,14 @@ crates from crates.io only, no OpenSSL beside rustls. The gate checks it offline
 CI's `audit` job checks the lock files against the RustSec and npm advisory databases, fetched fresh,
 on every push and every day, since a new advisory concerns code nobody changed.
 
+A dependency nothing uses still costs build time, attack surface and audit noise. The gate's
+`unused-deps` step runs cargo-machete over both workspaces (the app's and `fuzz/`): it reads the
+sources for each `[dependencies]` entry, without building, and fails on one never named. It does not
+look at `[dev-dependencies]` or `[build-dependencies]` (a TODO in its own source), and it counts a
+crate named anywhere in the package, so a normal dependency used only by a test passes as used.
+Checked red with unused dependencies planted in `coords`, `wx` and the fuzz workspace; a plant in each of the
+two unchecked sections passed, which is how the gap was found.
+
 An advisory with no fix can be accepted, with a reason in writing: in `deny.toml` for Rust (an
 unmaintained macro crate deep in the GTK bindings), in `tools/npm-audit-allow.json` for npm (empty
 now). npm has no such list of its own, so `tools/npm_audit.py` keeps one, and each entry has a date
