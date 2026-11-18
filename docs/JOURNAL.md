@@ -1717,3 +1717,24 @@ release with no key fails instead of publishing unsigned. The private key lives 
 container with a throwaway key: a good key signs and verifies; no key, the wrong public key, and a
 file changed after signing each fail. Then with the real key (ID 8BC05ECE547F9F2D): signs and
 verifies, and the signature does not verify a different file.
+
+## A protected main, and releases only from it
+
+Until now every commit went straight to one long branch, and `main` on the forge was still the M0
+scaffold. That branch is now merged (pull request #1, fast-forward, so `main` is the exact commit CI
+tested, `fdac556`) and retired. `main` is protected: no direct pushes, the maintainer's included. A
+change is a pull request from a short-lived branch, mergeable when the `ci / verdict (push)` status
+is green on its head (`verdict` needs every other CI job), the branch is current with `main`, and
+one approval is given. Changes are mostly prepared by an automation account (`datastrike-agent`),
+and the forge does not let an author approve their own pull request, so that approval is the
+maintainer reading the diff. Only fast-forward merges are allowed; an outdated branch is updated by
+rebase, which reruns CI on the new head. Read back from the forge's API as the agent account:
+`protected: true`, `user_can_push: false`, `required_approvals: 1`, `status_check_contexts: ["ci /
+verdict (push)"]`, merge styles fast-forward only.
+
+Releases follow the same line: `forge-job.sh release` fails before any setup unless the tagged
+commit is on `main` (the release checkout fetches `main`'s history without blobs). Checked red with
+the tag on the then-unmerged branch and with no `main` to compare against, green with a commit on
+`main`. The scheduled workflows (daily advisories, weekly fuzzing and full mutation run) run from
+the default branch, so they start running only now; until this merge they had run only when
+dispatched by hand.
