@@ -43,6 +43,15 @@ if [[ $job == release ]]; then
     *) echo "forge-job: tag $tag does not name the app version $conf" >&2; exit 1 ;;
   esac
   [[ $tag == v* ]] || { echo "forge-job: tag $tag does not start with v" >&2; exit 1; }
+  # A release is built from what main holds, merged through a pull request with CI green, never from
+  # a branch nobody reviewed: the tagged commit must be on main (release.yml fetches it into this ref)
+  main=${RELEASE_MAIN_REF:-refs/remotes/origin/main}
+  sha=${GITHUB_SHA:-$(git rev-parse HEAD)}
+  git rev-parse -q --verify "$main^{commit}" >/dev/null ||
+    { echo "forge-job: $main not found: cannot check that $tag is on main" >&2; exit 1; }
+  git merge-base --is-ancestor "$sha" "$main" ||
+    { echo "forge-job: $tag ($sha) is not on main: merge it first, then tag" >&2; exit 1; }
+  echo "forge-job: $tag ($sha) is on main"
 fi
 
 # The full run is sharded (one job may not outlast the runner's 3-hour limit) and its shards' missed

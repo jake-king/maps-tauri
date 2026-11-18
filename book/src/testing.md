@@ -159,7 +159,7 @@ flowchart LR
   mut --> verdict
   check --> verdict
   week["weekly"] --> mfull["mutants, 4 shards<br/>every mutant, against a baseline"]
-  tag["tag v*"] --> vcheck["release: tag names the version?"]
+  tag["tag v*"] --> vcheck["release: tag names the version,<br/>and its commit is on main?"]
   vcheck --> rgate["gate, .deb, coverage, docs site"]
   rgate --> sign["SBOMs, SHA256SUMS signed and checked"]
   sign --> draft["draft release<br/>.deb, docs, SBOMs, signed SHA256SUMS"]
@@ -173,6 +173,14 @@ container. The job logic lives in
 runner keeps rustup, cargo, npm's cache and the build tree between jobs, so with the cache warm the
 gate takes about two minutes and the end-to-end leg about three, including the release build.
 
+`main` is protected: nobody pushes to it, including the maintainer. A change arrives as a pull
+request from a short-lived branch, merges only when CI's `verdict` job (which needs every other job)
+is green on the branch's head and the branch is current with `main`, and needs one approval.
+Changes are often prepared by an automation account, and the forge does not let an author approve
+their own pull request, so that approval is a human reading the diff. Merges are fast-forward only,
+so the commit CI tested is the commit on `main`, by hash. The weekly and daily workflows run from
+`main`, the default branch.
+
 Tauri draws with each platform's own web view, and WebGL2 is where engines differ most, so the GitHub
 workflows in `.github/` run the same end-to-end check on Linux, macOS and Windows and compare each
 platform's snapshots with Linux's in 8 px blocks; a job also builds for the iOS simulator.
@@ -181,7 +189,9 @@ platform's snapshots with Linux's in 8 px blocks; a job also builds for the iOS 
 
 On the forge, a version tag runs the gate, builds the Debian package and publishes it as a release
 with its SHA256SUMS, and the API reference and this book with it (`tools/forge-job.sh release`). The tag must name the version in `tauri.conf.json` (`v0.1.0`; `v0.1.0-rc.1` publishes a
-prerelease), and that is checked before any setup, so a wrong tag fails in seconds. The release is
+prerelease), and the tagged commit must be on `main`, so a release is always something that went
+through review and CI. Both are checked before any setup, so a wrong tag fails in seconds. Version
+tags are protected too: only the maintainer can push one. The release is
 created as a draft, filled, then published, so a failed upload never leaves a public release with half
 its files.
 
