@@ -1547,7 +1547,7 @@ What it took:
   10 hours, and forgejo-runner stops a job at its `runner.timeout`, 3 hours by default (not set in
   our runner's config; the documented default, not measured here), whatever the workflow's
   `timeout-minutes` says. The weekly workflow is four `--shard` jobs one after another,
-  about an hour each, whose missed lists meet in the runner's cache; a last job adds them up against
+  whose missed lists meet in the runner's cache; a last job adds them up against
   the baseline. Copied trees build without debuginfo: 1.7 GB each on a 60 GB runner disk that six
   repositories share.
 
@@ -1556,3 +1556,18 @@ job fails and lists them); a diff with no Rust gave "no Rust source files" and e
 real gaps (no test had a closer later radar frame, a tie between frames, or two hazard snapshots in
 reach at different distances); two new tests catch them, and the file's 35 viable mutants are all
 caught.
+
+The first full run on the runner (run 11195) took 69 minutes: 41 for the first shard, which built
+four copied trees from nothing, then 4-11 minutes per shard. 516 of the 2,461 viable mutants were
+missed (122 more do not compile), and 516 is the baseline. Most are in two places:
+
+- `vtile/src/mesh.rs`, 223 of its 538. The gate's whole-archive step meshes every tile under a
+  time limit, which catches a hang or a panic but checks no output, and it is not a cargo test, so
+  cargo-mutants cannot see it either way. The unit tests check the shapes produced, not the
+  arithmetic inside: the clearest gap the run found, and the first to close.
+- The app crate's glue, 151: `weather.rs` (71, mostly the NOAA source's methods, whose tests would be
+  the network), `devstats.rs` (33, a debug overlay), `tiles.rs` (24).
+
+The shards were not even (235 missed in one, 67 in another): cargo-mutants' default sharding is
+consecutive slices of its list, not round-robin as the workflow's comment first said, so all of
+`mesh.rs` fell in one shard.

@@ -61,6 +61,10 @@ new or edited code arrives with tests that would catch it breaking. A weekly wor
 another because the whole is longer than the runner allows one job, and fails if more mutants are
 missed than `tools/mutants-baseline.txt` records; that number only goes down.
 
+The first full run missed 516 of 2,461 viable mutants. Most are in the mesh builder's arithmetic,
+which the gate's whole-archive step runs (for hangs and panics) but no test checks, and in the app's
+glue to NOAA and its debug overlay.
+
 The first trial, on the timeline, found four surviving mutants: no test had a radar frame nearer
 after its slot than before it, an exact tie between two frames, or two hazard snapshots in reach at
 different distances. Two tests now pin those, and all 35 viable mutants there are caught.
