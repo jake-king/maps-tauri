@@ -1819,3 +1819,12 @@ exit 0; gitleaks absent, exit 2.
 
 CI's check job fetches 50 commits, so in CI the history scan covers the last 50; the whole history
 was scanned once here, and the gate on the dev box scans all of it every time.
+
+## An accepted advisory withdrawn
+
+On 2026-11-18 GitHub withdrew GHSA-fc5q-39xc-vjpf, the picomatch ReDoS accepted in
+`tools/npm-audit-allow.json` (picomatch is still 4.0.7; the advisory record says withdrawn at 15:38
+UTC). npm stopped reporting it, and the `audit` job failed on main's next push with "in the
+allowlist but no longer reported, remove it": the check that keeps the list from outliving its
+reasons, working as meant. The entry is gone and the list is empty.
+

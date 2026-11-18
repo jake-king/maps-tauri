@@ -138,10 +138,11 @@ CI's `audit` job checks the lock files against the RustSec and npm advisory data
 on every push and every day, since a new advisory concerns code nobody changed.
 
 An advisory with no fix can be accepted, with a reason in writing: in `deny.toml` for Rust (an
-unmaintained macro crate deep in the GTK bindings), in `tools/npm-audit-allow.json` for npm (a
-ReDoS in a glob library only Vite's build uses). npm has no such list of its own, so
-`tools/npm_audit.py` keeps one, and each entry has a date after which it fails again, so an
-accepted risk gets looked at again rather than forgotten. The first run also found a KaTeX advisory
+unmaintained macro crate deep in the GTK bindings), in `tools/npm-audit-allow.json` for npm (empty
+now). npm has no such list of its own, so `tools/npm_audit.py` keeps one, and each entry has a date
+after which it fails again, so an accepted risk gets looked at again rather than forgotten. An entry
+that no longer matches an advisory fails too: when GitHub withdrew the picomatch ReDoS advisory
+(GHSA-fc5q-39xc-vjpf) that npm's list had carried, the next audit failed until the entry was removed. The first run also found a KaTeX advisory
 in the Mermaid that draws this book's diagrams; Mermaid 12 fixed it.
 
 ### Secrets
