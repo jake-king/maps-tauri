@@ -1,0 +1,4 @@
+# gitleaks (tools/secrets.sh): the default rules. An exception goes here with the reason it is not
+# a secret, never as an inline gitleaks:allow, so every one is in a single reviewed place.
+[extend]
+useDefault = true

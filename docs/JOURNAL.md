@@ -1795,3 +1795,27 @@ gate fails when the base run leaves no `*.out.base@base` file.
 
 The suite also turned up something worth knowing: the weather path's 1.1 billion instructions for
 one radar frame dwarf everything on the tile path (50 million for the heaviest mesh).
+
+## Secrets in the gate
+
+A gate step, `secrets` (`tools/secrets.sh`), runs gitleaks 8.30.1 with its default rules over the
+checkout's history and over the working tree as a commit would take it (`git ls-files -co
+--exclude-standard`, copied to a scratch directory and scanned there). The history alone would miss
+the case the gate exists for: it runs before the commit. Findings are printed with `--verbose` and
+`--redact`; without `--verbose` gitleaks says only "leaks found: 1", which names nothing to fix.
+`.gitleaks.toml` extends the defaults and holds no exceptions yet; any later exception goes there
+with its reason, not as an inline `gitleaks:allow`.
+
+CI installs the release tarball checked against its published SHA-256 (`tools/ci-setup.sh`). The dev
+box takes Arch's package, the same 8.30.1, whose binary answers `gitleaks version` with "version is
+set by build process"; the step then asks pacman which version owns the binary. The first run on the
+dev box failed exactly that way, with exit 2, before the fallback existed. A gitleaks that is missing or another version fails the
+step with exit 2: a tool that is absent is not a scan that passed.
+
+The 80 commits of history scan clean (under a second). Red first, in the CI image on a clone, with a
+random `ghp_`-shaped token generated in the container: untracked file, exit 1; staged file, exit 1;
+committed and then deleted in a later commit, exit 1 (the history scan); under the ignored `logs/`,
+exit 0; gitleaks absent, exit 2.
+
+CI's check job fetches 50 commits, so in CI the history scan covers the last 50; the whole history
+was scanned once here, and the gate on the dev box scans all of it every time.

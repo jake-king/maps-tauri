@@ -10,6 +10,9 @@ MDBOOK=0.5.4
 MDBOOK_MERMAID=0.17.1
 CARGO_DENY=0.21.0
 NODE=22
+GITLEAKS=8.30.1
+# the published sha256 of gitleaks_8.30.1_linux_x64.tar.gz (its release checksums file)
+GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
 sudo=; [[ $(id -u) == 0 ]] || sudo=sudo
 export DEBIAN_FRONTEND=noninteractive
 $sudo apt-get update -q
@@ -26,6 +29,13 @@ if ! command -v node >/dev/null; then
   curl -fsS "https://nodejs.org/dist/latest-v$NODE.x/$tarball" -o "/tmp/$tarball"
   (cd /tmp && grep " $tarball\$" node.sums | sha256sum -c -)
   $sudo tar -xJf "/tmp/$tarball" -C /usr/local --strip-components=1
+fi
+if [[ $(gitleaks version 2>/dev/null) != "$GITLEAKS" ]]; then
+  t=gitleaks_${GITLEAKS}_linux_x64.tar.gz
+  curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v$GITLEAKS/$t" -o "/tmp/$t"
+  echo "$GITLEAKS_SHA256  /tmp/$t" | sha256sum -c --quiet -
+  tar -xzf "/tmp/$t" -C /tmp gitleaks
+  $sudo install -m 755 /tmp/gitleaks /usr/local/bin/gitleaks
 fi
 export PATH=$HOME/.cargo/bin:$PATH
 cd "$(dirname "$0")/.."

@@ -34,6 +34,8 @@ run clippy 900 cargo clippy --workspace --all-targets --all-features -q -- -D wa
 # the dependency tree against deny.toml: licenses, banned crates, sources. Offline: the advisory
 # databases change daily, so advisories are CI's `audit` job, not a verdict that moves under a commit
 run deps 120 cargo deny --offline check licenses bans sources
+# secrets in every commit and in the working tree about to be committed (gitleaks, .gitleaks.toml)
+run secrets 120 tools/secrets.sh
 run rustdoc 900 env RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked -q
 # the book builds without a warning, and the site it is published as has every API page it links to
 run docs-site 300 tools/docs.sh

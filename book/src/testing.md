@@ -144,6 +144,21 @@ ReDoS in a glob library only Vite's build uses). npm has no such list of its own
 accepted risk gets looked at again rather than forgotten. The first run also found a KaTeX advisory
 in the Mermaid that draws this book's diagrams; Mermaid 12 fixed it.
 
+### Secrets
+
+The repository now handles a signing key and CI tokens, so the gate looks for secrets before they
+reach history, where removing one means rewriting it. `tools/secrets.sh` runs gitleaks, with its
+default rules (`.gitleaks.toml`), over every commit of the checkout and over the working tree as a
+commit would take it: tracked files plus untracked ones git does not ignore. The second scan matters
+because the gate runs before the commit, and a history scan sees only what is already committed. A
+finding names the file, line and rule, with the secret itself redacted. A missing gitleaks, or one
+that is not the pinned version, fails the step rather than skipping it. CI installs the release
+binary against its published SHA-256.
+
+Checked in the CI image on a clone, with random GitHub-token-shaped strings: found in an untracked
+file, in a staged file, and in a commit whose file a later commit deleted; not reported under the
+ignored `logs/`; and the step exits 2 when gitleaks is absent.
+
 ### Documentation is part of the gate
 
 Every crate inherits the workspace's lints: rustc's `missing_docs`; clippy's `missing_errors_doc`,
