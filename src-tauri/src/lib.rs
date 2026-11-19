@@ -12,7 +12,7 @@ mod tiles;
 mod update;
 mod weather;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -301,11 +301,34 @@ fn archive_name() -> String {
         })
 }
 
-/// Where the archive and the gazetteer live: `MAPS_DATA`, else the repo's `data/`.
+/// Where the archive and the gazetteer live.
 fn data_dir() -> PathBuf {
-    std::env::var_os("MAPS_DATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../data")))
+    data_dir_from(
+        std::env::var_os("MAPS_DATA").map(PathBuf::from),
+        Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../data")),
+        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
+        std::env::var_os("HOME").map(PathBuf::from),
+    )
+}
+
+/// `MAPS_DATA`; else the source tree's `data/`, when it exists (a build run where it was built);
+/// else `local.maps-tauri` under the XDG data directory, else under ~/.local/share (an installed
+/// package, where the source tree's path means nothing); else the source tree's path, as before.
+fn data_dir_from(
+    setting: Option<PathBuf>,
+    built: &Path,
+    xdg: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> PathBuf {
+    if let Some(dir) = setting.filter(|p| !p.as_os_str().is_empty()) {
+        return dir;
+    }
+    if built.is_dir() {
+        return built.to_path_buf();
+    }
+    xdg.filter(|p| p.is_absolute())
+        .or_else(|| home.map(|h| h.join(".local/share")))
+        .map_or_else(|| built.to_path_buf(), |base| base.join("local.maps-tauri"))
 }
 
 /// Turn the weather layer on: the first call starts fetching from NOAA (nothing does before it).
@@ -509,6 +532,12 @@ pub fn run() {
             "local",
         ),
     };
+    if archive.is_none() {
+        eprintln!(
+            "no map archive: {} not found or unreadable (MAPS_DATA sets the directory)",
+            data.join(&archive_file).display()
+        );
+    }
     let archive = Arc::new(archive);
     let tile_times = Arc::new(devstats::TileTimes::default());
     let handler_times = tile_times.clone();
@@ -639,4 +668,43 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_dir_prefers_the_setting_then_the_source_tree_then_the_user_data_dir() {
+        let tmp = std::env::temp_dir();
+        let missing = Path::new("/nonexistent/maps-tauri/data");
+        let home = Some(PathBuf::from("/home/u"));
+        // the setting wins, even over a source tree that exists
+        assert_eq!(
+            data_dir_from(Some("/d".into()), &tmp, None, home.clone()),
+            PathBuf::from("/d")
+        );
+        // an empty setting is no setting
+        assert_eq!(data_dir_from(Some("".into()), &tmp, None, None), tmp);
+        // the source tree, when it is there
+        assert_eq!(
+            data_dir_from(None, &tmp, Some("/x".into()), home.clone()),
+            tmp
+        );
+        // an installed build: XDG_DATA_HOME, then ~/.local/share
+        assert_eq!(
+            data_dir_from(None, missing, Some("/x".into()), home.clone()),
+            PathBuf::from("/x/local.maps-tauri")
+        );
+        assert_eq!(
+            data_dir_from(None, missing, Some("rel".into()), home.clone()),
+            PathBuf::from("/home/u/.local/share/local.maps-tauri")
+        );
+        assert_eq!(
+            data_dir_from(None, missing, None, home),
+            PathBuf::from("/home/u/.local/share/local.maps-tauri")
+        );
+        // nothing to go on: the source tree's path, as before
+        assert_eq!(data_dir_from(None, missing, None, None), missing);
+    }
 }

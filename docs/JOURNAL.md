@@ -1924,3 +1924,17 @@ earlier results in `bench/` were taken on it; every other script already named i
 by launching the release build both ways with a short stress run: the `[bench]` line reports
 `"renderer":"rust"` with no flag and `"renderer":"maplibre"` with it, no errors and no policy
 violations in either.
+
+## An installed app finds its data
+
+The data directory was the source tree's `data/`, compiled in as an absolute path, so an installed
+package on any other machine looked in a directory that does not exist there and drew an empty map.
+Now `MAPS_DATA` comes first, then the source tree's `data/` when it exists (a build run where it was
+built), then `local.maps-tauri` under the XDG data directory or `~/.local/share`. A missing archive is
+reported by path on stdout. The choice is a pure function with a unit test, which fails with the old
+rule planted back.
+
+The README's install steps were then run as written in a clean Ubuntu 24.04 container, as an ordinary
+user: the package installed, go-pmtiles 1.31.2 (checked by sha256) cut West LA from Protomaps' build of
+2026-11-18 in 3 s (25 MB), and a 10-operation stress run on the native renderer showed no blank frames,
+no errors and no policy violations. Without the archive, the same install printed the path it looked in.

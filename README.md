@@ -112,6 +112,31 @@ its report, and the flight-level filter must narrow the hazards; and a synthetic
 must land where the map's own projection puts that point, one cell wide and 1/cos(latitude) cells
 tall.
 
+## Install (Linux)
+
+A version tag publishes a Debian package on the
+[Releases](https://github.com/jake-king/maps-tauri/releases) page (Ubuntu 24.04 or newer, amd64).
+The package holds the app, not the map: the map is a Protomaps extract you cut once with
+[go-pmtiles](https://github.com/protomaps/go-pmtiles) from Protomaps' public daily build. These
+steps cut West LA (about 25 MB), the area the benchmarks use:
+
+    sudo apt install ./maps-tauri_<version>_amd64.deb
+
+    curl -fsSLO https://github.com/protomaps/go-pmtiles/releases/download/v1.31.2/go-pmtiles_1.31.2_Linux_x86_64.tar.gz
+    tar xzf go-pmtiles_1.31.2_Linux_x86_64.tar.gz pmtiles
+    build=$(curl -fsSL https://build-metadata.protomaps.dev/builds.json | grep -o '"key":"[0-9]*\.pmtiles"' | tail -1 | cut -d'"' -f4)
+    mkdir -p ~/.local/share/local.maps-tauri
+    ./pmtiles extract "https://build.protomaps.com/$build" ~/.local/share/local.maps-tauri/westla.pmtiles \
+      --bbox=-118.70,33.85,-118.15,34.20 --maxzoom=14
+
+    maps-tauri
+
+An installed app reads its data from `~/.local/share/local.maps-tauri` (`MAPS_DATA` sets another
+directory); without an archive there it says so on stdout and shows an empty map. Weather needs no
+setup: tick a layer and it is fetched from NOAA. On 2026-11-19 these steps were run as written in a
+clean Ubuntu 24.04 container: the package installed, the extract took 3 s, and a 10-operation stress
+run drew with no blank frames. Other platforms build from source (below).
+
 ## Data
 
 The app expects data the repository does not include (`data/` and `public/assets/` are
@@ -130,8 +155,8 @@ gitignored):
   service and is not included; without the index, search answers coordinates only.
 - `data/remote.url` (optional): one line, the URL of a PMTiles archive to read over HTTP.
 
-`tools/fetch-data.sh` does all of this from my own map service (`MAPS_SRC=<base url>`). I have not
-run the public-source steps above end to end from a fresh clone.
+`tools/fetch-data.sh` does all of this from my own map service (`MAPS_SRC=<base url>`). Built from
+source, the app reads `data/` in the source tree; the extract steps under Install work for it too.
 
 ## Run
 
