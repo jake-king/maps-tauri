@@ -1,11 +1,13 @@
 # maps-tauri
 
-A desktop map viewer in Tauri 2, built to learn Tauri. It started as a port of my self-hosted web
-map viewer (MapLibre GL over a Protomaps basemap, with a GeoNames search box) and grew a second,
-native renderer: Rust reads the PMTiles archive, decodes the vector tiles and builds the meshes,
-and a small WebGL2 renderer in the webview draws them. It can read a whole-planet archive over
-HTTP range requests and keeps what it has seen in a SQLite cache, so places visited once still draw
-with the network gone.
+A desktop map viewer in Tauri 2 and Rust, with aviation weather. It reads a whole-planet PMTiles
+archive over HTTP range requests and keeps what it has seen in a SQLite cache, so places visited
+once still draw with the network gone. It has two renderers: MapLibre GL, from the self-hosted web
+map viewer it began as a port of (with a GeoNames search box), and a native one, where Rust decodes
+the vector tiles and builds the meshes and a small WebGL2 renderer in the webview draws them. On the
+same seeded stress run, the native renderer never showed unfinished map (MapLibre did in 10.6% of
+frames) and peaked at 619 MB of memory to MapLibre's 1501 MB. Weather (radar, satellite, METARs,
+winds aloft, SIGMETs and G-AIRMETs) runs on one time bar from 18 hours back to 12 ahead.
 
 ## Status
 
