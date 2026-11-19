@@ -1944,3 +1944,8 @@ Cutting the map was most of the install, so the extract is now published once, a
 build), and the install is a package, one download and a launch. The downloaded asset matched the
 local cut byte for byte, and the same clean-container run on it drew with no blank frames. The
 anonymous download URL can only be checked once the repository is public.
+
+Search needed the GeoNames index, whose builder is private, so the release also carries the 6,465
+places inside the map's bounds, copied from the full index (13.5 million places) with the same schema
+and the full-text index rebuilt: 1.1 MB. In the same clean install, "santa mon", "venice beach" and
+"griffith" each found the place they name.

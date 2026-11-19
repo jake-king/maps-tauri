@@ -116,21 +116,24 @@ tall.
 
 A version tag publishes a Debian package on the
 [Releases](https://github.com/jake-king/maps-tauri/releases) page (Ubuntu 24.04 or newer, amd64).
-The package holds the app; the map is a separate download, a 25 MB extract of West LA (Malibu to
-downtown) published as the release `map-westla-20261118`:
+The package holds the app; the data is a separate download, published as the release
+`map-westla-20261118`: a 25 MB map of West LA (Malibu to downtown) and a 1 MB place-name index for
+the same area:
 
     sudo apt install ./maps-tauri_<version>_amd64.deb
     mkdir -p ~/.local/share/local.maps-tauri
     curl -fL -o ~/.local/share/local.maps-tauri/westla.pmtiles \
       https://github.com/jake-king/maps-tauri/releases/download/map-westla-20261118/westla.pmtiles
+    curl -fL -o ~/.local/share/local.maps-tauri/geonames.db \
+      https://github.com/jake-king/maps-tauri/releases/download/map-westla-20261118/geonames.db
     maps-tauri
 
 The extract was cut with [go-pmtiles](https://github.com/protomaps/go-pmtiles) from Protomaps' daily
-build of 2026-11-18 (the commands are under Data, below); its sha256 is
-`7e598c19c84120cea372bbeb8ae108330c389d15b06031f530e98effa1e10445`. An installed app reads its data
-from `~/.local/share/local.maps-tauri` (`MAPS_DATA` sets another directory); without an archive there
-it says so on stdout and shows an empty map. Weather needs no setup: tick a layer and it is fetched
-from NOAA. Other platforms build from source (below).
+build of 2026-11-18 (the commands are under Data, below); the index holds the 6,465 GeoNames places
+inside the map's bounds. The release notes give both files' sha256. An installed app reads its data
+from `~/.local/share/local.maps-tauri` (`MAPS_DATA` sets another directory); without an archive
+there it says so on stdout and shows an empty map. Weather needs no setup: tick a layer and it is
+fetched from NOAA. Other platforms build from source (below).
 
 ## Data
 
@@ -147,7 +150,8 @@ gitignored):
 - `public/assets/fonts` and `public/assets/sprites/v4`: from
   [protomaps/basemaps-assets](https://github.com/protomaps/basemaps-assets).
 - `data/geonames.db` (optional): a GeoNames FTS5 index. The builder lives with the private Python
-  service and is not included; without the index, search answers coordinates only.
+  service and is not included; the West LA index under Install is cut from its output. Without an
+  index, search answers coordinates only.
 - `data/remote.url` (optional): one line, the URL of a PMTiles archive to read over HTTP.
 
 `tools/fetch-data.sh` does all of this from my own map service (`MAPS_SRC=<base url>`). Built from
@@ -201,6 +205,6 @@ project's key if it holds anything sensitive. Releases are signed; SECURITY.md a
 ## Licence
 
 Code: MIT or Apache-2.0, at your option. Map data © OpenStreetMap contributors (ODbL), basemap
-schema and assets by Protomaps. Weather from NOAA: MRMS radar (NCEP) and G-AIRMETs
+schema and assets by Protomaps. Place names from GeoNames (CC BY 4.0). Weather from NOAA: MRMS radar (NCEP) and G-AIRMETs
 (aviationweather.gov); not for flight planning. `src/maplibre-patch.js` changes a private MapLibre 6.7.0 method and
 does nothing on any other version.
