@@ -76,7 +76,7 @@ fn dev_flags() -> serde_json::Value {
         "pixelCheck": std::env::var("MAPS_PIXEL_CHECK").is_ok_and(|v| v == "1"),
         // MAPS_MEMPROBE=blank|idle|pan: report per-process memory at that stage, then exit
         "memprobe": std::env::var("MAPS_MEMPROBE").ok(),
-        // MAPS_RENDERER=rust: the native renderer (Rust decodes and meshes, WebGL draws)
+        // MAPS_RENDERER=maplibre: MapLibre GL instead of the native renderer (the default)
         "renderer": std::env::var("MAPS_RENDERER").ok(),
         // MAPS_WEATHER=1: weather on at startup, then settle and snapshot it (an end-to-end check)
         "weather": std::env::var("MAPS_WEATHER").is_ok_and(|v| v == "1"),

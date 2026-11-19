@@ -38,8 +38,8 @@ problem, the measurements that turned out to be wrong, and what fixed them.
   rusqlite; `diskcache.rs` is the SQLite cache for the remote archive. Commands need capability
   grants, and a strict content security policy keeps the webview from reaching anything but the
   app itself.
-- `src`: the frontend. `maplibre-app.js` is the MapLibre version (the default), `rust-renderer/`
-  the native one, `devtools/` the profiler overlay and the benchmarks.
+- `src`: the frontend. `rust-renderer/` is the native renderer (the default), `maplibre-app.js`
+  the MapLibre version, `devtools/` the profiler overlay and the benchmarks.
 
 ## Measured
 
@@ -139,8 +139,8 @@ Needs Rust 1.90 or newer (the gate itself runs the 1.99.1 that `rust-toolchain.t
 dependencies for your platform. Developed on Linux (WebKitGTK).
 
     npm install
-    npx tauri dev                          # MapLibre renderer
-    MAPS_RENDERER=rust npx tauri dev       # native renderer
+    npx tauri dev                          # native renderer
+    MAPS_RENDERER=maplibre npx tauri dev   # MapLibre renderer
     tools/check.sh                         # format, lint, tests, decoder and mesher checks
 
 The benchmarks (`tools/bench.sh`, `tools/zoombench.sh`, `tools/stress.sh`) and the release-build

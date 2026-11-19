@@ -1,7 +1,7 @@
 // Entry point: pick a renderer. Only the chosen one is imported, so a native-renderer run never
 // loads MapLibre's code (which matters for the memory comparison).
-//   default            MapLibre GL (src/maplibre-app.js)
-//   MAPS_RENDERER=rust  Rust decodes and meshes, a small WebGL2 renderer draws (src/rust-renderer)
+//   default                 Rust decodes and meshes, a small WebGL2 renderer draws (src/rust-renderer)
+//   MAPS_RENDERER=maplibre  MapLibre GL (src/maplibre-app.js)
 import { invoke } from "@tauri-apps/api/core";
 
 // Uncaught errors go to the webview's console, which no terminal run can see: report them to stdout.
@@ -23,8 +23,8 @@ document.addEventListener("securitypolicyviolation", (e) => {
 
 const flags = await invoke("dev_flags");
 if (flags.cspProbe) fetch("http://192.0.2.1/csp-probe").catch(() => {});
-if (flags.renderer === "rust") await import("./rust-renderer/app.js");
-else await import("./maplibre-app.js");
+if (flags.renderer === "maplibre") await import("./maplibre-app.js");
+else await import("./rust-renderer/app.js");
 
 // A newer release, when this build has an update URL (src-tauri/src/update.rs) and the release
 // manifest offers one: a notice with one button, which installs it and restarts. Nothing happens

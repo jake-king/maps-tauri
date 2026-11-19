@@ -12,6 +12,8 @@ cd "$(dirname "$0")/.."
 export MAPS_ARCHIVE=${MAPS_ARCHIVE:-basemap.pmtiles}
 export MAPS_F4=${MAPS_F4:-0} # the dev overlay closed: open, it draws every frame and skews timings
 export MAPS_LOCAL_ONLY=${MAPS_LOCAL_ONLY:-1} # never the remote planet unless asked
+# MapLibre unless told otherwise (MAPS_RENDERER=rust): the earlier results in bench/ were taken on it
+export MAPS_RENDERER=${MAPS_RENDERER:-maplibre}
 label=${1:-run}
 out="bench/$(date +%F)-$label.json"
 log="logs/bench-$label.log"

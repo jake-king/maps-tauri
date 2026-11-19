@@ -1914,3 +1914,13 @@ setting only decides what happens to a signature without one. The test had no su
 that case added, the plant failed it (the old package installed as 0.1.2), and with the setting on
 it is refused.
 
+
+## The native renderer by default
+
+The native renderer is now what the app starts with; `MAPS_RENDERER=maplibre` selects MapLibre. The
+weather layers exist only in the native renderer, so a plain launch or an installed package showed
+the map without them. `tools/bench.sh` and `tools/memprobe.sh` still default to MapLibre, since the
+earlier results in `bench/` were taken on it; every other script already named its renderer. Checked
+by launching the release build both ways with a short stress run: the `[bench]` line reports
+`"renderer":"rust"` with no flag and `"renderer":"maplibre"` with it, no errors and no policy
+violations in either.

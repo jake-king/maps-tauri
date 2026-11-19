@@ -11,11 +11,11 @@ out to be wrong.
 
 ## Two renderers
 
-The app can draw the map two ways, chosen at start-up (`MAPS_RENDERER=rust` selects the native one):
+The app can draw the map two ways, chosen at start-up (`MAPS_RENDERER=maplibre` selects MapLibre):
 
-- **MapLibre** (the default). MapLibre GL JS runs in the webview and does everything itself: it
+- **MapLibre.** MapLibre GL JS runs in the webview and does everything itself: it
   fetches tiles, decodes them in JavaScript workers, lays out labels and draws with WebGL.
-- **Native.** Rust reads the PMTiles archive, decodes the vector tiles and builds ready-to-draw
+- **Native** (the default). Rust reads the PMTiles archive, decodes the vector tiles and builds ready-to-draw
   triangle meshes and label positions. A small WebGL2 renderer in the webview only uploads and draws
   them. No tile is decoded in JavaScript, and the native app never loads MapLibre's code.
 
