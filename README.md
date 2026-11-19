@@ -7,6 +7,16 @@ and a small WebGL2 renderer in the webview draws them. It can read a whole-plane
 HTTP range requests and keeps what it has seen in a SQLite cache, so places visited once still draw
 with the network gone.
 
+## Status
+
+A personal project, not a product. In practice:
+
+- One map area: the West LA extract. Other areas need an extract you cut yourself (see Data).
+- Linux only as a package. macOS, Windows and an iOS simulator build run in CI but are not packaged.
+- Search covers West LA only, from the published index.
+- Weather comes from NOAA and is not for flight planning.
+- `src/maplibre-patch.js` targets MapLibre 6.7.0 only.
+
 ## Documentation
 
 `book/` is a short engineering book (mdBook): the architecture, the native renderer, weather, search,
