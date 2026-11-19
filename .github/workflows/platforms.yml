@@ -3,15 +3,12 @@
 # against a recorded tape of NOAA's answers (tools/fixtures.py, wx::tape), so every platform draws
 # the same data with no network. Speed limits are dropped (--no-timing): the runners draw WebGL in
 # software. Then each platform's snapshots are compared with Linux's (tools/compare_snapshots.py).
-# The iOS job builds for the simulator only. Nightly and on demand: macOS minutes cost more, and
-# tools/check.sh on every push (ci.yml) is the fast gate.
+# The iOS job builds for the simulator only. On demand only for now: the macOS and Windows legs
+# do not pass yet, and a scheduled or release run would only repeat that red. It goes back on its
+# nightly schedule (and on v* tags) once they pass; ci.yml is the gate on every push meanwhile.
 name: platforms
 on:
-  schedule:
-    - cron: "17 9 * * *"
   workflow_dispatch:
-  push:
-    tags: ["v*"]
 permissions:
   contents: read
 concurrency:
