@@ -116,26 +116,21 @@ tall.
 
 A version tag publishes a Debian package on the
 [Releases](https://github.com/jake-king/maps-tauri/releases) page (Ubuntu 24.04 or newer, amd64).
-The package holds the app, not the map: the map is a Protomaps extract you cut once with
-[go-pmtiles](https://github.com/protomaps/go-pmtiles) from Protomaps' public daily build. These
-steps cut West LA (about 25 MB), the area the benchmarks use:
+The package holds the app; the map is a separate download, a 25 MB extract of West LA (Malibu to
+downtown) published as the release `map-westla-20261118`:
 
     sudo apt install ./maps-tauri_<version>_amd64.deb
-
-    curl -fsSLO https://github.com/protomaps/go-pmtiles/releases/download/v1.31.2/go-pmtiles_1.31.2_Linux_x86_64.tar.gz
-    tar xzf go-pmtiles_1.31.2_Linux_x86_64.tar.gz pmtiles
-    build=$(curl -fsSL https://build-metadata.protomaps.dev/builds.json | grep -o '"key":"[0-9]*\.pmtiles"' | tail -1 | cut -d'"' -f4)
     mkdir -p ~/.local/share/local.maps-tauri
-    ./pmtiles extract "https://build.protomaps.com/$build" ~/.local/share/local.maps-tauri/westla.pmtiles \
-      --bbox=-118.70,33.85,-118.15,34.20 --maxzoom=14
-
+    curl -fL -o ~/.local/share/local.maps-tauri/westla.pmtiles \
+      https://github.com/jake-king/maps-tauri/releases/download/map-westla-20261118/westla.pmtiles
     maps-tauri
 
-An installed app reads its data from `~/.local/share/local.maps-tauri` (`MAPS_DATA` sets another
-directory); without an archive there it says so on stdout and shows an empty map. Weather needs no
-setup: tick a layer and it is fetched from NOAA. On 2026-11-19 these steps were run as written in a
-clean Ubuntu 24.04 container: the package installed, the extract took 3 s, and a 10-operation stress
-run drew with no blank frames. Other platforms build from source (below).
+The extract was cut with [go-pmtiles](https://github.com/protomaps/go-pmtiles) from Protomaps' daily
+build of 2026-11-18 (the commands are under Data, below); its sha256 is
+`7e598c19c84120cea372bbeb8ae108330c389d15b06031f530e98effa1e10445`. An installed app reads its data
+from `~/.local/share/local.maps-tauri` (`MAPS_DATA` sets another directory); without an archive there
+it says so on stdout and shows an empty map. Weather needs no setup: tick a layer and it is fetched
+from NOAA. Other platforms build from source (below).
 
 ## Data
 

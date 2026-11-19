@@ -1938,3 +1938,9 @@ The README's install steps were then run as written in a clean Ubuntu 24.04 cont
 user: the package installed, go-pmtiles 1.31.2 (checked by sha256) cut West LA from Protomaps' build of
 2026-11-18 in 3 s (25 MB), and a 10-operation stress run on the native renderer showed no blank frames,
 no errors and no policy violations. Without the archive, the same install printed the path it looked in.
+
+Cutting the map was most of the install, so the extract is now published once, as the GitHub release
+`map-westla-20261118` (25 MB, sha256 `7e598c19…0445`, cut with the same command from the 2026-11-18
+build), and the install is a package, one download and a launch. The downloaded asset matched the
+local cut byte for byte, and the same clean-container run on it drew with no blank frames. The
+anonymous download URL can only be checked once the repository is public.
