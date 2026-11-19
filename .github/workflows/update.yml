@@ -1,0 +1,31 @@
+# The updater end to end (tools/update-e2e.sh): two release builds, a local HTTPS server, and an
+# installed 0.1.0 that must take a genuine 0.1.1 and refuse a tampered package, another key and a
+# replayed version. Too slow for every push (two release builds), so weekly on Wednesday 06:00 UTC
+# and on demand.
+name: update
+on:
+  schedule:
+    - cron: "0 6 * * 3"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    container: docker.io/library/ubuntu:24.04
+    timeout-minutes: 90
+    steps:
+      - name: Git
+        run: |
+          apt-get update -q >/dev/null
+          apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v7
+      - name: Pinned cargo tools, from an earlier run
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-bin-${{ github.job }}-
+      - name: Install 0.1.0, offer 0.1.1 genuine and forged
+        run: tools/forge-job.sh update

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# One job of the self-hosted forge's CI (its workflow, .forgejo/, is kept out of the public copy), run
-# from the checked-out tree inside a bare Ubuntu 24.04 container on the forge's runner:
+# One CI job, run from the checked-out tree inside a bare Ubuntu 24.04 container. Two pipelines call
+# it with the same job names: GitHub Actions (.github/workflows/) and the self-hosted forge's (its
+# workflows are kept out of the public copy). The workflows only check out and call this script:
 #   tools/forge-job.sh check   setup, then tools/check.sh (the gate the dev box runs before a commit)
 #   tools/forge-job.sh e2e     setup, unit tests, the release build, then the end-to-end checks on the
 #                              recorded tape in a virtual display (the Linux leg of platforms.yml)
@@ -9,7 +10,7 @@
 #   tools/forge-job.sh mutants  cargo-mutants on the lines this push changed (since $BEFORE, else the
 #                              previous commit); a mutant no test catches fails the job
 #   tools/forge-job.sh mutants-full  one shard of every mutant ($SHARD, k/n from 0), its missed list kept
-#                              in the cache under the workflow run
+#                              under the workflow run (in the forge's cache; a GitHub artifact)
 #   tools/forge-job.sh mutants-total the shards' missed lists together; fails if more are missed than the
 #                              recorded baseline
 #   tools/forge-job.sh fuzz    setup, seeds from the fixtures, then every fuzz target for $FUZZ_SECONDS
@@ -23,14 +24,17 @@
 #   tools/forge-job.sh audit   setup, then the RustSec advisories for Cargo.lock (cargo-deny, deny.toml)
 #                              and npm's for package-lock.json (tools/npm_audit.py), both fetched fresh
 #   tools/forge-job.sh release for a pushed tag v<version>: the gate, the Debian package, then a forge
-#                              release holding it, the documentation site (book + API reference) as a
+#                              release holding it (the self-hosted forge's; GitHub's release.yml has its
+#                              own steps), the documentation site (book + API reference) as a
 #                              tarball, and their SHA256SUMS (RELEASE_DRY_RUN=1 builds, lists what it
 #                              would publish, and stops)
-# The runner mounts a directory that outlives jobs at $CI_CACHE: rustup, cargo, npm's cache and the
-# build tree are kept there, so only the first job builds from nothing. Without $CI_CACHE (a local
-# run through tools/ci-local.sh) everything stays in the container. The e2e job takes the fixtures
-# from ./e2e-fixtures.tar.gz when present (tools/ci-local.sh's FIXTURES=), else from the cache, else
-# from the forge's e2e-fixtures branch with the job's token in $TOKEN.
+# The self-hosted runner mounts a directory that outlives jobs at $CI_CACHE: rustup, cargo, npm's
+# cache and the build tree are kept there, so only the first job builds from nothing. Without
+# $CI_CACHE (GitHub's runners, a local run through tools/ci-local.sh) everything stays in the
+# container. The jobs that need the end-to-end fixtures take them from ./e2e-fixtures.tar.gz when
+# present (tools/ci-local.sh's FIXTURES=), else from the cache, else from where the pipeline keeps
+# them, with the job's token in $TOKEN: on GitHub the release tools/fixtures.lock names, on the
+# self-hosted forge its e2e-fixtures branch.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 job=${1:-}
@@ -269,6 +273,21 @@ fixtures() {
     kept=${CI_CACHE:+$CI_CACHE/maps-tauri/fixtures/$want.tar.gz}
     if [[ -n $kept && -f $kept ]]; then
       archive=$kept
+    elif [[ ${GITHUB_SERVER_URL:-} == https://github.com ]]; then
+      # The release asset through the API (a private repository's downloads need the token too).
+      # The asset URL redirects to storage; curl does not take the Authorization header along.
+      mkdir -p logs
+      archive=logs/e2e-fixtures.tar.gz
+      local api release name id
+      api=${GITHUB_API_URL:-https://api.github.com}/repos/$GITHUB_REPOSITORY
+      read -r release name < <(python3 -c 'import json; l = json.load(open("tools/fixtures.lock")); print(l["release"], l["file"])')
+      printf 'Authorization: Bearer %s\n' "${TOKEN:?}" |
+        curl -fsSL --retry 3 -H @- "$api/releases/tags/$release" -o logs/fixtures-release.json
+      id=$(python3 -c 'import json, sys; print(next(a["id"] for a in json.load(open(sys.argv[1]))["assets"] if a["name"] == sys.argv[2]))' \
+        logs/fixtures-release.json "$name")
+      printf 'Authorization: Bearer %s\n' "$TOKEN" |
+        curl -fsSL --retry 3 -H @- -H 'Accept: application/octet-stream' "$api/releases/assets/$id" -o "$archive"
+      echo "$want  $archive" | sha256sum -c --quiet
     else
       # The archive is kept on the forge's e2e-fixtures branch, away from the code branches (and so
       # from the public copy). The job's token is accepted by git and the API, not by the forge's

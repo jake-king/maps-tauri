@@ -7,8 +7,9 @@ on, in one archive too large for git (about 90 MB), checked by its sha256 in too
   fixtures.py unpack ARCHIVE             verify it against the lock, then put the tape in
                                          fixtures/tape and the map in data/
 
-GitHub's CI downloads the archive from the release the lock names (`gh release download`); the
-forge's takes it from the repository's e2e-fixtures branch (tools/forge-job.sh). The map is
+On GitHub the archive comes from the release the lock names: through the API in the ci jobs
+(tools/forge-job.sh), with `gh release download` in platforms.yml. The self-hosted forge's CI takes
+it from the repository's e2e-fixtures branch (tools/forge-job.sh). The map is
 OpenStreetMap data (ODbL, attributed in the app); NOAA's data is public domain.
 """
 

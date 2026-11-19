@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# The CI job, run locally in the image GitHub's runner is built on (Ubuntu 24.04), from a clean
-# clone of HEAD: the same setup script, the same gate. A pipeline change is proven here before it
-# is pushed; keep the two in step. Needs podman.
+# A CI job, run locally the way both pipelines (GitHub's .github/workflows/ and the self-hosted
+# forge's) run it: in a bare Ubuntu 24.04 container, from a clean clone of HEAD, with the same setup
+# script and the same gate. A pipeline change is proven here before it is pushed; keep them in
+# step. Needs podman.
 #   tools/ci-local.sh            setup + npm ci + tools/check.sh
 #   tools/ci-local.sh -- CMD     setup + npm ci, then CMD instead of the gate
 #   FIXTURES=logs/e2e-fixtures.tar.gz tools/ci-local.sh -- CMD   with the e2e fixtures in the clone

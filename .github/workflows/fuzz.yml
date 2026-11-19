@@ -1,0 +1,44 @@
+# The parsers' fuzz targets for longer than a push allows: 10 minutes each (about 75 minutes with the
+# build), weekly on Saturday 06:00 UTC and on demand, then the corpus is minimised. GitHub's runners
+# keep nothing between runs, so each run starts from the seeds (tools/fuzz.sh seeds); a crash fails
+# the job and its input is in the job's artifact.
+name: fuzz
+on:
+  schedule:
+    - cron: "0 6 * * 6"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    container: docker.io/library/ubuntu:24.04
+    timeout-minutes: 150
+    steps:
+      - name: Git
+        run: |
+          apt-get update -q >/dev/null
+          apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v7
+      - name: Pinned cargo tools, from an earlier run
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-bin-${{ github.job }}-
+      - name: Fuzz every parser target, 10 minutes each, then minimise the corpus
+        env:
+          TOKEN: ${{ github.token }}
+          FUZZ_SECONDS: "600"
+          FUZZ_CMIN: "1"
+        run: tools/forge-job.sh fuzz
+      - name: Crashes
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-artifacts
+          path: |
+            logs/fuzz/artifacts/
+            logs/fuzz/*.log
+          if-no-files-found: ignore

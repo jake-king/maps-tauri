@@ -1,36 +1,261 @@
-# The gate on every push and pull request: tools/check.sh, the same command run before every commit
-# on the dev box. tools/ci-local.sh runs the same steps in the same Ubuntu image before a push. The
-# checks that need map data or the private Python service are skipped here and say so in the log.
+# The CI on every push: each job in a bare Ubuntu 24.04 container, the image tools/ci-local.sh
+# proves jobs in. `check` is the gate (tools/check.sh, the command the dev box runs before every
+# commit); `linux-e2e` builds the release app and runs the end-to-end checks on the recorded tape in
+# a virtual display; `coverage` holds the coverage floor; `mutants` runs cargo-mutants on the lines
+# the push changed; `audit` checks the dependencies against fresh security advisories; `fuzz` runs
+# each parser's fuzz target briefly; `perf` counts the benchmarks' instructions against main; `msrv`
+# builds with the oldest supported Rust. `verdict` passes only when every leg passed, so it is the
+# one check main's branch protection needs to require. The job logic lives in tools/forge-job.sh,
+# which the self-hosted forge's pipeline runs with the same job names, so a job runs the same way on
+# either, and locally. The bare image has no git, so each job installs it first: actions/checkout
+# then makes a real repository (without git it downloads a tarball with no history, and perf and
+# mutants read the history). The workspace belongs to the runner's user and the container runs as
+# root, so the job also marks it safe.directory: checkout's own entry is in a temporary config it
+# removes, and every later git command (the secrets scan, perf's merge base) would refuse the
+# repository.
+# Each job builds from nothing: the one thing kept between runs is ~/.cargo/bin, the cargo tools the
+# scripts pin (mdBook, cargo-deny, ...), each checked against its pinned version before use and
+# reinstalled when it differs.
 name: ci
 on:
+  # branches only: a version tag runs release.yml, which runs the gate itself
   push:
+    branches: ["**"]
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  # a newer push to a branch replaces its running CI; main's runs all finish
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
   check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    container: docker.io/library/ubuntu:24.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Git
+        run: |
+          apt-get update -q >/dev/null
+          apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v7
         with:
-          node-version-file: .nvmrc
-          cache: npm
-      - uses: Swatinem/rust-cache@v2
-      - name: System libraries and tools
-        run: tools/ci-setup.sh
-      - name: Protomaps glyphs and sprites (pinned)
-        run: tools/fetch-assets.sh
-      - run: npm ci --no-audit --no-fund
+          fetch-depth: 50
+      - name: Pinned cargo tools, from an earlier run
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-bin-${{ github.job }}-
       - name: Gate
-        run: tools/check.sh
+        run: tools/forge-job.sh check
       - name: Step logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: check-logs
-          path: logs/
+          path: logs/*.log
+          if-no-files-found: ignore
+
+  linux-e2e:
+    needs: check
+    runs-on: ubuntu-24.04
+    container: docker.io/library/ubuntu:24.04
+    timeout-minutes: 90
+    steps:
+      - name: Git
+        run: |
+          apt-get update -q >/dev/null
+          apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 50
+      - name: Pinned cargo tools, from an earlier run
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-bin-${{ github.job }}-
+      - name: Build and end to end, on the tape
+        env:
+          TOKEN: ${{ github.token }}
+        run: tools/forge-job.sh e2e
+      - name: Snapshots and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-Linux-ci
+          path: e2e-out/
+          if-no-files-found: ignore
+
+  coverage:
+    needs: check
+    runs-on: ubuntu-24.04
+    container: docker.io/library/ubuntu:24.04
+    timeout-minutes: 60
+    steps:
+      - name: Git
+        run: |
+          apt-get update -q >/dev/null
+          apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 50
+      - name: Pinned cargo tools, from an earlier run
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-bin-${{ github.job }}-
+      - name: Coverage, with its floor
+        run: tools/forge-job.sh coverage
+
+  mutants:
+    needs: check
+    runs-on: ubuntu-24.04
+    container: docker.io/library/ubuntu:24.04
+    timeout-minutes: 60
+    steps:
+      - name: Git
+        run: |
+          apt-get update -q >/dev/null
+          apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 50
+      - name: Pinned cargo tools, from an earlier run
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-bin-${{ github.job }}-
+      - name: Mutants on the changed lines
+        env:
+          # the commit the branch was at before this push; on a pull request, empty, and the job
+          # takes the previous commit, which for the merge GitHub tests is the whole change
+          BEFORE: ${{ github.event.before }}
+        run: tools/forge-job.sh mutants
+
+  audit:
+    needs: check
+    runs-on: ubuntu-24.04
+    container: docker.io/library/ubuntu:24.04
+    timeout-minutes: 30
+    steps:
+      - name: Git
+        run: |
+          apt-get update -q >/dev/null
+          apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v7
+      - name: Pinned cargo tools, from an earlier run
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-bin-${{ github.job }}-
+      - name: Security advisories, Rust and npm
+        run: tools/forge-job.sh audit
+
+  fuzz:
+    needs: check
+    runs-on: ubuntu-24.04
+    container: docker.io/library/ubuntu:24.04
+    timeout-minutes: 40
+    steps:
+      - name: Git
+        run: |
+          apt-get update -q >/dev/null
+          apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v7
+      - name: Pinned cargo tools, from an earlier run
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-bin-${{ github.job }}-
+      - name: Fuzz every parser target, 30 s each
+        env:
+          TOKEN: ${{ github.token }}
+        run: tools/forge-job.sh fuzz
+
+  perf:
+    needs: check
+    runs-on: ubuntu-24.04
+    container: docker.io/library/ubuntu:24.04
+    timeout-minutes: 40
+    steps:
+      - name: Git
+        run: |
+          apt-get update -q >/dev/null
+          apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # whole history, every branch (under 1 MB): the gate measures the merge base with origin/main
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Pinned cargo tools, from an earlier run
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-bin-${{ github.job }}-
+      - name: Instruction counts against main, +3% fails
+        env:
+          TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+        run: tools/forge-job.sh perf
+
+  msrv:
+    needs: check
+    runs-on: ubuntu-24.04
+    container: docker.io/library/ubuntu:24.04
+    timeout-minutes: 30
+    steps:
+      - name: Git
+        run: |
+          apt-get update -q >/dev/null
+          apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v7
+      - name: Pinned cargo tools, from an earlier run
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-bin-${{ github.job }}-
+      - name: Builds with the oldest supported Rust (rust-version)
+        run: tools/forge-job.sh msrv
+
+  verdict:
+    # The gate's and every leg's verdict together (a leg skipped after a red gate is a failure). The
+    # job fails unless every leg passed, so main's branch protection can require it alone.
+    needs: [check, linux-e2e, coverage, mutants, audit, fuzz, perf, msrv]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every leg passed
+        env:
+          CHECK: ${{ needs.check.result }}
+          E2E: ${{ needs.linux-e2e.result }}
+          COVERAGE: ${{ needs.coverage.result }}
+          MUTANTS: ${{ needs.mutants.result }}
+          AUDIT: ${{ needs.audit.result }}
+          FUZZ: ${{ needs.fuzz.result }}
+          PERF: ${{ needs.perf.result }}
+          MSRV: ${{ needs.msrv.result }}
+        run: |
+          case "$CHECK $E2E $COVERAGE $MUTANTS $AUDIT $FUZZ $PERF $MSRV" in
+            *cancelled*) v=cancelled ;;
+            "success success success success success success success success") v=success ;;
+            *) v=failure ;;
+          esac
+          echo "verdict: $v (check $CHECK, linux-e2e $E2E, coverage $COVERAGE, mutants $MUTANTS, audit $AUDIT, fuzz $FUZZ, perf $PERF, msrv $MSRV)"
+          [ "$v" = success ]

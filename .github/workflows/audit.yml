@@ -1,0 +1,30 @@
+# The security advisories for the dependencies, daily (05:00 UTC) and on demand: an advisory published
+# today concerns code that has not changed, so a quiet repository would never hear of it from ci.yml's
+# per-push audit. Same job: tools/forge-job.sh audit (cargo-deny's RustSec check, tools/npm_audit.py).
+name: audit
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    container: docker.io/library/ubuntu:24.04
+    timeout-minutes: 30
+    steps:
+      - name: Git
+        run: |
+          apt-get update -q >/dev/null
+          apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v7
+      - name: Pinned cargo tools, from an earlier run
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-bin-${{ github.job }}-
+      - name: Security advisories, Rust and npm
+        run: tools/forge-job.sh audit

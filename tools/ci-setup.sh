@@ -2,8 +2,8 @@
 # What a fresh Ubuntu 24.04 machine needs before tools/check.sh can run: the WebKitGTK and other
 # system libraries Tauri links against, shellcheck (Ubuntu's 0.9; the dev box runs 0.11, and the
 # scripts must pass both), ruff at the version the dev box uses, and mdBook with its Mermaid preprocessor for the book. On a
-# bare container (tools/ci-local.sh) it also installs rustup and Node; GitHub's runner has rustup,
-# and the workflow sets Node up itself. Rust's version comes from rust-toolchain.toml either way.
+# bare container (every CI job, tools/ci-local.sh) it also installs rustup and Node; GitHub's own
+# runner images (platforms.yml) have rustup, and that workflow sets Node up itself. Rust's version comes from rust-toolchain.toml either way.
 set -euo pipefail
 RUFF=0.17.3
 MDBOOK=0.5.4

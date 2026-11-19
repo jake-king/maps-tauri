@@ -7,7 +7,7 @@
 #   PERF_BASE=REV tools/perf.sh    compare with REV instead
 # Exit 0: no regression, or each one accepted; 1: a regression; 2: the gate could not measure.
 #
-# Instructions are counted under Valgrind's Callgrind (gungraun), not timed: the forge's runner is
+# Instructions are counted under Valgrind's Callgrind (gungraun), not timed: CI runners are
 # shared, and a wall-clock benchmark there measures its neighbours. A count is repeatable to the
 # instruction for the decoders and within 0.03% for the mesher (its label placement hashes), so 3%
 # is a real change. It does not see what a count cannot: cache misses, memory bandwidth, SIMD

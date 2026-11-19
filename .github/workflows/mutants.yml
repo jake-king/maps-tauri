@@ -1,0 +1,68 @@
+# Every mutant, weekly and on demand (Sunday 06:00 UTC), where ci.yml mutates only the changed lines.
+# About 2,600 mutants: the libraries' ~2,000 take seconds each, the app crate's ~600 relink Tauri and
+# take about a minute. The run is four shards (cargo-mutants --shard: consecutive slices of the list),
+# each on its own runner at the same time, each 4 mutants at a time; each shard's missed list is an
+# artifact, and the last job adds them up and fails if more are missed than
+# tools/mutants-baseline.txt records, a number that only goes down.
+name: mutants
+on:
+  schedule:
+    - cron: "0 6 * * 0"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  shard:
+    strategy:
+      fail-fast: false
+      matrix:
+        k: [0, 1, 2, 3]
+    name: shard-${{ matrix.k }}
+    runs-on: ubuntu-24.04
+    container: docker.io/library/ubuntu:24.04
+    timeout-minutes: 300
+    steps:
+      - name: Git
+        run: |
+          apt-get update -q >/dev/null
+          apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v7
+      - name: Pinned cargo tools, from an earlier run
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-bin-${{ github.job }}-
+      - name: Shard ${{ matrix.k }} of 4
+        env:
+          SHARD: ${{ matrix.k }}/4
+        run: tools/forge-job.sh mutants-full
+      # where tools/forge-job.sh keeps a shard's result when there is no runner cache
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mutants-shard-${{ matrix.k }}
+          path: logs/maps-tauri-mutants/${{ github.run_id }}/
+          if-no-files-found: error
+          retention-days: 7
+  total:
+    needs: shard
+    runs-on: ubuntu-24.04
+    container: docker.io/library/ubuntu:24.04
+    timeout-minutes: 10
+    steps:
+      - name: Git
+        run: |
+          apt-get update -q >/dev/null
+          apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: mutants-shard-*
+          merge-multiple: true
+          path: logs/maps-tauri-mutants/${{ github.run_id }}/
+      - name: Missed, against the baseline
+        env:
+          SHARDS: "4"
+        run: tools/forge-job.sh mutants-total
