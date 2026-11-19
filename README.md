@@ -183,28 +183,42 @@ The benchmarks (`tools/bench.sh`, `tools/zoombench.sh`, `tools/stress.sh`) and t
 gates (`tools/offline.sh` for the content security policy, `tools/cache.sh` for the disk cache)
 are described at the top of each script. F4 in the app opens the profiler overlay.
 
-## CI on each platform
+## CI
+
+Every push and pull request runs one pipeline, the same on GitHub Actions and on the self-hosted
+Forgejo forge the project is developed on (this repository is a published copy). Each job runs in a
+bare Ubuntu 24.04 container through `tools/forge-job.sh`, and `tools/ci-local.sh` runs any of them
+the same way on a laptop.
+
+- `check`: `tools/check.sh`, the gate run before every commit: format, clippy, documentation,
+  licences and banned dependencies (cargo-deny), unused dependencies, a secret scan (gitleaks),
+  ESLint, Ruff, ShellCheck and the unit tests.
+- Then, in parallel: `linux-e2e` (the release build driven end to end, below), `coverage` (fails
+  under the floor in `tools/coverage-floor.txt`), `mutants` (cargo-mutants on the changed lines),
+  `audit` (RustSec and npm advisories), `fuzz` (every parser's fuzz target), `perf` (instruction
+  counts under Valgrind against the merge base; +3% fails) and `msrv` (builds with Rust 1.90).
+- `verdict`: fails unless every job passed; it is the one check `main` requires, and merges are
+  fast-forward only, so the commit CI tested is the commit on `main`.
+
+On a schedule: advisories daily, a 10-minute fuzz of each target and a full mutation run weekly
+(the missed count must not grow), and weekly `tools/update-e2e.sh`, which installs the app in a clean
+container and offers it a tampered package, a package signed by another key and a replayed old
+version: each must be refused and the genuine update installed.
 
 Tauri draws with each platform's own web view: WebKitGTK on Linux, WKWebView on macOS, WebView2
-(Chromium) on Windows. The renderer is WebGL2, where engines differ most, so it is tested in each.
+(Chromium) on Windows. The renderer is WebGL2, where engines differ most, so `platforms.yml` builds
+and tests on each, on demand for now: the unit tests, the release build, then the app's self-driving
+end-to-end run (`MAPS_BENCH=1`) judged by `tools/e2e_check.py`. NOAA's answers come from a recorded
+tape (`MAPS_TAPE_REPLAY`, `wx::tape`): every platform draws the same data, with no network, and a
+request not on the tape is an error naming its URL. The tape and the map archive are a release asset
+pinned by sha256 (`tools/fixtures.py`, `tools/fixtures.lock`). Speed limits apply only on the dev
+box; the runners draw WebGL in software, so CI checks correctness. Each platform's snapshots are then
+compared with Linux's in 8 px blocks (`tools/compare_snapshots.py`, limits in
+`tools/snapshot-limits.json`). A job also builds for the iOS simulator.
 
-- `ci.yml`, every push: `tools/check.sh` on Linux (format, lint, unit tests, decoder checks).
-- `platforms.yml`, nightly, on demand and on a version tag: on Linux, macOS and Windows, the unit
-  tests, the release build, then the app's self-driving end-to-end run (`MAPS_BENCH=1`) judged by
-  `tools/e2e_check.py`. NOAA's answers come from a recorded tape (`MAPS_TAPE_REPLAY`, `wx::tape`):
-  every platform draws the same data, with no network, and a request not on the tape is an error
-  naming its URL. The tape and the map archive are a release asset pinned by sha256
-  (`tools/fixtures.py`, `tools/fixtures.lock`). Speed limits apply only on the dev box; the runners
-  draw WebGL in software, so CI checks correctness. Each platform's snapshots are then compared with
-  Linux's in 8 px blocks (`tools/compare_snapshots.py`, limits in `tools/snapshot-limits.json`), and
-  the difference maps uploaded. A job also builds for the iOS simulator.
-- `release.yml`, a version tag: the Linux package.
-
-Day to day the project is developed on a self-hosted Forgejo forge, whose CI runs on every push: the
-gate and the Linux end-to-end leg, each in a bare Ubuntu 24.04 container (`tools/forge-job.sh`, the
-same steps locally). A version tag there runs the gate, builds the Debian package and publishes it,
-with its SHA256SUMS, as a forge release (`tools/forge-job.sh release`). Those workflows are specific to
-the forge and are not part of this copy.
+A version tag runs the gate and builds the Debian package. On the forge the release also carries
+SBOMs, the documentation site and SHA256SUMS, signed with the release key (`release-signing.pub`);
+on GitHub it is the package alone.
 
 Run the same end to end anywhere with `python3 tools/e2e.py --tape fixtures/tape`, and make a new
 tape with `--record DIR`.
