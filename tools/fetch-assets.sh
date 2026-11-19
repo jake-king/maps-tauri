@@ -17,17 +17,19 @@ git -C "$tmp" fetch -q --depth 1 "$REPO" "$REF"
 # writes every link as a file holding its target, on every platform, and each such file is replaced
 # by a copy of the file it names. A link to another link is refused: its copy would be link text.
 git -C "$tmp" -c core.symlinks=false checkout -q FETCH_HEAD
-links=$tmp/.git/links
-git -C "$tmp" ls-tree -r -z FETCH_HEAD -- fonts sprites/v4 | while IFS= read -r -d '' e; do
+# every link in the tree, wherever it is (a link to a link elsewhere is refused all the same), and
+# the ones among the files copied below
+all=$tmp/.git/links-all links=$tmp/.git/links
+git -C "$tmp" ls-tree -r -z FETCH_HEAD | while IFS= read -r -d '' e; do
   if [[ $e == "120000 "* ]]; then printf '%s\n' "${e#*$'\t'}"; fi
-done >"$links"
-cp "$links" "$links.set"
+done >"$all"
+grep -E '^(fonts|sprites/v4)/' "$all" >"$links" || (($? == 1))   # 1: no links there, 2: an error
 root=$(cd "$tmp" && pwd -P)
 while IFS= read -r link; do
   to=$(<"$tmp/$link")
   dir=$(cd "$tmp/$(dirname "$link")/$(dirname "$to")" && pwd -P)
   target=${dir#"$root"/}/$(basename "$to")
-  if grep -Fxq -- "$target" "$links.set" || [[ ! -f $tmp/$target ]]; then
+  if grep -Fxq -- "$target" "$all" || [[ ! -f $tmp/$target ]]; then
     echo "assets: $link -> $to is not a link to a file" >&2
     exit 1
   fi

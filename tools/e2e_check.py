@@ -6,8 +6,9 @@ Plain Python, no dependencies, so the same checks run on Linux, macOS and Window
   e2e_check.py wind LOG [--no-timing]      the wind-trail motion run (MAPS_WIND_MOTION=1)
 
 --no-timing drops the limits that measure speed (buffering, gaps between time-lapse steps, total
-time, and the wind trails kept through a slow move, which follow the frame rate): CI's runners
-draw WebGL in software, so only correctness is checked there. Exit 1 on failure.
+time) and holds the wind trails kept through a slow move, which follow the frame rate, to a low
+floor instead: CI's runners draw WebGL in software, so mostly correctness is checked there.
+Exit 1 on failure.
 """
 
 import json
@@ -186,10 +187,16 @@ def wind(path, timing=True):
     ]
     # How many trails a sample counts follows the frame rate: a trail grows by one segment a frame,
     # so a sample mid-move counts the frames the move has run so far, and one after a move counts
-    # the frames since it ended. On the dev box's GPU a slow move keeps over 80% of the trails; in
-    # software GL far fewer frames are drawn (GitHub's 4-CPU runners: 52-60% after a move, in and out
-    # of a container), so without timing this limit is not judged at all.
-    low = {k: c[k] for k in slow if c[k] < 0.6 * before} if timing else {}
+    # the frames since it ended. On the dev box's GPU a slow move keeps over 80% of the trails, held
+    # to 60% here. In software GL far fewer frames are drawn (GitHub's 4-CPU runners: 52-60% after a
+    # move, in and out of a container), so without timing the mid-move samples are not judged and
+    # the ones after a move are held to 30%: low enough for a slow renderer, high enough to catch
+    # trails thrown away on every move.
+    if timing:
+        limit, judged, when = 0.6, slow, "during and after"
+    else:
+        limit, judged, when = 0.3, [k for k in slow if not k.endswith("-mid")], "after"
+    low = {k: c[k] for k in judged if c[k] < limit * before}
     bunched = {k: v["cv"] for k, v in st.items() if v["cv"] is None or v["cv"] > 0.35}
     stretched = {k: v["long"] for k, v in st.items() if v["long"]}
     print(
@@ -203,20 +210,23 @@ def wind(path, timing=True):
     if before < 10000:
         fail.append(f"too few trails before any move: {before} segments")
     if low:
-        fail.append(f"trails lost through a slow move (under 60% of {before}): {low}")
-    if not timing:
-        print(
-            "wind motion: trails kept through a slow move: not judged (--no-timing: the count"
-            " follows the frame rate, 52-60% on CI's software GL against a 60% limit)"
+        fail.append(
+            f"trails lost through a slow move (under {limit:.0%} of {before}): {low}"
         )
+    mode = "timing" if timing else "--no-timing: the count follows the frame rate"
+    print(
+        f"wind motion: trails kept through a slow move: at least {limit:.0%} of {before},"
+        f" {when} each move ({mode})"
+    )
     if bunched:
         fail.append(f"particles bunched (evenness over 0.35): {bunched}")
     if stretched:
         fail.append(f"trail segments stretched by the camera: {stretched}")
     if fail:
         sys.exit("wind motion: FAILED:\n  " + "\n  ".join(fail))
-    kept = "trails kept, even, unstretched" if timing else "trails even, unstretched"
-    print(f"wind motion: {kept} through slow and fast pans and zooms")
+    print(
+        "wind motion: trails kept, even, unstretched through slow and fast pans and zooms"
+    )
 
 
 if __name__ == "__main__":

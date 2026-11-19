@@ -28,12 +28,17 @@ jobs:
           apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Pinned cargo tools, from an earlier run
         uses: actions/cache@v6
         with:
-          path: ~/.cargo/bin
-          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
-          restore-keys: cargo-bin-${{ github.job }}-
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: cargo-tools-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-tools-${{ github.job }}-
       - name: Shard ${{ matrix.k }} of 4
         env:
           SHARD: ${{ matrix.k }}/4
@@ -57,6 +62,8 @@ jobs:
           apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
           pattern: mutants-shard-*

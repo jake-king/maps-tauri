@@ -38,6 +38,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 job=${1:-}
+# The job's token is for the fixtures download and the forge release's API calls only: it is kept in
+# a shell variable, out of the environment that every build script, npm script and the app inherit.
+token=${TOKEN:-}
+unset TOKEN
 [[ $job =~ ^(check|e2e|coverage|fuzz|perf|msrv|update|audit|mutants|mutants-full|mutants-total|release)$ ]] || { echo "usage: tools/forge-job.sh check|e2e|coverage|fuzz|perf|msrv|update|audit|mutants|mutants-full|mutants-total|release" >&2; exit 2; }
 
 if [[ $job == release ]]; then
@@ -240,7 +244,7 @@ if [[ $job == release ]]; then
   # public release with half its files. A tag that already has a release fails here: delete that
   # release on the forge to build it again. The job's token is accepted by the API (measured).
   api=$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY
-  auth() { printf 'Authorization: token %s\n' "${TOKEN:?}"; }
+  auth() { printf 'Authorization: token %s\n' "${token:?TOKEN: the job token}"; }
   python3 - "$tag" "$GITHUB_SHA" "$prerelease" >"$out/create.json" <<'EOF'
 import json, sys
 tag, sha, pre = sys.argv[1:]
@@ -281,11 +285,11 @@ fixtures() {
       local api release name id
       api=${GITHUB_API_URL:-https://api.github.com}/repos/$GITHUB_REPOSITORY
       read -r release name < <(python3 -c 'import json; l = json.load(open("tools/fixtures.lock")); print(l["release"], l["file"])')
-      printf 'Authorization: Bearer %s\n' "${TOKEN:?}" |
+      printf 'Authorization: Bearer %s\n' "${token:?TOKEN: the job token}" |
         curl -fsSL --retry 3 -H @- "$api/releases/tags/$release" -o logs/fixtures-release.json
       id=$(python3 -c 'import json, sys; print(next(a["id"] for a in json.load(open(sys.argv[1]))["assets"] if a["name"] == sys.argv[2]))' \
         logs/fixtures-release.json "$name")
-      printf 'Authorization: Bearer %s\n' "$TOKEN" |
+      printf 'Authorization: Bearer %s\n' "$token" |
         curl -fsSL --retry 3 -H @- -H 'Accept: application/octet-stream' "$api/releases/assets/$id" -o "$archive"
       echo "$want  $archive" | sha256sum -c --quiet
     else
@@ -295,7 +299,7 @@ fixtures() {
       mkdir -p logs
       archive=logs/e2e-fixtures.tar.gz
       (
-        export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="Authorization: token ${TOKEN:?}"
+        export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="Authorization: token ${token:?TOKEN: the job token}"
         git fetch -q --depth 1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" e2e-fixtures
       )
       git show FETCH_HEAD:e2e-fixtures.tar.gz >"$archive"

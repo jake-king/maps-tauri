@@ -15,7 +15,12 @@
 # repository.
 # Each job builds from nothing: the one thing kept between runs is ~/.cargo/bin, the cargo tools the
 # scripts pin (mdBook, cargo-deny, ...), each checked against its pinned version before use and
-# reinstalled when it differs.
+# reinstalled when it differs. Cargo's install records (.crates.toml, .crates2.json) are kept with
+# them: without them a bumped pin meets a binary cargo has no record of, and `cargo install` refuses
+# to overwrite it (the key's prefix, cargo-tools, is new with them, so no cache without them is
+# restored). rustup's own binary comes from there too, not checked: it only installs toolchains, and
+# every toolchain is installed fresh from rust-toolchain.toml (or msrv.sh's and fuzz.sh's pins).
+# Checkouts keep no token in .git/config.
 name: ci
 on:
   # branches only: a version tag runs release.yml, which runs the gate itself
@@ -26,8 +31,9 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.ref }}
-  # a newer push to a branch replaces its running CI; main's runs all finish
+  # A newer push to a branch replaces its running CI. On main every commit is its own group: in a
+  # shared group a newer run would still cancel a pending one, and that commit would read cancelled.
+  group: ci-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
   check:
@@ -42,13 +48,17 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           fetch-depth: 50
       - name: Pinned cargo tools, from an earlier run
         uses: actions/cache@v6
         with:
-          path: ~/.cargo/bin
-          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
-          restore-keys: cargo-bin-${{ github.job }}-
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: cargo-tools-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-tools-${{ github.job }}-
       - name: Gate
         run: tools/forge-job.sh check
       - name: Step logs
@@ -72,13 +82,17 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           fetch-depth: 50
       - name: Pinned cargo tools, from an earlier run
         uses: actions/cache@v6
         with:
-          path: ~/.cargo/bin
-          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
-          restore-keys: cargo-bin-${{ github.job }}-
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: cargo-tools-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-tools-${{ github.job }}-
       - name: Build and end to end, on the tape
         env:
           TOKEN: ${{ github.token }}
@@ -104,13 +118,17 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           fetch-depth: 50
       - name: Pinned cargo tools, from an earlier run
         uses: actions/cache@v6
         with:
-          path: ~/.cargo/bin
-          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
-          restore-keys: cargo-bin-${{ github.job }}-
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: cargo-tools-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-tools-${{ github.job }}-
       - name: Coverage, with its floor
         run: tools/forge-job.sh coverage
 
@@ -127,13 +145,17 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           fetch-depth: 50
       - name: Pinned cargo tools, from an earlier run
         uses: actions/cache@v6
         with:
-          path: ~/.cargo/bin
-          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
-          restore-keys: cargo-bin-${{ github.job }}-
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: cargo-tools-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-tools-${{ github.job }}-
       - name: Mutants on the changed lines
         env:
           # the commit the branch was at before this push; on a pull request, empty, and the job
@@ -153,12 +175,17 @@ jobs:
           apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Pinned cargo tools, from an earlier run
         uses: actions/cache@v6
         with:
-          path: ~/.cargo/bin
-          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
-          restore-keys: cargo-bin-${{ github.job }}-
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: cargo-tools-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-tools-${{ github.job }}-
       - name: Security advisories, Rust and npm
         run: tools/forge-job.sh audit
 
@@ -174,12 +201,17 @@ jobs:
           apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Pinned cargo tools, from an earlier run
         uses: actions/cache@v6
         with:
-          path: ~/.cargo/bin
-          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
-          restore-keys: cargo-bin-${{ github.job }}-
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: cargo-tools-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-tools-${{ github.job }}-
       - name: Fuzz every parser target, 30 s each
         env:
           TOKEN: ${{ github.token }}
@@ -199,13 +231,17 @@ jobs:
       # whole history, every branch (under 1 MB): the gate measures the merge base with origin/main
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Pinned cargo tools, from an earlier run
         uses: actions/cache@v6
         with:
-          path: ~/.cargo/bin
-          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
-          restore-keys: cargo-bin-${{ github.job }}-
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: cargo-tools-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-tools-${{ github.job }}-
       - name: Instruction counts against main, +3% fails
         env:
           TOKEN: ${{ github.token }}
@@ -224,12 +260,17 @@ jobs:
           apt-get install -y -q --no-install-recommends git ca-certificates >/dev/null
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Pinned cargo tools, from an earlier run
         uses: actions/cache@v6
         with:
-          path: ~/.cargo/bin
-          key: cargo-bin-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
-          restore-keys: cargo-bin-${{ github.job }}-
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: cargo-tools-${{ github.job }}-${{ hashFiles('tools/*.sh') }}
+          restore-keys: cargo-tools-${{ github.job }}-
       - name: Builds with the oldest supported Rust (rust-version)
         run: tools/forge-job.sh msrv
 
