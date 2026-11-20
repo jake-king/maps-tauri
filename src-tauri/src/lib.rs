@@ -85,6 +85,8 @@ fn dev_flags() -> serde_json::Value {
         // MAPS_DEMO=1: a paced tour of the map and each weather layer, for a screen recording
         // (tools/demo-video.sh)
         "demo": std::env::var("MAPS_DEMO").is_ok_and(|v| v == "1"),
+        // MAPS_WINDOW_SIZE=<w>x<h>: the page size the test modes hold the window to
+        "windowSize": std::env::var("MAPS_WINDOW_SIZE").ok().and_then(|v| window_size(&v)),
         // MAPS_F4=0|1: the overlay closed or open, whatever the last session left (it is remembered,
         // and an open overlay draws every frame: every benchmark sets it)
         "f4": std::env::var("MAPS_F4").ok().map(|v| v == "1"),
@@ -302,6 +304,29 @@ fn archive_name() -> String {
             }
             .into()
         })
+}
+
+/// Resize the main window to `w` x `h` logical pixels. The test modes call it with a correction,
+/// measured in the page, for what the platform counts in a window's size (macOS: the title bar).
+/// Refused unless MAPS_WINDOW_SIZE is set, and for a size outside 200 to 4000 px.
+#[tauri::command]
+fn set_window_size(w: f64, h: f64, window: tauri::WebviewWindow) -> Result<(), String> {
+    if std::env::var_os("MAPS_WINDOW_SIZE").is_none() {
+        return Err("set_window_size: only in a test run (MAPS_WINDOW_SIZE)".into());
+    }
+    if !(200.0..=4000.0).contains(&w) || !(200.0..=4000.0).contains(&h) {
+        return Err(format!("set_window_size: {w}x{h} out of range"));
+    }
+    window
+        .set_size(tauri::LogicalSize::new(w, h))
+        .map_err(|e| e.to_string())
+}
+
+/// `<w>x<h>` in logical pixels, each from 200 to 4000; anything else is no size.
+fn window_size(v: &str) -> Option<(f64, f64)> {
+    let (w, h) = v.split_once('x')?;
+    let px = |s: &str| s.parse::<u32>().ok().filter(|n| (200..=4000).contains(n));
+    Some((f64::from(px(w)?), f64::from(px(h)?)))
 }
 
 /// Where the archive and the gazetteer live.
@@ -635,6 +660,16 @@ pub fn run() {
             {
                 use tauri::Manager as _;
                 app.manage(update::Pending::default());
+                // MAPS_WINDOW_SIZE=<w>x<h>: one window size on every platform, so the end-to-end
+                // snapshots compare (tools/e2e.py); CI runners' screens are smaller than 1200x800
+                if let Some((w, h)) = std::env::var("MAPS_WINDOW_SIZE")
+                    .ok()
+                    .and_then(|v| window_size(&v))
+                {
+                    if let Some(win) = app.get_webview_window("main") {
+                        win.set_size(tauri::LogicalSize::new(w, h))?;
+                    }
+                }
                 if let Some(plugin) = update::plugin() {
                     app.handle().plugin(plugin)?;
                     if std::env::var("MAPS_UPDATE").is_ok_and(|v| v == "install") {
@@ -648,6 +683,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             report,
+            set_window_size,
             search,
             dev_stats,
             dev_flags,
@@ -678,6 +714,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn window_size_reads_w_x_h_in_range() {
+        assert_eq!(window_size("960x600"), Some((960.0, 600.0)));
+        assert_eq!(window_size("960"), None);
+        assert_eq!(window_size("960x"), None);
+        assert_eq!(window_size("100x600"), None);
+        assert_eq!(window_size("960x5000"), None);
+        assert_eq!(window_size("-960x600"), None);
+    }
+
+    // Unix path rules ("/x" is not absolute on Windows, and the paths follow HOME and XDG)
+    #[test]
+    #[cfg(unix)]
     fn data_dir_prefers_the_setting_then_the_source_tree_then_the_user_data_dir() {
         let tmp = std::env::temp_dir();
         let missing = Path::new("/nonexistent/maps-tauri/data");

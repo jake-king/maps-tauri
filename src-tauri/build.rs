@@ -24,6 +24,7 @@ fn main() {
             "wx_prefetch",
             "update_check",
             "update_install",
+            "set_window_size",
         ]),
     ))
     .expect("failed to run tauri-build");

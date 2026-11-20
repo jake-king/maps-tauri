@@ -89,7 +89,25 @@ export function startDevtools({ map, flags, renderer, bounds, rows, describe = (
     }
   });
 
+  // MAPS_WINDOW_SIZE: the app asked for this size at start-up, but what the page gets depends on the
+  // platform (macOS counts the title bar in it). Measure the page and grow the window by the
+  // shortfall, until the page is the size asked for, so every platform's snapshots match.
+  async function fitWindow([w, h]) {
+    let ask = [w, h];
+    for (let i = 0; i < 4; i++) {
+      const dw = w - window.innerWidth, dh = h - window.innerHeight;
+      if (dw === 0 && dh === 0) return;
+      ask = [ask[0] + dw, ask[1] + dh];
+      const resized = new Promise((r) => window.addEventListener("resize", r, { once: true }));
+      await invoke("set_window_size", { w: ask[0], h: ask[1] });
+      await Promise.race([resized, new Promise((r) => setTimeout(r, 2000))]);
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    invoke("report", { msg: `window: page is ${window.innerWidth}x${window.innerHeight}, asked for ${w}x${h}` }).catch(() => {});
+  }
+
   async function runModes(extra = {}) {
+    if (flags.windowSize) await fitWindow(flags.windowSize);
     if (flags.demo && extra.demo) return extra.demo();
     if (flags.search && extra.search) return extra.search();
     if (flags.weather && extra.weather) return extra.weather();

@@ -6,3 +6,5 @@ pub mod mesh;
 pub mod mvt;
 pub mod palette;
 pub mod pmtiles;
+#[cfg(windows)]
+mod winio;

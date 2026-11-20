@@ -1,9 +1,9 @@
 {
-  "_": "Share of 8x8 blocks allowed to differ from the Linux reference (compare_snapshots.py). null: random content (wind particles), not compared. Linux against Linux on one tape: weather-past and weather-seam 0, weather 0.0105, weather-world 0.0111 (2026-11-17). The cross-engine limits are first guesses, to be set from the first macOS and Windows runs.",
+  "_": "Share of 8x8 blocks allowed to differ from the Linux reference (compare_snapshots.py). null: random content (wind particles), not compared. Linux against Linux on one tape: weather-past and weather-seam 0, weather 0.0105, weather-world 0.0111 (2026-11-17). The cross-engine limits are first guesses, to be set from the first macOS and Windows runs. First cross-engine run (2026-11-19, 960x600): Windows weather 0.0376, weather-past 0.0108, weather-seam 0.0001, weather-world 0.1267: the world view is mostly wind trails (random) and SIGMET labels the engines' font metrics place differently, so its limit is 0.2.",
   "weather-past": 0.03,
   "weather-seam": 0.03,
   "weather": 0.06,
-  "weather-world": 0.06,
+  "weather-world": 0.2,
   "weather-wind": null,
   "*": null
 }

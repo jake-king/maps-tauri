@@ -1,7 +1,31 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window may use core APIs and its app commands: report, search, and the F4 overlay's dev_stats, dev_flags, bench_done, and archive_info for the native renderer, and the weather layer's wx_enable, wx_state, wx_frame, wx_satellite, wx_metars, wx_metar, wx_wind, wx_sigmets, wx_satellite_global and wx_prefetch, and the updater's update_check and update_install (which do nothing in a build without an update URL).",
-  "windows": ["main"],
-  "permissions": ["core:default", "allow-report", "allow-search", "allow-dev-stats", "allow-dev-flags", "allow-bench-done", "allow-archive-info", "allow-save-snapshot", "allow-wx-enable", "allow-wx-state", "allow-wx-frame", "allow-wx-satellite", "allow-wx-metars", "allow-wx-metar", "allow-wx-wind", "allow-wx-sigmets", "allow-wx-satellite-global", "allow-wx-prefetch", "allow-update-check", "allow-update-install"]
+  "description": "The main window may use core APIs and its app commands: report, search, and the F4 overlay's dev_stats, dev_flags, bench_done, and archive_info for the native renderer, and the weather layer's wx_enable, wx_state, wx_frame, wx_satellite, wx_metars, wx_metar, wx_wind, wx_sigmets, wx_satellite_global and wx_prefetch, and the updater's update_check and update_install (which do nothing in a build without an update URL), and set_window_size, which only works in a test run (MAPS_WINDOW_SIZE set).",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "allow-report",
+    "allow-search",
+    "allow-dev-stats",
+    "allow-dev-flags",
+    "allow-bench-done",
+    "allow-archive-info",
+    "allow-save-snapshot",
+    "allow-wx-enable",
+    "allow-wx-state",
+    "allow-wx-frame",
+    "allow-wx-satellite",
+    "allow-wx-metars",
+    "allow-wx-metar",
+    "allow-wx-wind",
+    "allow-wx-sigmets",
+    "allow-wx-satellite-global",
+    "allow-wx-prefetch",
+    "allow-update-check",
+    "allow-update-install",
+    "allow-set-window-size"
+  ]
 }

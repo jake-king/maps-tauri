@@ -7,7 +7,6 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read};
-use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -335,13 +334,23 @@ fn fetch(
     Ok((buf, etag))
 }
 
+/// Fill `buf` from `offset` without moving a shared cursor, so threads can read one file at once:
+/// `pread` on Unix, `ReadFile` with an explicit offset on Windows.
+#[cfg(unix)]
+fn read_exact_at(f: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
+    std::os::unix::fs::FileExt::read_exact_at(f, buf, offset)
+}
+
+#[cfg(windows)]
+use crate::winio::read_exact_at;
+
 impl Source {
     /// The bytes, and whether they came from the network or a file (false: from the cache).
     fn read(&self, offset: u64, len: usize) -> io::Result<(Vec<u8>, bool)> {
         match self {
             Source::File(f) => {
                 let mut buf = vec![0u8; len];
-                f.read_exact_at(&mut buf, offset)?;
+                read_exact_at(f, &mut buf, offset)?;
                 Ok((buf, true))
             }
             #[cfg(feature = "http")]

@@ -90,6 +90,8 @@ def main():
         MAPS_BENCH="1",
         MAPS_F4="0",
         MAPS_RENDERER="rust",
+        # one window size on every platform (the runners' screens are smaller than 1200x800)
+        MAPS_WINDOW_SIZE="960x600",
         MAPS_WEATHER_CACHE=str(db),
         MAPS_SNAPSHOT_DIR=str(out),
     )

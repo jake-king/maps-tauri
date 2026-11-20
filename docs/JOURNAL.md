@@ -1967,3 +1967,57 @@ The first plain-language version over-explained (a renderer described as Rust pr
 the graphics card drawing them). The README's top half is now written the way a project README
 usually is: short declarative lines in the field's own terms, a feature list, the measurements as a
 table with their methodology linked, and the limitations.
+
+## Windows and macOS
+
+The first platforms run on GitHub's runners found two bugs that the Linux-only CI could not.
+`vtile` read archive files with `FileExt::read_exact_at`, which exists only on Unix, so the Windows
+build failed to compile; it now reads through a small helper, `pread` on Unix and an offset
+`ReadFile` (`seek_read`, looped until the buffer is full) on Windows. A cross-check of `vtile` for
+`x86_64-pc-windows-gnu` fails on the old code (no `std::os::unix`) and passes on the new. And
+`devstats::tests::this_process_is_found` asserted that the app finds its own process in `/proc`, which
+macOS does not have: process memory is Linux-only by design, so the test now runs on Linux only.
+With those two fixed, the Windows leg reached tauri-build and stopped there: a Windows build embeds
+an `.ico` in its resource file, and the app had only `icon.png`. `icons/icon.ico` is now made from that
+PNG (16 to 128 px) and listed after it, so Linux and macOS keep using the PNG; the Debian package
+builds as before.
+Then the unit tests ran on Windows, and three failed, all on Unix path rules: `/x` is not an absolute
+path there, and `?` is not allowed in a file name. Those three tests now run on Unix only. The cache
+and data directories themselves still follow `HOME` and the XDG variables, so on Windows the disk
+cache stays off and the data directory is `MAPS_DATA` or the source tree's; a Windows layout
+(`%LOCALAPPDATA%`) is not done.
+The next Windows run found that the Windows read helper itself overflowed: the archive tests ask for
+a read at an offset near `u64::MAX`, which `pread` refuses on Unix (its offset is signed), while the
+helper added the bytes read to the offset and panicked. It now refuses an offset past `i64::MAX` up
+front, and checks each step, so both systems answer the same way.
+The forge's mutation job then reported the Windows helper's mutant as missed: the function is not
+compiled on Linux, so no test there can run it. It now lives in its own file, `vtile/src/winio.rs`,
+excluded from mutation testing with that reason (like the other files only the app or a web view
+runs); `platforms.yml` runs the archive tests on Windows. The Unix helper stays in `pmtiles.rs`, and
+all 7 mutants on the changed lines are caught.
+With the unit tests passing, the Windows leg stopped at its fixtures download: `python` there ends
+its line with `\r\n`, so the file name read from `tools/fixtures.lock` carried a `\r` and matched no
+release asset. The workflow strips it.
+
+The first platforms run with every desktop leg green failed only the comparison: all four weather
+snapshots differed in every block. The data agreed (the same radar frames, hazards and METAR count);
+the images did not have the same size. The window asks for 1200x800, and the macOS and Windows runners'
+screens are smaller, so the system shrank it to 1024x653 and 1028x749. The comparison scored a size
+mismatch as 100% different; it now fails naming the two sizes. And `tools/e2e.py` sets
+`MAPS_WINDOW_SIZE=960x600`, which the app applies to its window at start-up, so every platform takes
+its snapshots at one size; users and the benchmarks keep 1200x800. Locally the end-to-end run passed
+with all five weather snapshots at 960x600.
+The next run measured the engines at one size. Windows: weather 0.0376, weather-past 0.0108,
+weather-seam 0.0001, weather-world 0.1267 of blocks. The world view is mostly wind trails (random by
+design) and SIGMET labels that the engines' font metrics place differently, so its limit is now 0.2;
+the other limits held. macOS came out 960x572: there the window size includes the 28 px title bar. The
+app now reads the page's size back and grows the window by any shortfall. Only grows: the first
+version also shrank, and on Linux, where the resize lands later, it read the old 1200x800 back and
+shrank the page to 720x400, which the local end-to-end run caught.
+The read-back did nothing on macOS: the page still came out 28 px short. The fit now happens in the
+page, which knows its own size: in a test run (`MAPS_WINDOW_SIZE`) it compares `innerWidth` and
+`innerHeight` with the size asked for and has the app resize the window by the difference until they
+match. The resize is a new command, refused outside a test run. A planted 28 px shortfall at start-up
+(the macOS case, made on Linux) first showed the command missing from the app's permissions (`not
+allowed by ACL`), which the Linux end-to-end run could not show because there no fit is needed; with
+it granted, the page fits itself back to 960x600.

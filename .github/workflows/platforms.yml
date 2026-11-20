@@ -58,7 +58,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          read -r release file < <(python -c 'import json; l=json.load(open("tools/fixtures.lock")); print(l["release"], l["file"])')
+          read -r release file < <(python -c 'import json; l=json.load(open("tools/fixtures.lock")); print(l["release"], l["file"])' | tr -d '\r')
           gh release download "$release" --pattern "$file" --dir "$RUNNER_TEMP"
           python tools/fixtures.py unpack "$RUNNER_TEMP/$file"
       - name: End to end, on the tape

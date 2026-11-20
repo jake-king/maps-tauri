@@ -307,7 +307,9 @@ Pss: 2 kB
         assert_eq!(t.take().requests, 0);
     }
 
+    // process memory comes from /proc, which only Linux has (see the module doc)
     #[test]
+    #[cfg(target_os = "linux")]
     fn this_process_is_found() {
         let mem = process_tree_memory();
         assert_eq!(mem.first().map(|m| m.pid), Some(std::process::id()));

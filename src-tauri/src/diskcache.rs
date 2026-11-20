@@ -447,7 +447,9 @@ mod tests {
         assert_eq!(max_bytes_from(Some((1 << 20).to_string())), 1 << 40);
     }
 
+    // Unix path rules ("/x" is not absolute on Windows, and the paths follow HOME and XDG)
     #[test]
+    #[cfg(unix)]
     fn the_cache_path_by_setting() {
         let home = Some(PathBuf::from("/home/u"));
         let xdg = Some(PathBuf::from("/x"));

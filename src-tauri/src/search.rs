@@ -741,7 +741,9 @@ CREATE VIRTUAL TABLE place_fts USING fts5(
         assert_eq!(open_in_dir_named("a#b"), Some(vec![1, 3, 4, 2]));
     }
 
+    // Unix paths: '?' is not allowed in a Windows file name
     #[test]
+    #[cfg(unix)]
     fn open_handles_a_question_mark_in_the_path() {
         assert_eq!(open_in_dir_named("a?b"), Some(vec![1, 3, 4, 2]));
     }

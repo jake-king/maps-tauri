@@ -87,7 +87,7 @@ def score(a, b):
     """Share of blocks differing by more than TOL, and the per-block map."""
     (aw, ah, ab), (bw, bh, bb) = blocks(a), blocks(b)
     if (aw, ah) != (bw, bh):
-        return 1.0, None, (aw, ah)
+        return None, None, (aw, ah)
     diff = [max(abs(p - q) for p, q in zip(x, y)) > TOL for x, y in zip(ab, bb)]
     return sum(diff) / len(diff), diff, (aw, ah)
 
@@ -115,7 +115,13 @@ def main():
         if not (cur / n).exists():
             fail.append(f"{key}: missing")
             continue
-        s, diff, (bw, bh) = score(read_png(ref / n), read_png(cur / n))
+        a, b = read_png(ref / n), read_png(cur / n)
+        s, diff, (bw, bh) = score(a, b)
+        if s is None:
+            # a window the OS shrank to fit its screen, say: not a rendering difference
+            print(f"compare: {key}: sizes differ, {a[0]}x{a[1]} against {b[0]}x{b[1]}")
+            fail.append(f"{key}: sizes differ ({a[0]}x{a[1]} against {b[0]}x{b[1]})")
+            continue
         print(f"compare: {key}: {s:.4f} of blocks differ (limit {limit})")
         if s > limit:
             fail.append(f"{key}: {s:.4f} > {limit}")

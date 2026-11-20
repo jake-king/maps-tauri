@@ -20,4 +20,7 @@ exclude_globs = [
   "src-tauri/src/main.rs",
   "src-tauri/src/lib.rs",
   "crates/wx/src/fetch.rs",
+  # built only for Windows: not compiled here, so its mutants could only read as missed;
+  # platforms.yml runs the archive tests on Windows
+  "crates/vtile/src/winio.rs",
 ]
