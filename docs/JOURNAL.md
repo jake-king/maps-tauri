@@ -1963,3 +1963,7 @@ WebGL in software the capture dropped frames, so the video ran shorter than the 
 cut, taken from the tour's step times, landed on the wrong frames; the capture now stamps frames by
 the wall clock. The full tour is an asset on the v0.1.0 release (7.5 MB); the clip is
 `docs/media/demo.gif` (4.7 MB).
+The first plain-language version over-explained (a renderer described as Rust preparing pieces and
+the graphics card drawing them). The README's top half is now written the way a project README
+usually is: short declarative lines in the field's own terms, a feature list, the measurements as a
+table with their methodology linked, and the limitations.

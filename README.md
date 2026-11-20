@@ -1,63 +1,52 @@
 # maps-tauri
 
-A desktop map app with live aviation weather. Radar, satellite cloud images, airport weather
-reports, winds aloft and hazard areas share one timeline that you can scrub back 18 hours or play
-as a time-lapse. The map is drawn by a renderer written for this app: Rust prepares each piece of
-the map and the graphics card draws it.
+Desktop map viewer with aviation weather overlays, built with Tauri 2 and Rust. Vector tiles are
+decoded and tessellated in Rust and rendered with WebGL2. Weather layers share a timeline covering
+the past 18 hours and the next 12.
 
-![West LA, then the United States as satellite, radar, hazards, airport reports and winds come on](docs/media/demo.gif)
+![West LA, then the US as satellite, radar, hazards, METARs and winds come on](docs/media/demo.gif)
 
-[The full 70-second tour](https://github.com/jake-king/maps-tauri/releases/download/v0.1.0/maps-tauri-demo.mp4)
-(MP4, 7.5 MB) also shows the time-lapse, the whole world and an airport's report.
+[Full tour (70 s, MP4)](https://github.com/jake-king/maps-tauri/releases/download/v0.1.0/maps-tauri-demo.mp4)
 
-## Install (Linux)
+## Install
 
-For Ubuntu 24.04 or newer (amd64). The app comes from the
-[latest release](https://github.com/jake-king/maps-tauri/releases/latest); the map of West LA
-(Malibu to downtown, 25 MB) and a place-name index for search (1 MB) are a separate download:
+Ubuntu 24.04+ (amd64). The basemap and search index are separate downloads.
 
-    curl -fLO https://github.com/jake-king/maps-tauri/releases/download/v0.1.0/maps-tauri_0.1.0_amd64.deb
-    sudo apt install ./maps-tauri_0.1.0_amd64.deb
-    mkdir -p ~/.local/share/local.maps-tauri
-    curl -fL -o ~/.local/share/local.maps-tauri/westla.pmtiles \
-      https://github.com/jake-king/maps-tauri/releases/download/map-westla-20261118/westla.pmtiles
-    curl -fL -o ~/.local/share/local.maps-tauri/geonames.db \
-      https://github.com/jake-king/maps-tauri/releases/download/map-westla-20261118/geonames.db
-    maps-tauri
+```sh
+curl -fLO https://github.com/jake-king/maps-tauri/releases/download/v0.1.0/maps-tauri_0.1.0_amd64.deb
+sudo apt install ./maps-tauri_0.1.0_amd64.deb
+mkdir -p ~/.local/share/local.maps-tauri
+# West LA basemap, 25 MB
+curl -fL -o ~/.local/share/local.maps-tauri/westla.pmtiles \
+  https://github.com/jake-king/maps-tauri/releases/download/map-westla-20261118/westla.pmtiles
+# place search, 1 MB
+curl -fL -o ~/.local/share/local.maps-tauri/geonames.db \
+  https://github.com/jake-king/maps-tauri/releases/download/map-westla-20261118/geonames.db
+maps-tauri
+```
 
-Weather needs no setup: tick a layer and it is fetched from NOAA. It is not for flight planning.
-Other platforms build from source (see For developers).
+Weather is fetched from NOAA on demand. Not for flight planning. Other platforms: build from source.
 
-## What you can do
+## Features
 
-- Pan, zoom and rotate the map, and search for a place or type coordinates.
-- Turn on weather layers, each off until you tick it:
-  - Radar (US): rain and snow over the last 40 minutes, as a loop.
-  - Satellite: infrared cloud images, for the US and the rest of the world.
-  - Airport reports (METARs): a dot for each airport, coloured by flying conditions; click one to
-    read its report.
-  - Winds: moving particles showing the wind at a chosen flight level.
-  - Hazards: forecast areas of turbulence, icing, low cloud and mountain obscuration (G-AIRMETs), and
-    SIGMETs worldwide (storms, severe turbulence and icing, volcanic ash); click one to read it.
-- Move along the timeline, from 18 hours back to 12 hours ahead in 10-minute steps, or press Play to
-  watch the last three hours. Each layer shows the time of what it is showing.
-- Keep working offline: the map is on disk, and weather already loaded is shown again, marked as
-  such.
+- Native vector renderer, with MapLibre GL available for comparison (`MAPS_RENDERER=maplibre`)
+- MRMS radar (US), GOES and global infrared satellite, METARs, GFS winds aloft by flight level,
+  G-AIRMETs and international SIGMETs
+- Timeline in 10-minute steps, with time-lapse playback
+- Works offline: local basemap, cached weather
+- Place and coordinate search (GeoNames, SQLite FTS5)
 
-## Why it is fast
+## Performance
 
-The app started on MapLibre, the open-source library many web maps use. Measuring it showed that
-most of the work in a pan was turning map data into shapes in JavaScript, so this app does that part
-in Rust and leaves only the drawing to the app's built-in browser engine. On the same 150-step stress run (pans, zooms,
-turns and jumps) over West LA, with every frame checked for parts of the map not yet drawn:
+Seeded 150-operation stress run over West LA, native renderer against MapLibre GL 6.7:
 
-|                                    | this app      | MapLibre            |
-|------------------------------------|---------------|---------------------|
-| frames with part of the map blank  | 0 of 2380     | 325 of 3066 (10.6%) |
-| time to draw a frame, typical / worst 1% | 2 / 7 ms | 5 / 13 ms        |
-| peak memory                        | 619 MB        | 1501 MB             |
+|                              | Native    | MapLibre            |
+|------------------------------|-----------|---------------------|
+| Frames with unrendered tiles | 0 / 2,380 | 325 / 3,066 (10.6%) |
+| Render time p50 / p99        | 2 / 7 ms  | 5 / 13 ms           |
+| Peak memory                  | 619 MB    | 1,501 MB            |
 
-`docs/JOURNAL.md` has how each number was measured and what was wrong with the first attempts.
+Methodology: `book/src/measuring.md` and `docs/JOURNAL.md`.
 
 ## How this was built
 
@@ -66,14 +55,11 @@ what to try next, tested the app by hand, and reviewed the changes; the agent wr
 code and kept the journal. `docs/JOURNAL.md` is that working log, in the order it happened: every
 problem, the measurements that turned out to be wrong, and what fixed them.
 
-## Status
+## Limitations
 
-A personal project, not a product. In practice:
-
-- One map area: the West LA extract. Other areas need an extract you cut yourself (see Data).
-- Linux only as a package. macOS and Windows builds are in progress and not packaged.
-- Search covers West LA only, from the published index.
-- Weather comes from NOAA and is not for flight planning.
+- One basemap area (West LA); other areas need a custom extract (see Data)
+- Linux package only; macOS and Windows builds are in progress
+- Place search covers West LA only
 
 ## For developers
 
