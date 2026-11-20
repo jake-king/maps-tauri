@@ -2021,3 +2021,8 @@ match. The resize is a new command, refused outside a test run. A planted 28 px 
 (the macOS case, made on Linux) first showed the command missing from the app's permissions (`not
 allowed by ACL`), which the Linux end-to-end run could not show because there no fit is needed; with
 it granted, the page fits itself back to 960x600.
+
+With macOS and Windows passing, `platforms.yml` is back on its nightly schedule and on version tags.
+The iOS simulator job is gone: the app has no mobile entry point, so `tauri ios build` can only fail
+(the library lacks the required runtime symbols), and as an allowed failure it put a red mark in
+every otherwise green run. It returns with the entry point.

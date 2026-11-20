@@ -58,7 +58,7 @@ problem, the measurements that turned out to be wrong, and what fixed them.
 ## Limitations
 
 - One basemap area (West LA); other areas need a custom extract (see Data)
-- Linux package only; macOS and Windows builds are in progress
+- Linux package only; macOS and Windows pass the end-to-end tests in CI but are not packaged
 - Place search covers West LA only
 
 ## For developers
@@ -156,14 +156,14 @@ version: each must be refused and the genuine update installed.
 
 Tauri draws with each platform's own web view: WebKitGTK on Linux, WKWebView on macOS, WebView2
 (Chromium) on Windows. The renderer is WebGL2, where engines differ most, so `platforms.yml` builds
-and tests on each, on demand for now: the unit tests, the release build, then the app's self-driving
+and tests on each, nightly, on demand and on a version tag: the unit tests, the release build, then the app's self-driving
 end-to-end run (`MAPS_BENCH=1`) judged by `tools/e2e_check.py`. NOAA's answers come from a recorded
 tape (`MAPS_TAPE_REPLAY`, `wx::tape`): every platform draws the same data, with no network, and a
 request not on the tape is an error naming its URL. The tape and the map archive are a release asset
 pinned by sha256 (`tools/fixtures.py`, `tools/fixtures.lock`). Speed limits apply only on the dev
 box; the runners draw WebGL in software, so CI checks correctness. Each platform's snapshots are then
 compared with Linux's in 8 px blocks (`tools/compare_snapshots.py`, limits in
-`tools/snapshot-limits.json`). A job also builds for the iOS simulator.
+`tools/snapshot-limits.json`).
 
 A version tag runs the gate and builds the Debian package. On the forge the release also carries
 SBOMs, the documentation site and SHA256SUMS, signed with the release key (`release-signing.pub`);

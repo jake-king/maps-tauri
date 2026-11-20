@@ -3,12 +3,16 @@
 # against a recorded tape of NOAA's answers (tools/fixtures.py, wx::tape), so every platform draws
 # the same data with no network. Speed limits are dropped (--no-timing): the runners draw WebGL in
 # software. Then each platform's snapshots are compared with Linux's (tools/compare_snapshots.py).
-# The iOS job builds for the simulator only. On demand only for now: the macOS and Windows legs
-# do not pass yet, and a scheduled or release run would only repeat that red. It goes back on its
-# nightly schedule (and on v* tags) once they pass; ci.yml is the gate on every push meanwhile.
+# Nightly, on demand and on a version tag: macOS minutes cost more than Linux's, and ci.yml is the
+# gate on every push. There is no iOS job: the app has no mobile entry point yet, so an iOS build can
+# only fail (`tauri ios build`: the library lacks the required runtime symbols).
 name: platforms
 on:
+  schedule:
+    - cron: "17 9 * * *"
   workflow_dispatch:
+  push:
+    tags: ["v*"]
 permissions:
   contents: read
 concurrency:
@@ -105,23 +109,3 @@ jobs:
           path: diff/
           if-no-files-found: ignore
 
-  ios-simulator:
-    # A build for the iOS simulator: proves the Rust backend and the frontend compile for iOS. The
-    # Xcode project is generated in the job (tauri ios init), not kept in the repo. Allowed to fail
-    # until its first green run; the interface is not yet adapted to touch.
-    runs-on: macos-15
-    timeout-minutes: 60
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - uses: Swatinem/rust-cache@v2
-      - run: rustup toolchain install && rustup target add aarch64-apple-ios-sim
-      - run: tools/fetch-assets.sh
-      - run: cargo install wasm-pack --version 0.15.1 --locked
-      - run: npm ci --no-audit --no-fund
-      - run: npx tauri ios init --ci
-      - run: npx tauri ios build --target aarch64-sim --debug --ci

@@ -254,7 +254,7 @@ so the commit CI tested is the commit on `main`, by hash. The weekly and daily w
 
 Tauri draws with each platform's own web view, and WebGL2 is where engines differ most, so the GitHub
 workflows in `.github/` run the same end-to-end check on Linux, macOS and Windows and compare each
-platform's snapshots with Linux's in 8 px blocks; a job also builds for the iOS simulator.
+platform's snapshots with Linux's in 8 px blocks.
 
 ## Releases
 
