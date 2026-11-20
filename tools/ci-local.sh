@@ -17,8 +17,10 @@ git clone -q . "$work/src"
 if [[ -n ${FIXTURES:-} ]]; then cp "$FIXTURES" "$work/src/e2e-fixtures.tar.gz"; fi
 cmd='tools/check.sh'
 [[ ${1:-} == -- ]] && { shift; cmd="$*"; }
+# The cap that holds is podman's own: podman puts the container in a cgroup of its own, outside the
+# systemd-run scope, which so caps only the podman client (measured)
 systemd-run --user --scope -q -p MemoryMax=12G \
-  podman run --rm --name "$name" -v "$work/src:/w" -w /w docker.io/library/ubuntu:24.04 bash -c "
+  podman run --rm --name "$name" --memory=12g --memory-swap=12g -v "$work/src:/w" -w /w docker.io/library/ubuntu:24.04 bash -c "
     set -euo pipefail
     tools/ci-setup.sh >/tmp/setup.log 2>&1 || { tail -30 /tmp/setup.log; exit 1; }
     export PATH=\$HOME/.cargo/bin:\$HOME/.local/bin:\$PATH
