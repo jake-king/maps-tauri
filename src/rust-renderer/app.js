@@ -246,6 +246,73 @@ map.whenIdle().then(async () => {
     },
     // MAPS_WEATHER=1: all three layers on; wait for the present (its radar loop, satellite image and
     // hazards, 90 s at most), picture it; then 3 hours back, the same; then the registration probe
+    // MAPS_DEMO=1: a paced tour for a screen recording (tools/demo-video.sh), not a test. Each step
+    // waits for its layer to arrive (with a cap), so a slow NOAA answer makes the video longer,
+    // not emptier.
+    demo: async () => {
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const until = async (ok, cap) => {
+        const t0 = performance.now();
+        while (!ok() && performance.now() - t0 < cap) await wait(100);
+      };
+      const smooth = (t) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+      const fly = async (view, ms) => {
+        map.easeTo({ ...view, duration: ms, easing: smooth });
+        await wait(ms + 400);
+      };
+      const tick = async (box) => {
+        box.checked = true;
+        await wxSet();
+      };
+      // each step's start as wall-clock seconds: tools/demo-video.sh cuts the README's clip by them
+      const mark = (step) => invoke("report", { msg: `demo ${step} ${(Date.now() / 1000).toFixed(2)}` });
+      // the map: West LA, a pan down the coast and a turn
+      await wait(1500);
+      await fly({ center: [-118.49, 34.01], zoom: 13.5, bearing: 0 }, 2500);
+      await fly({ center: [-118.42, 33.96], zoom: 14, bearing: 25 }, 3500);
+      await fly({ center: [-118.33, 34.05], zoom: 12, bearing: 0 }, 3000);
+      // out to the country, then each layer in turn
+      await mark("country");
+      await fly({ center: [-97, 38.5], zoom: 3.6, bearing: 0 }, 4000);
+      await tick(satBox);
+      await until(() => weather.progress?.().satellite === true, 30000);
+      await wait(2500);
+      await tick(radarBox);
+      await until(() => { const p = weather.progress?.(); return p && p.radarWant > 0 && p.radar === p.radarWant; }, 45000);
+      await wait(4000);
+      await tick(hazardBox);
+      await until(() => weather.sigmets != null, 30000);
+      await wait(3000);
+      await tick(metarBox);
+      await until(() => weather.metars != null, 30000);
+      await wait(3000);
+      await tick(windBox);
+      await until(() => !!weather.wind, 30000);
+      await wait(5000);
+      await mark("winds-shown");
+      // the last three hours as a time-lapse
+      timeBar.playButton?.click();
+      await wait(1000);
+      // buffering first, then the steps; it stops by itself at the present
+      await until(() => !timeBar.buffering && !timeBar.player, 90000);
+      await wait(1500);
+      // the world: global clouds, SIGMETs everywhere
+      await fly({ center: [-30, 30], zoom: 2.4, bearing: 0 }, 4500);
+      await wait(4500);
+      // back home with only the airport observations on: LAX's latest report
+      for (const b of [radarBox, satBox, hazardBox, windBox]) b.checked = false;
+      await wxSet();
+      const lax = weather.metars?.stations?.find((x) => x[0] === "KLAX");
+      if (lax) {
+        await fly({ center: [lax[1], lax[2]], zoom: 9, bearing: 0 }, 4500);
+        const p = map.project([lax[1], lax[2]]);
+        await weather.clicked(p.x, p.y);
+        await wait(4000);
+        weather.closePopup();
+      }
+      await wait(1000);
+      return invoke("bench_done", { result: { demo: true } });
+    },
     weather: async () => {
       radarBox.checked = satBox.checked = hazardBox.checked = metarBox.checked = windBox.checked = true;
       await wxSet();

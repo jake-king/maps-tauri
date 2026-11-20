@@ -1949,3 +1949,17 @@ Search needed the GeoNames index, whose builder is private, so the release also 
 places inside the map's bounds, copied from the full index (13.5 million places) with the same schema
 and the full-text index rebuilt: 1.1 MB. In the same clean install, "santa mon", "venice beach" and
 "griffith" each found the place they name.
+
+## A README for people, and a recorded tour
+
+The README now opens with what the app does in plain words, a looping clip of the weather layers
+coming on, and the install steps; the engineering detail moved under For developers, and the weather
+section's specifics to the book. The clip comes from `MAPS_DEMO=1`, a paced tour (West LA, the US
+with satellite, radar, hazards, airport reports and winds one at a time, the time-lapse, the world,
+LAX's report), recorded by `tools/demo-video.sh` in a virtual display. Three things the first
+recordings got wrong: the window opened on the desktop's Wayland session instead of the virtual
+display (`WAYLAND_DISPLAY` is now unset for it), the display's cursor sat in every frame, and with
+WebGL in software the capture dropped frames, so the video ran shorter than the tour and the clip's
+cut, taken from the tour's step times, landed on the wrong frames; the capture now stamps frames by
+the wall clock. The full tour is an asset on the v0.1.0 release (7.5 MB); the clip is
+`docs/media/demo.gif` (4.7 MB).

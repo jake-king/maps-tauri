@@ -90,6 +90,7 @@ export function startDevtools({ map, flags, renderer, bounds, rows, describe = (
   });
 
   async function runModes(extra = {}) {
+    if (flags.demo && extra.demo) return extra.demo();
     if (flags.search && extra.search) return extra.search();
     if (flags.weather && extra.weather) return extra.weather();
     if (flags.windMotion && extra.windMotion) return extra.windMotion();

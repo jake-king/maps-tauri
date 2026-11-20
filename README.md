@@ -1,29 +1,63 @@
 # maps-tauri
 
-A desktop map viewer in Tauri 2 and Rust, with aviation weather. It reads a whole-planet PMTiles
-archive over HTTP range requests and keeps what it has seen in a SQLite cache, so places visited
-once still draw with the network gone. It has two renderers: MapLibre GL, from the self-hosted web
-map viewer it began as a port of (with a GeoNames search box), and a native one, where Rust decodes
-the vector tiles and builds the meshes and a small WebGL2 renderer in the webview draws them. On the
-same seeded stress run, the native renderer never showed unfinished map (MapLibre did in 10.6% of
-frames) and peaked at 619 MB of memory to MapLibre's 1501 MB. Weather (radar, satellite, METARs,
-winds aloft, SIGMETs and G-AIRMETs) runs on one time bar from 18 hours back to 12 ahead.
+A desktop map app with live aviation weather. Radar, satellite cloud images, airport weather
+reports, winds aloft and hazard areas share one timeline that you can scrub back 18 hours or play
+as a time-lapse. The map is drawn by a renderer written for this app: Rust prepares each piece of
+the map and the graphics card draws it.
 
-## Status
+![West LA, then the United States as satellite, radar, hazards, airport reports and winds come on](docs/media/demo.gif)
 
-A personal project, not a product. In practice:
+[The full 70-second tour](https://github.com/jake-king/maps-tauri/releases/download/v0.1.0/maps-tauri-demo.mp4)
+(MP4, 7.5 MB) also shows the time-lapse, the whole world and an airport's report.
 
-- One map area: the West LA extract. Other areas need an extract you cut yourself (see Data).
-- Linux only as a package. macOS, Windows and an iOS simulator build run in CI but are not packaged.
-- Search covers West LA only, from the published index.
-- Weather comes from NOAA and is not for flight planning.
-- `src/maplibre-patch.js` targets MapLibre 6.7.0 only.
+## Install (Linux)
 
-## Documentation
+For Ubuntu 24.04 or newer (amd64). The app comes from the
+[latest release](https://github.com/jake-king/maps-tauri/releases/latest); the map of West LA
+(Malibu to downtown, 25 MB) and a place-name index for search (1 MB) are a separate download:
 
-`book/` is a short engineering book (mdBook): the architecture, the native renderer, weather, search,
-how things were measured, and how they are checked. `tools/docs.sh` builds it with the Rust API
-reference beside it under `api/`; every public item is documented, and the gate keeps it so.
+    curl -fLO https://github.com/jake-king/maps-tauri/releases/download/v0.1.0/maps-tauri_0.1.0_amd64.deb
+    sudo apt install ./maps-tauri_0.1.0_amd64.deb
+    mkdir -p ~/.local/share/local.maps-tauri
+    curl -fL -o ~/.local/share/local.maps-tauri/westla.pmtiles \
+      https://github.com/jake-king/maps-tauri/releases/download/map-westla-20261118/westla.pmtiles
+    curl -fL -o ~/.local/share/local.maps-tauri/geonames.db \
+      https://github.com/jake-king/maps-tauri/releases/download/map-westla-20261118/geonames.db
+    maps-tauri
+
+Weather needs no setup: tick a layer and it is fetched from NOAA. It is not for flight planning.
+Other platforms build from source (see For developers).
+
+## What you can do
+
+- Pan, zoom and rotate the map, and search for a place or type coordinates.
+- Turn on weather layers, each off until you tick it:
+  - Radar (US): rain and snow over the last 40 minutes, as a loop.
+  - Satellite: infrared cloud images, for the US and the rest of the world.
+  - Airport reports (METARs): a dot for each airport, coloured by flying conditions; click one to
+    read its report.
+  - Winds: moving particles showing the wind at a chosen flight level.
+  - Hazards: forecast areas of turbulence, icing, low cloud and mountain obscuration (G-AIRMETs), and
+    SIGMETs worldwide (storms, severe turbulence and icing, volcanic ash); click one to read it.
+- Move along the timeline, from 18 hours back to 12 hours ahead in 10-minute steps, or press Play to
+  watch the last three hours. Each layer shows the time of what it is showing.
+- Keep working offline: the map is on disk, and weather already loaded is shown again, marked as
+  such.
+
+## Why it is fast
+
+The app started on MapLibre, the open-source library many web maps use. Measuring it showed that
+most of the work in a pan was turning map data into shapes in JavaScript, so this app does that part
+in Rust and leaves only the drawing to the app's built-in browser engine. On the same 150-step stress run (pans, zooms,
+turns and jumps) over West LA, with every frame checked for parts of the map not yet drawn:
+
+|                                    | this app      | MapLibre            |
+|------------------------------------|---------------|---------------------|
+| frames with part of the map blank  | 0 of 2380     | 325 of 3066 (10.6%) |
+| time to draw a frame, typical / worst 1% | 2 / 7 ms | 5 / 13 ms        |
+| peak memory                        | 619 MB        | 1501 MB             |
+
+`docs/JOURNAL.md` has how each number was measured and what was wrong with the first attempts.
 
 ## How this was built
 
@@ -32,7 +66,66 @@ what to try next, tested the app by hand, and reviewed the changes; the agent wr
 code and kept the journal. `docs/JOURNAL.md` is that working log, in the order it happened: every
 problem, the measurements that turned out to be wrong, and what fixed them.
 
-## What is in it
+## Status
+
+A personal project, not a product. In practice:
+
+- One map area: the West LA extract. Other areas need an extract you cut yourself (see Data).
+- Linux only as a package. macOS and Windows builds are in progress and not packaged.
+- Search covers West LA only, from the published index.
+- Weather comes from NOAA and is not for flight planning.
+
+## For developers
+
+### Build from source
+
+Needs Rust 1.90 or newer (the gate itself runs the 1.99.1 that `rust-toolchain.toml` pins), Node,
+[wasm-pack](https://rustwasm.github.io/wasm-pack/) and the Tauri 2 system dependencies for your
+platform. Developed on Linux (WebKitGTK).
+
+    npm install
+    npx tauri dev                          # native renderer
+    MAPS_RENDERER=maplibre npx tauri dev   # MapLibre renderer
+    tools/check.sh                         # format, lint, tests, decoder and mesher checks
+
+The benchmarks (`tools/bench.sh`, `tools/zoombench.sh`, `tools/stress.sh`) and the release-build
+gates (`tools/offline.sh` for the content security policy, `tools/cache.sh` for the disk cache)
+are described at the top of each script. F4 in the app opens the profiler overlay.
+
+`tools/demo-video.sh` records the tour at the top of this page (`MAPS_DEMO=1`).
+
+### Data
+
+The app expects data the repository does not include (`data/` and `public/assets/` are
+gitignored):
+
+- `data/westla.pmtiles` and `data/basemap.pmtiles`: Protomaps basemap extracts (v4 schema). With
+  [go-pmtiles](https://github.com/protomaps/go-pmtiles), from a daily build at
+  `https://build.protomaps.com/<YYYYMMDD>.pmtiles`:
+
+      go-pmtiles extract <build url> data/westla.pmtiles --bbox=-118.70,33.85,-118.15,34.20 --maxzoom=14
+      go-pmtiles extract <build url> data/basemap.pmtiles --bbox=-118.55,33.95,-118.35,34.10 --maxzoom=14
+
+- `public/assets/fonts` and `public/assets/sprites/v4`: from
+  [protomaps/basemaps-assets](https://github.com/protomaps/basemaps-assets).
+- `data/geonames.db` (optional): a GeoNames FTS5 index. The builder lives with the private Python
+  service and is not included; the West LA index under Install is cut from its output. Without an
+  index, search answers coordinates only.
+- `data/remote.url` (optional): one line, the URL of a PMTiles archive to read over HTTP.
+
+`tools/fetch-data.sh` does all of this from my own map service (`MAPS_SRC=<base url>`). Built from
+source, the app reads `data/` in the source tree: the two downloads under Install can go there too.
+
+### Documentation
+
+`book/` is a short engineering book (mdBook): the architecture, the native renderer, weather, search,
+how things were measured, and how they are checked. `tools/docs.sh` builds it with the Rust API
+reference beside it under `api/`; every public item is documented, and the gate keeps it so.
+
+How the weather layers fetch, decode and line up NOAA's data, and how `tools/weather.sh` checks them
+end to end, is in the book's weather chapter (`book/src/weather.md`).
+
+### What is in it
 
 - `crates/vtile`: PMTiles v3 reading (local file, or HTTP range requests with a pluggable cache),
   Mapbox Vector Tile decoding, and meshing: polygons triangulated with earcut, lines as mitered
@@ -53,137 +146,7 @@ problem, the measurements that turned out to be wrong, and what fixed them.
 - `src`: the frontend. `rust-renderer/` is the native renderer (the default), `maplibre-app.js`
   the MapLibre version, `devtools/` the profiler overlay and the benchmarks.
 
-## Measured
-
-A seeded stress script of 150 camera operations (interrupted pans, zooms, rotations, wheel bursts,
-drags and teleports), the same input for both renderers, on a West LA extract. "Background
-showing" counts frames where any of the screen was not yet drawn, read back from the GPU:
-
-|                              | native            | MapLibre           |
-|------------------------------|-------------------|--------------------|
-| frames with background       | 0 of 2380         | 325 of 3066 (10.6%) |
-| render p50 / p99             | 2 / 7 ms          | 5 / 13 ms          |
-| peak memory                  | 619 MB            | 1501 MB            |
-
-Against the remote planet over a LAN, the disk cache took frames with background from 7.8% to
-0.4%. The journal has how each number was measured and what was wrong with the first attempts.
-
-## Weather
-
-Three layers for the native renderer, synced to one chosen time the way the Aviation Weather
-Center's GFA does it, and off until their boxes are ticked: nothing is fetched from NOAA before that.
-
-- A time bar from 18 hours back to 12 hours ahead, in UTC, in 10-minute steps. Radar and satellite
-  are observations, so they exist up to the present; the hazards are forecasts. Under the slider:
-  radar and satellite history as strips, the hazard snapshot times as marks, and now. The valid time
-  of what each layer shows is stamped on the map.
-- Radar (US only: MRMS is built from US and Canadian radars, and the stamp says so): MRMS base reflectivity, a loop of five frames ten minutes apart ending at the chosen time.
-  Frames for a past time are fetched when first needed from NOAA's 24-hour archive, decoded in Rust
-  (0.7 MB of GRIB2 each, thinned to 3500 x 1750 one-byte cells) and kept compressed in memory and on
-  disk; the GPU holds up to 15 as textures. The shader takes each pixel back to latitude and
-  longitude through the camera and Web Mercator and looks its cell up.
-- Satellite: GOES-East and West longwave infrared from NOAA's nowCOAST map server, every 5 minutes,
-  about 6.5 hours of history; outside their view, nowCOAST's hourly global infrared mosaic, brought
-  onto the GOES grey scale by a fit (GOES = 0.650 x global + 51.4, r = 0.976 over 169,000 matched
-  pixels). The global layer gives way wherever GOES has data. Clear ground is transparent; colder,
-  higher cloud tops are more opaque.
-- METARs: airport observations as dots coloured by flight category (VFR, MVFR, IFR, LIFR); a click
-  opens the station's report. The present comes from AWC's bulk cache file (the world, about 5,000
-  stations); the API caps history at 400 observations a request, so history is what the app collected
-  from that file every five minutes while it ran, kept on disk, and the bar shows where it begins.
-- Winds: GFS winds at the chosen flight level (FL050 to FL450 mapped to standard pressure levels;
-  FL340, 250 hPa, when none is chosen), as 5,000 particles that drift with the wind and leave fading
-  trails, coloured by speed. The field (U and V for the whole world on a 0.5° grid, cut by NOAA's
-  NOMADS filter, about 0.7 MB) comes from the newest run that serves the chosen time at the nearest
-  3-hourly step, or the run before if that one is not published yet. Particles move a fixed number of screen pixels per m/s at any zoom; the simulation is
-  JavaScript. Each particle keeps its last 16 positions on the map, and every frame those paths are
-  projected through the camera and drawn as fading lines, so the trails stay put on the map through a
-  pan, zoom or turn. With winds alone on, the map holds 60 frames a second, redraw p50 9 ms, p99 11 ms.
-- SIGMETs, worldwide: international SIGMETs (every FIR's turbulence, icing, thunderstorms, mountain
-  waves, tropical cyclones, volcanic ash) and US convective SIGMETs in force at the chosen time, with
-  the hazards; a past time's are fetched as needed. A click inside one shows its text.
-- Hazards: the G-AIRMET snapshot valid nearest the chosen time (turbulence, icing, IFR, mountain
-  obscuration, surface wind), outlined and labelled, filtered by flight level as GFA does: an area
-  shows if the level is within 3,000 ft of its base or top. A snapshot more than 90 minutes from the
-  chosen time is not shown.
-- Play steps the bar 10 minutes at a time (from live, over the last three hours) and moves on only
-  once a step's radar frame and satellite image are on screen; the next step is fetched while the
-  current one shows.
-
-Rust keeps the present warm in the background (every two minutes: the newest radar frame first,
-then the hazards, the newest satellite image, then the rest of the loop) and tells the webview as
-each piece arrives. Whatever was fetched is shown again offline, marked as such.
-
-`tools/weather.sh` checks it end to end against NOAA: the present and three hours back must each load
-fully with nothing shown from after the chosen time; a change of time mid-load must settle on the new
-time with nothing uploaded for the old one; the time-lapse must buffer first, then step 10 minutes at a time to live
-with no frame where a layer goes blank and no gap over 1.2 s between steps; the world view must
-show the global clouds, SIGMETs and non-overlapping hazard labels, and a click inside a SIGMET must
-open it; METARs must cover the present, a click on LAX must open
-its report, and the flight-level filter must narrow the hazards; and a synthetic one-cell radar frame at a known point
-must land where the map's own projection puts that point, one cell wide and 1/cos(latitude) cells
-tall.
-
-## Install (Linux)
-
-A version tag publishes a Debian package on the
-[Releases](https://github.com/jake-king/maps-tauri/releases) page (Ubuntu 24.04 or newer, amd64).
-The package holds the app; the data is a separate download, published as the release
-`map-westla-20261118`: a 25 MB map of West LA (Malibu to downtown) and a 1 MB place-name index for
-the same area:
-
-    sudo apt install ./maps-tauri_<version>_amd64.deb
-    mkdir -p ~/.local/share/local.maps-tauri
-    curl -fL -o ~/.local/share/local.maps-tauri/westla.pmtiles \
-      https://github.com/jake-king/maps-tauri/releases/download/map-westla-20261118/westla.pmtiles
-    curl -fL -o ~/.local/share/local.maps-tauri/geonames.db \
-      https://github.com/jake-king/maps-tauri/releases/download/map-westla-20261118/geonames.db
-    maps-tauri
-
-The extract was cut with [go-pmtiles](https://github.com/protomaps/go-pmtiles) from Protomaps' daily
-build of 2026-11-18 (the commands are under Data, below); the index holds the 6,465 GeoNames places
-inside the map's bounds. The release notes give both files' sha256. An installed app reads its data
-from `~/.local/share/local.maps-tauri` (`MAPS_DATA` sets another directory); without an archive
-there it says so on stdout and shows an empty map. Weather needs no setup: tick a layer and it is
-fetched from NOAA. Other platforms build from source (below).
-
-## Data
-
-The app expects data the repository does not include (`data/` and `public/assets/` are
-gitignored):
-
-- `data/westla.pmtiles` and `data/basemap.pmtiles`: Protomaps basemap extracts (v4 schema). With
-  [go-pmtiles](https://github.com/protomaps/go-pmtiles), from a daily build at
-  `https://build.protomaps.com/<YYYYMMDD>.pmtiles`:
-
-      go-pmtiles extract <build url> data/westla.pmtiles --bbox=-118.70,33.85,-118.15,34.20 --maxzoom=14
-      go-pmtiles extract <build url> data/basemap.pmtiles --bbox=-118.55,33.95,-118.35,34.10 --maxzoom=14
-
-- `public/assets/fonts` and `public/assets/sprites/v4`: from
-  [protomaps/basemaps-assets](https://github.com/protomaps/basemaps-assets).
-- `data/geonames.db` (optional): a GeoNames FTS5 index. The builder lives with the private Python
-  service and is not included; the West LA index under Install is cut from its output. Without an
-  index, search answers coordinates only.
-- `data/remote.url` (optional): one line, the URL of a PMTiles archive to read over HTTP.
-
-`tools/fetch-data.sh` does all of this from my own map service (`MAPS_SRC=<base url>`). Built from
-source, the app reads `data/` in the source tree; the extract steps under Install work for it too.
-
-## Run
-
-Needs Rust 1.90 or newer (the gate itself runs the 1.99.1 that `rust-toolchain.toml` pins), Node, [wasm-pack](https://rustwasm.github.io/wasm-pack/) and the Tauri 2 system
-dependencies for your platform. Developed on Linux (WebKitGTK).
-
-    npm install
-    npx tauri dev                          # native renderer
-    MAPS_RENDERER=maplibre npx tauri dev   # MapLibre renderer
-    tools/check.sh                         # format, lint, tests, decoder and mesher checks
-
-The benchmarks (`tools/bench.sh`, `tools/zoombench.sh`, `tools/stress.sh`) and the release-build
-gates (`tools/offline.sh` for the content security policy, `tools/cache.sh` for the disk cache)
-are described at the top of each script. F4 in the app opens the profiler overlay.
-
-## CI
+### CI
 
 Every push and pull request runs one pipeline, the same on GitHub Actions and on the self-hosted
 Forgejo forge the project is developed on (this repository is a published copy). Each job runs in a
