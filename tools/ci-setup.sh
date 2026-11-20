@@ -20,10 +20,18 @@ $sudo apt-get update -q
 $sudo apt-get install -y -q --no-install-recommends \
   build-essential curl ca-certificates git pkg-config python3 pipx shellcheck xz-utils minisign valgrind \
   libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev patchelf
-pipx install --force "ruff==$RUFF"
 if ! command -v rustup >/dev/null; then
   curl -fsS https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
 fi
+export PATH=$HOME/.cargo/bin:$PATH
+cd "$(dirname "$0")/.."
+# The toolchain goes in before anything else can start a rustup proxy. pip (under pipx, just below)
+# runs `rustc --version` for its user agent and kills it after 0.5 s; with no toolchain installed
+# yet, that rustc auto-installs the one rust-toolchain.toml names and is killed partway, and the
+# half-written toolchain then fails this install ("detected conflict: 'bin/cargo-clippy'") or
+# leaves it without cargo. Installed first, that rustc only prints its version.
+rustup toolchain install   # the one rust-toolchain.toml names, with its components and targets
+pipx install --force "ruff==$RUFF"
 if ! command -v node >/dev/null; then
   curl -fsS "https://nodejs.org/dist/latest-v$NODE.x/SHASUMS256.txt" -o /tmp/node.sums
   tarball=$(grep -o "node-v${NODE}\.[0-9.]*-linux-x64\.tar\.xz" /tmp/node.sums | head -1)
@@ -38,9 +46,6 @@ if [[ $(gitleaks version 2>/dev/null) != "$GITLEAKS" ]]; then
   tar -xzf "/tmp/$t" -C /tmp gitleaks
   $sudo install -m 755 /tmp/gitleaks /usr/local/bin/gitleaks
 fi
-export PATH=$HOME/.cargo/bin:$PATH
-cd "$(dirname "$0")/.."
-rustup toolchain install   # the one rust-toolchain.toml names, with its components and targets
 if [[ $(mdbook --version 2>/dev/null) != "mdbook v$MDBOOK" ]]; then
   cargo install mdbook --version "$MDBOOK" --locked
 fi
