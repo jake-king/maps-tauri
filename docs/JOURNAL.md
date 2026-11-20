@@ -1830,7 +1830,8 @@ The per-push mutation check, run locally on these fixes before committing, found
 cargo-mutants built without `--all-features`, so code behind vtile's and wx's `http` feature was
 never compiled. Its 11 mutants read as missed though no test ran. The gate, clippy and coverage all
 build with every feature. `.cargo/mutants.toml` now sets `all_features = true`. The 516 baseline was
-measured without it, so it is a ceiling until the next full run gives the real number.
+measured without it, so it is a ceiling until the next full run gives the real number. That run
+missed 467 of 2,451, and 467 is the baseline now.
 
 The check also showed that nothing but the end-to-end run checked the mesher's labels at all:
 `Mesher::labels` replaced by nothing survived. A test now places two route shields where only the

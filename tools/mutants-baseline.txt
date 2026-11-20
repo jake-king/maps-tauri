@@ -1,5 +1,8 @@
 # Mutants the tests miss over the whole tree (the weekly mutants.yml, tools/forge-job.sh
 # mutants-total). The weekly run fails above this number. Lower it, by an edit that says why, when
 # tests close gaps; never raise it to pass.
-# 2026-11-18, run 11195 at 31cf5a3: 516 missed of 2,461 viable (2,583 in all; 122 unviable).
-516
+# 2026-11-18, run 11195 at 31cf5a3: 516 missed of 2,461 viable (2,583 in all; 122 unviable), built
+# without --all-features.
+# 2026-11-19, first full run with all_features (GitHub Actions run 44664519337): 467 missed of
+# 2,451 viable.
+467
