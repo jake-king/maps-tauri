@@ -3,10 +3,10 @@
 A running record of building maps-tauri: what was done, what broke, why, and what the
 measurements said. Newest entries at the bottom. Commits are named where they exist.
 
-The project started on 2026-11-15 as a way to learn Tauri. It rebuilds the offline map viewer
-from my homelab as a Tauri 2 desktop app. The homelab viewer is MapLibre GL over a PMTiles
-basemap, with a GeoNames search box served by a small Python service. The search-box parsing
-is ported to Rust and compiled to WebAssembly.
+The project started on 2026-11-15 as a way to learn Tauri. It rebuilds the offline map viewer I run
+on my homelab (servers at home) as a Tauri 2 desktop app. The homelab viewer is a web app, MapLibre
+GL over a PMTiles basemap, with a GeoNames search box served by a small Python service. The
+search-box parsing is ported to Rust and compiled to WebAssembly.
 
 ## Setup (2026-11-15)
 
@@ -123,7 +123,8 @@ Problems:
 ## Dev tools: the F4 overlay and the pan benchmark (ad9ef67)
 
 Panning fast at high zoom showed gray boxes where tiles were still loading. Before changing
-anything I built tools to measure it, modelled on the F4 profiler in my guile-2d engine.
+anything I built tools to measure it, modelled on the F4 profiler in a 2D game engine I wrote
+(SDL and OpenGL).
 
 F4 toggles a canvas overlay. Each measurement gets a row with its average, its worst value, and a
 bar against one frame. The rows are:
@@ -270,10 +271,10 @@ why. `MAPS_CACHED_PARENTS=0` turns it off for comparison.
 Timing runs show no cost: 5 dropped frames of ~490 and about 800 MB, as before. While a detailed
 tile decodes, the view now shows its parent scaled up, blurry for a frame or two, instead of gray.
 
-## Memory, and what transfers from guile-2d
+## Memory, and what transfers from a game engine
 
-The app felt heavy next to my guile-2d engine, about 800 MB after a pan. guile-2d works from a
-fixed budget:
+The app felt heavy next to my game engine, about 800 MB after a pan. The engine works from a fixed
+budget:
 - one block of memory carved up at startup;
 - frame scratch wiped every frame;
 - nothing allocated per frame;
@@ -291,7 +292,7 @@ records memory (PSS) for every process in the app's tree at a stage, then exits:
 | after the pan benchmark | ~830 MB | | | |
 
 About 290 MB is the floor any Tauri window on WebKitGTK pays before drawing anything. No
-technique from guile-2d reaches it: SDL and OpenGL are a thin layer, a browser engine is not. The
+technique from the game engine reaches it: SDL and OpenGL are a thin layer, a browser engine is not. The
 rest is the map, all inside the web process.
 
 At rest, each MapLibre worker costs about 45-50 MB, because each is a JavaScript engine of its
@@ -310,7 +311,7 @@ saves about 130 MB for nothing measurable. Shrinking the cache saves almost noth
 gray boxes back, because the parent patch needs parents still in the cache. The cache stays at
 240 tiles.
 
-The dev tools themselves broke guile-2d's per-frame rule:
+The dev tools themselves broke the engine's no-allocation-per-frame rule:
 - the sampler ran every frame with F4 closed;
 - each ring buffer allocated through `Array.shift()`;
 - tile coverage was measured on every render while tiles loaded.
@@ -328,7 +329,7 @@ Problem:
 
 ## Bytes per block
 
-guile-2d's profiler counts bytes per block, so F4 now does too, at three levels. They refresh once
+The engine's profiler counts bytes per block, so F4 now does too, at three levels. They refresh once
 a second while it is open and never per frame:
 
 - The GPU ledger (`src/devtools/gpumem.js`) wraps WebGL's allocation calls (`bufferData`,
@@ -781,8 +782,8 @@ exactly 21 tile requests, with an empty log. These steps narrowed it:
 
 The startup handler had not been listening. The search box's `await initCoords()` sat between
 creating the map and registering for its first `idle`. When tiles came back fast, `idle` fired
-during the await. This is the trap recorded from the homelab map viewer ("an inserted await
-re-orders what follows it; MapLibre never replays load"), reintroduced here. It is fixed twice over:
+during the await. I had hit the same bug in the web map viewer: an inserted await re-orders what
+follows it, and MapLibre never replays `load`. It is fixed twice over:
 - All startup awaits happen before the map exists.
 - `RustMap.whenIdle()` resolves at once when the map is already idle, so a late listener cannot miss
   it.
@@ -883,7 +884,7 @@ uncovered lines of any file named. Rust unit tests covered 49% of lines. The gat
 whole-archive mesh and search parity cover more, outside that figure. By file, the PMTiles reader
 was at 40%, the MVT decoder at 46%, and native search at 0%.
 
-Two test-writer agents took the reader and decoder, and search and the coordinate parser. They
+Two AI coding agents took the reader and decoder, and search and the coordinate parser. They
 edited only test code, and each test group was proven by planting a defect and watching it fail. The
 HTTP source is tested end to end against a local listener with canned responses: a 200, a 206 one
 byte short or long, and a body cut off by a closed connection. Search runs against a 12-row
@@ -1914,10 +1915,10 @@ A change is a pull request from a short-lived branch. It is mergeable when:
 - the branch is current with `main`
 - one approval is given
 
-Changes are mostly prepared by an automation account (`datastrike-agent`), and the forge does not
+Changes are mostly prepared by an automation account, and the forge does not
 let an author approve their own pull request. That approval is therefore the maintainer reading the
 diff. Only fast-forward merges are allowed. An outdated branch is updated by rebase, which reruns CI
-on the new head. Read back from the forge's API as the agent account, the settings are
+on the new head. Read back from the forge's API as that account, the settings are
 `protected: true`, `user_can_push: false`, `required_approvals: 1`,
 `status_check_contexts: ["ci / verdict (push)"]`, and merge styles fast-forward only.
 
