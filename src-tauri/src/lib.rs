@@ -308,7 +308,7 @@ fn archive_name() -> String {
 
 /// Resize the main window to `w` x `h` logical pixels. The test modes call it with a correction,
 /// measured in the page, for what the platform counts in a window's size (macOS: the title bar).
-/// Refused unless MAPS_WINDOW_SIZE is set, and for a size outside 200 to 4000 px.
+/// Refused unless `MAPS_WINDOW_SIZE` is set, and for a size outside 200 to 4000 px.
 #[tauri::command]
 fn set_window_size(w: f64, h: f64, window: tauri::WebviewWindow) -> Result<(), String> {
     if std::env::var_os("MAPS_WINDOW_SIZE").is_none() {
